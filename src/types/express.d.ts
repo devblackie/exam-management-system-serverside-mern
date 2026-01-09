@@ -25,7 +25,8 @@ declare global {
 
     namespace Multer {
       interface File {
-        buffer: Buffer;
+        // buffer: Buffer;  // Original definition
+        buffer: Buffer<ArrayBufferLike>; // Updated definition
       }
     }
   }

@@ -1,22 +1,17 @@
 // src/routes/marks.ts
 import { Router, Response } from "express";
-import { uploadMarksFile } from "../middleware/upload";
-import { importMarksFromBuffer } from "../services/marksImporter";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import { generateFullScoresheetTemplate } from "../utils/uploadTemplate";
+import { uploadMarksFile } from "../middleware/upload";
+import { importMarksFromBuffer } from "../services/marksImporter";
 import { logAudit } from "../lib/auditLogger";
 import mongoose from "mongoose";
+import fs from "fs";     
+import path from "path"; 
 
 const router = Router();
-
-// router.get("/template", (req, res) => {
-//   const csv = generateSampleCSV();
-//   res.header("Content-Type", "text/csv")
-//     .attachment("marks-upload-template.csv")
-//     .send(csv);
-// });
 
 router.get(
   "/template",
@@ -27,8 +22,8 @@ router.get(
       programId,
       unitId,
       academicYearId,
-      yearOfStudy, // Assuming this is passed as a number string '1', '2', etc.
-      semester, // Assuming this is passed as a number string '1' or '2'
+      yearOfStudy, 
+      semester, 
     } = req.query;
 
     if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
@@ -50,23 +45,38 @@ router.get(
         );
       }
 
-      // Cast query strings to the expected types for the template function
+     // --- 1. LOAD THE LOGO IMAGE ---
+      const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png"); 
+      
+      let logoBuffer: Buffer;
+      if (fs.existsSync(logoPath)) {
+        logoBuffer = fs.readFileSync(logoPath);
+      } else {
+        console.warn("Logo file not found at:", logoPath);
+        logoBuffer = Buffer.alloc(0); // Fallback to empty if file is missing
+      }
 
-      const templateContent = await generateFullScoresheetTemplate(
+         // --- 2. GENERATE THE EXCEL BUFFER ---
+      const excelBuffer = await generateFullScoresheetTemplate(
         new mongoose.Types.ObjectId(programId as string),
         new mongoose.Types.ObjectId(unitId as string),
         parseInt(yearOfStudy as string, 10),
         parseInt(semester as string, 10),
         new mongoose.Types.ObjectId(academicYearId as string),
-        Buffer.alloc(0) // pass an empty logo buffer to satisfy the 6th parameter
+        logoBuffer // Pass the actual image data here
       );
 
-      const fileName = `Scoresheet_Template.csv`;
+      const fileName = `Scoresheet_Template_${unitId}.xlsx`;
 
       res
-        .header("Content-Type", "text/csv")
+        // .header("Content-Type", "text/csv")
+        .header(
+          "Content-Type", 
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
         .attachment(fileName)
-        .send(templateContent);
+        // .send(templateContent);
+        .send(excelBuffer);
     } catch (error: any) {
       // Handle cases where IDs are invalid or DB lookup fails
       console.error("Error generating scoresheet template:", error.message);
