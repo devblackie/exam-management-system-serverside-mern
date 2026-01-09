@@ -10,6 +10,7 @@ import { logAudit } from "../lib/auditLogger";
 import mongoose from "mongoose";
 import fs from "fs";     
 import path from "path"; 
+import Unit from "../models/Unit";
 
 const router = Router();
 
@@ -45,6 +46,20 @@ router.get(
         );
       }
 
+      // Fetch Unit details for the filename
+      const unit = await Unit.findById(unitId).lean();
+      // 1. Trim invisible spaces first
+const rawCode = (unit?.code || "UNIT").trim();
+const rawName = (unit?.name || "TEMPLATE").trim();
+      
+ const cleanName = `${rawCode}_${rawName}`
+  .replace(/[^a-zA-Z0-9]/g, '_') // Replace anything not a letter or number
+  .replace(/_+/g, '_')           // Collapse multiple underscores (___ -> _)
+  .replace(/^_|_$/g, '')        // Remove _ from start or end
+  ?.toUpperCase() || "TEMPLATE";
+      
+      const fileName = `Scoresheet_${cleanName}.xlsx`;
+
      // --- 1. LOAD THE LOGO IMAGE ---
       const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png"); 
       
@@ -66,14 +81,14 @@ router.get(
         logoBuffer // Pass the actual image data here
       );
 
-      const fileName = `Scoresheet_Template_${unitId}.xlsx`;
-
+     
       res
         // .header("Content-Type", "text/csv")
         .header(
           "Content-Type", 
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+        .header("Access-Control-Expose-Headers", "Content-Disposition")
         .attachment(fileName)
         // .send(templateContent);
         .send(excelBuffer);
