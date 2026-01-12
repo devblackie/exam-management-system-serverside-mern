@@ -14,16 +14,16 @@ export const MARKS_UPLOAD_HEADERS = [
   "CAT 1 Out of",
   "CAT 2 Out of",
   "CAT3 Out of",
-  "TOTAL",
+  "TOTAL CATS",
   "Assgnt 1 Out of",
   "Assgnt 2 Out of",
   "Assgnt 3 Out of",
-  "TOTAL",
+  "TOTAL ASSGNT",
   "CATs + LABS + ASSIGNMENTS GRAND TOTAL out of 30",
   "Q1 out of",
   "Q2 out of",
   "Q3 out of",
-  "Q4 out Of",
+  "Q4 out of",
   "Q5 out of",
   "TOTAL EXAM OUT OF",
   "INTERNAL EXAMINER MARKS /100",
@@ -138,13 +138,8 @@ export const generateFullScoresheetTemplate = async (
   sheet.getCell("N14").value = "END OF SEMESTER EXAMINATION";
   sheet.getCell("N14").fill = greyColor;
 
-  const subHeaders = [
-    "S/N", "REG. NO.", "NAME", "ATTEMPT", "CAT 1", "CAT 2", "CAT 3", "TOTAL",
-    "Assgnt 1", "Assgnt 2", "Assgnt 3", "TOTAL", "GRAND TOTAL /30",
-    "Q1", "Q2", "Q3", "Q4", "Q5", "TOTAL EXAM /70",
-    "INTERNAL /100", "EXTERNAL /100", "AGREED /100", "GRADE",
-  ];
-  sheet.getRow(15).values = subHeaders;
+ 
+  sheet.getRow(15).values = MARKS_UPLOAD_HEADERS;
   sheet.getRow(16).values = MARKS_MAX_SCORES_ROW;
 
   // Header Styling Logic
@@ -285,6 +280,13 @@ export const generateFullScoresheetTemplate = async (
     // FORMULAS WITH "GATEKEEPERS"
     // If Reg No (B) is empty, show nothing. Otherwise, calculate.
     const isRowEmpty = `ISBLANK(B${r})`;
+
+    sheet.getCell(`B${r}`).value = {
+  formula: `IF(ISBLANK(B${r}), "", UPPER(B${r}))`,
+  result: undefined
+};
+
+
 
     // CAT Average (Column H): Only if 2 or more inputs exist
     // Formula: =IF(COUNT(E17:G17)>=2, AVERAGE(E17:G17), "")

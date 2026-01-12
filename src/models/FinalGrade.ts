@@ -18,7 +18,7 @@ export interface IFinalGrade extends Document {
 const schema = new Schema<IFinalGrade>(
   {
     student: { type: Schema.Types.ObjectId, ref: "Student", required: true },
-    programUnit: { type: Schema.Types.ObjectId, ref: "Unit", required: true },
+    programUnit: { type: Schema.Types.ObjectId, ref: "ProgramUnit", required: true },
     academicYear: {
       type: Schema.Types.ObjectId,
       ref: "AcademicYear",
@@ -30,7 +30,7 @@ const schema = new Schema<IFinalGrade>(
       required: true,
     },
     semester: {
-      type: String,
+      type: Schema.Types.Mixed,
       enum: ["SEMESTER 1", "SEMESTER 2", "SEMESTER 3"], // or Number: 1, 2, 3
       required: true,
     },
