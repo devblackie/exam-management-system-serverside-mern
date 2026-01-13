@@ -33,9 +33,29 @@ export const MARKS_UPLOAD_HEADERS = [
 ];
 
 export const MARKS_MAX_SCORES_ROW = [
-  null, null, null, null,
-  20, 20, 20, 20, 10, 10, 10, 10, 30,
-  10, 20, 20, 20, 20, 70, 100, 100, 100, null,
+  null,
+  null,
+  null,
+  null,
+  20,
+  20,
+  20,
+  20,
+  10,
+  10,
+  10,
+  10,
+  30,
+  10,
+  20,
+  20,
+  20,
+  20,
+  70,
+  100,
+  100,
+  100,
+  null,
 ];
 
 export const generateFullScoresheetTemplate = async (
@@ -60,12 +80,27 @@ export const generateFullScoresheetTemplate = async (
   const fontName = "Book Antiqua";
   const fontSize = 10;
 
-  const greyColor = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFE0E0E0" } };
-  const pinkColor = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFFA6C9" } };
-  const purpleColor = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFC5A3FF" } };
+  const greyColor = {
+    type: "pattern" as const,
+    pattern: "solid" as const,
+    fgColor: { argb: "FFE0E0E0" },
+  };
+  const pinkColor = {
+    type: "pattern" as const,
+    pattern: "solid" as const,
+    fgColor: { argb: "FFFFA6C9" },
+  };
+  const purpleColor = {
+    type: "pattern" as const,
+    pattern: "solid" as const,
+    fgColor: { argb: "FFC5A3FF" },
+  };
 
   const thinBorder: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" },
+    top: { style: "thin" },
+    left: { style: "thin" },
+    bottom: { style: "thin" },
+    right: { style: "thin" },
   };
 
   // 1. LOGO
@@ -138,7 +173,6 @@ export const generateFullScoresheetTemplate = async (
   sheet.getCell("N14").value = "END OF SEMESTER EXAMINATION";
   sheet.getCell("N14").fill = greyColor;
 
- 
   sheet.getRow(15).values = MARKS_UPLOAD_HEADERS;
   sheet.getRow(16).values = MARKS_MAX_SCORES_ROW;
 
@@ -240,7 +274,7 @@ export const generateFullScoresheetTemplate = async (
     //   };
     // });
 
-    // // 3. Exam Questions (Columns N, O, P, Q, R) - Max 20 
+    // // 3. Exam Questions (Columns N, O, P, Q, R) - Max 20
     // // (Note: Adjust these max values if your question weights vary)
     // ['O', 'P', 'Q', 'R'].forEach(col => {
     //   sheet.getCell(`${col}${r}`).dataValidation = {
@@ -282,11 +316,9 @@ export const generateFullScoresheetTemplate = async (
     const isRowEmpty = `ISBLANK(B${r})`;
 
     sheet.getCell(`B${r}`).value = {
-  formula: `IF(ISBLANK(B${r}), "", UPPER(B${r}))`,
-  result: undefined
-};
-
-
+      formula: `IF(ISBLANK(B${r}), "", UPPER(B${r}))`,
+      result: undefined,
+    };
 
     // CAT Average (Column H): Only if 2 or more inputs exist
     // Formula: =IF(COUNT(E17:G17)>=2, AVERAGE(E17:G17), "")
@@ -334,19 +366,33 @@ export const generateFullScoresheetTemplate = async (
 
     // Data Validation
     const validate = (range: string[], max: number) => {
-      range.forEach(c => {
+      range.forEach((c) => {
         sheet.getCell(`${c}${r}`).dataValidation = {
-          type: 'decimal', operator: 'between', formulae: [0, max], showErrorMessage: true,
-          errorTitle: 'Invalid Mark', error: `Mark must be between 0 and ${max}`
+          type: "decimal",
+          operator: "between",
+          formulae: [0, max],
+          showErrorMessage: true,
+          errorTitle: "Invalid Mark",
+          error: `Mark must be between 0 and ${max}`,
         };
       });
     };
-    validate(['E', 'F', 'G'], 20); validate(['I', 'J', 'K'], 10); validate(['O', 'P', 'Q', 'R'], 20);
-    sheet.getCell(`N${r}`).dataValidation = { type: 'decimal', operator: 'between', formulae: [0, 10] };
+    validate(["E", "F", "G"], 20);
+    validate(["I", "J", "K"], 10);
+    validate(["O", "P", "Q", "R"], 20);
+    sheet.getCell(`N${r}`).dataValidation = {
+      type: "decimal",
+      operator: "between",
+      formulae: [0, 10],
+    };
 
     // Protection Logic
-    [`H${r}`, `L${r}`, `M${r}`, `S${r}`, `T${r}`, `V${r}`].forEach(ref => sheet.getCell(ref).protection = { locked: true });
-    [2, 3, 4, 5, 6, 7, 9, 10, 11, 14, 15, 16, 17, 18, 21].forEach(c => row.getCell(c).protection = { locked: false });
+    [`H${r}`, `L${r}`, `M${r}`, `S${r}`, `T${r}`, `V${r}`].forEach(
+      (ref) => (sheet.getCell(ref).protection = { locked: true })
+    );
+    [2, 3, 4, 5, 6, 7, 9, 10, 11, 14, 15, 16, 17, 18, 21].forEach(
+      (c) => (row.getCell(c).protection = { locked: false })
+    );
 
     // const formulaCells = [`H${r}`, `L${r}`, `M${r}`, `S${r}`, `T${r}`, `V${r}`];
     // formulaCells.forEach((ref) => {
@@ -361,28 +407,26 @@ export const generateFullScoresheetTemplate = async (
     // });
   }
 
- // 5. CONDITIONAL FORMATTING
+  // 5. CONDITIONAL FORMATTING
   sheet.addConditionalFormatting({
     ref: `E17:L${endRow}`,
     rules: [
       {
-        priority: 1, 
-        type: 'expression',
+        priority: 1,
+        type: "expression",
         formulae: [`AND(NOT(ISBLANK($B17)), ISBLANK(E17))`],
-        style: { 
-          fill: { 
-            type: 'pattern', 
-            pattern: 'solid', 
-            // Note: Conditional formatting uses 'bgColor', but ExcelJS often 
+        style: {
+          fill: {
+            type: "pattern",
+            pattern: "solid",
+            // Note: Conditional formatting uses 'bgColor', but ExcelJS often
             // maps this to 'fgColor' internally. argb is correct here.
-            bgColor: { argb: 'FFFFA6C9' } 
-          } 
-        }
-      }
-    ]
+            bgColor: { argb: "FFFFA6C9" },
+          },
+        },
+      },
+    ],
   });
-
-  
 
   // 5. SAMPLE DATA (Populating ONLY input fields to preserve formulas)
   const sampleRow = sheet.getRow(17);
@@ -444,9 +488,9 @@ export const generateFullScoresheetTemplate = async (
   );
 
   // 8. ENABLE SHEET PROTECTION
-  // This makes the "locked" property actually work. 
+  // This makes the "locked" property actually work.
   // Users can still select cells, but they can't change formulas.
-  sheet.protect('', {
+  sheet.protect("", {
     selectLockedCells: true,
     selectUnlockedCells: true,
     formatCells: true,

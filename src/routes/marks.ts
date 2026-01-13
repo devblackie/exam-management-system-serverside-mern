@@ -14,6 +14,23 @@ import Unit from "../models/Unit";
 
 const router = Router();
 
+// --- TEMPORARY INDEX CLEANUP ---
+// mongoose.connection.once("open", async () => {
+//   try {
+//     const collection = mongoose.connection.collection("marks");
+//     // This command tells MongoDB to delete the specific index causing the error
+//     await collection.dropIndex("student_1_unit_1_academicYear_1");
+//     console.log("✅ SUCCESS: The ghost index has been deleted.");
+//   } catch (err: any) {
+//     if (err.codeName === "IndexNotFound") {
+//       console.log("ℹ️ INFO: Ghost index not found, it might already be gone.");
+//     } else {
+//       console.error("❌ ERROR deleting index:", err.message);
+//     }
+//   }
+// });
+// -------------------------------
+
 router.get(
   "/template",
   requireAuth,

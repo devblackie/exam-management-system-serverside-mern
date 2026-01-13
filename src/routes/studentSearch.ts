@@ -15,8 +15,32 @@ import Unit from "../models/Unit";
 import AcademicYear from "../models/AcademicYear";
 import ProgramUnit from "../models/ProgramUnit";
 import { computeFinalGrade } from "../services/gradeCalculator";
+import { calculateStudentStatus } from "../services/statusEngine";
 
 const router = express.Router();
+
+// --- TEMPORARY DATABASE CLEANUP ---
+// mongoose.connection.once("open", async () => {
+//   try {
+//     const gradeCollection = mongoose.connection.collection("finalgrades");
+    
+//     // 1. Delete records where programUnit is missing or null
+//     const result = await gradeCollection.deleteMany({
+//       $or: [
+//         { programUnit: { $exists: false } },
+//         { programUnit: null }
+//       ]
+//     });
+
+//     if (result.deletedCount > 0) {
+//       console.log(`🧹 CLEANUP SUCCESS: Deleted ${result.deletedCount} broken grade records.`);
+//     } else {
+//       console.log("✅ DATA INTEGRITY: No broken grade records found.");
+//     }
+//   } catch (err: any) {
+//     console.error("❌ CLEANUP ERROR:", err.message);
+//   }
+// });
 
 // SEARCH STUDENT BY REG NO
 router.get(
@@ -48,74 +72,6 @@ router.get(
   })
 );
 
-// GET STUDENT FULL RESULTS + STATUS
-// router.get("/record", requireAuth, asyncHandler(async (req: AuthenticatedRequest , res:Response) => {
-//   let { regNo } = req.query;
-//   console.log("[STUDENT RECORD] Requested regNo (raw):", regNo);
-
-//   if (!regNo || typeof regNo !== "string") {
-//     return res.status(400).json({ error: "regNo is required" });
-//   }
-
-//    regNo = decodeURIComponent(regNo);
-
-//   console.log("[STUDENT RECORD] Decoded regNo:", regNo);
-
-//    const student = await Student.findOne({
-//     regNo: { $regex: `^${regNo}$`, $options: "i" } // Exact match, case-insensitive
-//   }).populate("program");
-
-//   if (!student) {
-//     console.log("[STUDENT RECORD] Not found:", regNo);
-//     return res.status(404).json({ error: "Student not found" });
-//   }
-
-//   console.log("[STUDENT RECORD] Found:", student.name, student.regNo);
-
-//  const grades = await FinalGrade.find({ student: student._id })
-//   .populate({
-//     path: 'programUnit',
-//     populate: {
-//       path: 'unit',
-//       select: 'code name creditHours'
-//     }
-//   })
-//   .populate("academicYear", "year")
-//   .sort({ "academicYear.year": 1 })
-//   .lean();
-
-//   // Determine Current Status
-//   const currentAcademicYear = "2024/2025"; // Or get dynamically
-
-//   const failedThisYear = grades.filter(g =>
-//     (g.academicYear as any).year === currentAcademicYear
-//     && (g.status === "SUPPLEMENTARY" || g.status === "RETAKE")
-//   );
-
-//   const hasRetake = failedThisYear.some(g => g.status === "RETAKE");
-
-//   const status = failedThisYear.length === 0
-//     ? "IN GOOD STANDING"
-//     : hasRetake
-//     ? "RETAKE YEAR"
-//     : "SUPPLEMENTARY PENDING";
-
-//   res.json({
-//     student: {
-//       name: student.name,
-//       regNo: student.regNo,
-//       program: (student.program as any)?.name,
-//     },
-//     grades,
-//     currentStatus: status,
-//     summary: {
-//       totalUnits: grades.length,
-//       passed: grades.filter(g => g.status === "PASS").length,
-//       supplementary: grades.filter(g => g.status === "SUPPLEMENTARY").length,
-//       retake: grades.filter(g => g.status === "RETAKE").length,
-//     }
-//   });
-// }));
 
 // GET STUDENT FULL RESULTS + STATUS
 router.get(
@@ -150,42 +106,35 @@ router.get(
       const pUnit = g.programUnit as any;
 
       // LOG THIS to your terminal to see why it's failing
-  // if (!pUnit) {
-  //   console.log(`[DEBUG] Grade ${g._id} missing programUnit for student ${regNo}`);
-  // }
+      // if (!pUnit) {
+      //   console.log(`[DEBUG] Grade ${g._id} missing programUnit for student ${regNo}`);
+      // }
 
-  
-
-  // 2. Format the semester for the UI (e.g., convert 1 to "1" or "SEMESTER 1")
- const semesterValue = pUnit?.requiredSemester || "N/A";
+      // 2. Format the semester for the UI (e.g., convert 1 to "1" or "SEMESTER 1")
+      const semesterValue = pUnit?.requiredSemester || "N/A";
 
       return {
         ...g,
         // Provide a fallback unit object so frontend doesn't crash
-      unit: {
-        // If programUnit is missing, try to see if 'unit' was stored directly on 'g'
-    code: pUnit?.unit?.code || "N/A", 
-      name: pUnit?.unit?.name || "Unknown Unit"
-      },
-    // Semester is usually stored directly on the Grade record in most setups
-    semester: semesterValue, 
-    academicYear: g.academicYear || { year: "N/A" }
-    };
+        unit: {
+          // If programUnit is missing, try to see if 'unit' was stored directly on 'g'
+          code: pUnit?.unit?.code || "N/A",
+          name: pUnit?.unit?.name || "Unknown Unit",
+        },
+        // Semester is usually stored directly on the Grade record in most setups
+        semester: semesterValue,
+        academicYear: g.academicYear || { year: "N/A" },
+      };
     });
 
-    // 3. Status Calculation using processed data
-    const failedThisYear = processedGrades.filter(
-      (g) =>
-        (g.academicYear as any).year === currentAcademicYear &&
-        (g.status === "SUPPLEMENTARY" || g.status === "RETAKE")
+   // 2. USE THE SERVICE for Status
+    // We pass studentId, programId, the Year string, and Year of Study
+    const academicStatus = await calculateStudentStatus(
+      student._id,
+      (student.program as any)._id,
+      currentAcademicYear,
+      1 // You can eventually make this dynamic: student.yearOfStudy
     );
-
-    const status =
-      failedThisYear.length === 0
-        ? "IN GOOD STANDING"
-        : failedThisYear.some((g) => g.status === "RETAKE")
-        ? "RETAKE YEAR"
-        : "SUPPLEMENTARY PENDING";
 
     res.json({
       student: {
@@ -194,8 +143,9 @@ router.get(
         program: (student.program as any)?.name,
       },
       grades: processedGrades, // Return the flattened version
-      currentStatus: status,
-      summary: {
+      currentStatus: academicStatus?.status || "UNKNOWN",
+      academicStatus: academicStatus,
+      summary: academicStatus?.summary || {
         totalUnits: grades.length,
         passed: grades.filter((g) => g.status === "PASS").length,
         supplementary: grades.filter((g) => g.status === "SUPPLEMENTARY")
@@ -289,7 +239,9 @@ router.get(
         },
       })
       .populate("academicYear", "year")
-      .select("programUnit academicYear cat1Raw cat2Raw cat3Raw assgnt1Raw examQ1Raw examQ2Raw examQ3Raw examQ4Raw examQ5Raw caTotal30 examTotal70 agreedMark")
+      .select(
+        "programUnit academicYear cat1Raw cat2Raw cat3Raw assgnt1Raw examQ1Raw examQ2Raw examQ3Raw examQ4Raw examQ5Raw caTotal30 examTotal70 agreedMark"
+      )
       .lean();
 
     res.json(marks);
@@ -311,7 +263,11 @@ router.post(
       assignment1,
       assignment2,
       assignment3,
-      examQ1, examQ2, examQ3, examQ4, examQ5
+      examQ1,
+      examQ2,
+      examQ3,
+      examQ4,
+      examQ5,
     } = req.body;
 
     if (!regNo || !unitCode || !academicYear) {
