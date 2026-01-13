@@ -96,7 +96,8 @@ export async function importMarksFromBuffer(
         institution: institutionId,
       }).lean(),
       AcademicYear.findOne({
-        year: academicYearStr,
+        // year: academicYearStr,
+        year: { $regex: new RegExp(`^${academicYearStr}$`, "i") },
         institution: institutionId,
       }).lean(),
       ProgramUnit.find({ institution: institutionId }).populate("unit").lean(),
@@ -115,10 +116,22 @@ export async function importMarksFromBuffer(
     });
 
     // --- 4. DATA PROCESSING ---
-    // We remove the global session and handle it per student or in small batches
+    const processedInFile = new Set<string>(); // Tracks regNo for this specific upload
+
     for (const [index, row] of rows.entries()) {
       const regNo = row["REG. NO."]?.toString().trim().toUpperCase();
       if (!regNo) continue;
+
+      // --- DUPLICATE CHECK ---
+      if (processedInFile.has(regNo)) {
+        result.errors.push(
+          `Row ${
+            index + 17
+          }: Duplicate entry for ${regNo} found in this file. Skipping.`
+        );
+        continue;
+      }
+      processedInFile.add(regNo);
 
       result.total++;
       const rowNum = index + 17;

@@ -8,61 +8,81 @@ import Student, { IStudent } from "../models/Student";
 export const calculateStudentStatus = async (
   studentId: any,
   programId: any,
-  academicYearName: string, // Changed to string for easier lookup
+  academicYearName: string,
   yearOfStudy: number = 1
 ) => {
-  // 1. Find the year document first to get its ID
   const yearDoc = await AcademicYear.findOne({ year: academicYearName });
   if (!yearDoc) return null;
 
-  // 2. Get Curriculum
+  // 1. Get Curriculum (What the student SHOULD do)
   const curriculum = await ProgramUnit.find({
     program: programId,
-    requiredYear: yearOfStudy
-  }).populate("unit").lean();
+    requiredYear: yearOfStudy,
+  })
+    .populate("unit")
+    .lean();
 
-  // 3. Get Grades for this specific year
-  const grades = await FinalGrade.find({
+  // 2. Get Grades (What the student HAS done)
+  const grades: any[] = await FinalGrade.find({
     student: studentId,
-    academicYear: yearDoc._id
-  }).lean();
+    academicYear: yearDoc._id,
+  })
+    .populate({
+      path: "programUnit",
+      populate: { path: "unit" },
+    })
+    .lean();
 
-// This handles cases where a student has a FAIL and a SUPP PASS for the same unit
-  const unitResults = new Map<string, string>(); 
-  grades.forEach(g => {
+  // 3. Map grades by UNIT CODE (e.g., "SRM2109" -> "PASS")
+  const unitResults = new Map<string, string>();
 
-    if (!g.programUnit) {
-    console.warn(`[StatusEngine] Skipping grade record ${g._id} - missing programUnit`);
-    return;
-  }
-  
-    const pUnitId = g.programUnit.toString();
-    const existingStatus = unitResults.get(pUnitId);
+  grades.forEach((g) => {
 
-    // If we already have a PASS, don't overwrite it with a FAIL/SUPP
+    if (!g.programUnit || !g.programUnit.unit) {
+      console.warn(
+        `[StatusEngine] Skipping grade record ${g._id} - missing programUnit or unit`
+      );
+      return;
+    }
+
+    // Access the unit code via the populated programUnit
+    const unitCode = g.programUnit?.unit?.code?.toUpperCase();
+    console.log(`Checking Grade: ${unitCode} - Status: ${g.status}`);
+    if (!unitCode) return;
+
+    const existingStatus = unitResults.get(unitCode);
     if (existingStatus === "PASS") return;
-    
-    unitResults.set(pUnitId, g.status);
+
+    unitResults.set(unitCode, g.status);
   });
 
   let passed = 0;
   let failed = 0;
   let missing = 0;
   const failedUnits: string[] = [];
+  const missingUnits: string[] = [];
 
+  // 4. Compare Curriculum against results using the Unit Code
   curriculum.forEach((pUnit: any) => {
-    const gradeStatus = unitResults.get(pUnit._id.toString());
+    const rawCode = pUnit.unit?.code;
+  if (!rawCode) return;
+  
+  const unitCode = rawCode.trim().toUpperCase();
+
+    const gradeStatus = unitResults.get(unitCode);
+
     if (!gradeStatus) {
       missing++;
+      missingUnits.push(`${unitCode}: ${pUnit.unit?.name}`);
     } else if (gradeStatus === "PASS") {
       passed++;
     } else {
       failed++;
-      failedUnits.push(pUnit.unit?.code || "Unknown");
+      failedUnits.push(unitCode || "Unknown");
     }
   });
 
-  // 4. Determine Status String
+  // 5. Determine UI Status
   let status = "IN GOOD STANDING";
   let variant: "success" | "warning" | "error" | "info" = "success";
 
@@ -77,16 +97,20 @@ export const calculateStudentStatus = async (
     variant = "info";
   }
 
-return {
-  status,
-  variant,
-  details: missing > 0 
-    ? `Student is missing marks for ${missing} units. Please upload all results.`
-    : failedUnits.length > 0 
-      ? `Student must sit for supplementaries in: ${failedUnits.join(", ")}` 
-      : "Student has cleared all units for this academic year.",
-  summary: { totalExpected: curriculum.length, passed, failed, missing }
-};
+  return {
+    status,
+    variant,
+    details:
+      missing > 0
+        // ? `Missing marks for: ${missingUnits.join(", ")}`
+        ? `Missing marks for:`
+        : failedUnits.length > 0
+        ? `Student must sit for supplementaries in: ${failedUnits.join(", ")}`
+        // ? `Student must sit for supplementaries in: `
+        : "Student has cleared all units for this academic year.",
+    summary: { totalExpected: curriculum.length, passed, failed, missing },
+    missingList: missingUnits,
+  };
 };
 
 export const promoteStudent = async (studentId: string) => {
@@ -97,40 +121,40 @@ export const promoteStudent = async (studentId: string) => {
   const statusResult = await calculateStudentStatus(
     student._id,
     student.program,
-    "2024/2025", 
-    student.currentYearOfStudy || 1 
+    "2024/2025",
+    student.currentYearOfStudy || 1
   );
 
   if (statusResult?.status === "IN GOOD STANDING") {
     const nextYear = (student.currentYearOfStudy || 1) + 1;
-    
+
     await Student.findByIdAndUpdate(studentId, {
-      $set: { 
+      $set: {
         currentYearOfStudy: nextYear,
         // Optional: Reset semester to 1 upon promotion
-        currentSemester: 1 
-      }
+        currentSemester: 1,
+      },
     });
 
     return { success: true, message: `Promoted to Year ${nextYear}` };
   }
 
-  return { 
-    success: false, 
-    message: `Cannot promote: Student is currently ${statusResult?.status}` 
+  return {
+    success: false,
+    message: `Cannot promote: Student is currently ${statusResult?.status}`,
   };
 };
 
 export const bulkPromoteClass = async (
-  programId: string, 
-  yearToPromote: number, 
+  programId: string,
+  yearToPromote: number,
   academicYearName: string
 ) => {
   // Use the IStudent interface to help TypeScript understand the results
-  const students = await Student.find({ 
-    program: programId, 
+  const students = await Student.find({
+    program: programId,
     currentYearOfStudy: yearToPromote,
-    status: "active" 
+    status: "active",
   });
 
   const results = { promoted: 0, failed: 0, errors: [] as string[] };
@@ -139,9 +163,9 @@ export const bulkPromoteClass = async (
     try {
       // Cast to 'any' or use (student as any)._id to bypass the 'unknown' check
       const studentId = (student._id as any).toString();
-      
+
       const res = await promoteStudent(studentId);
-      
+
       if (res.success) results.promoted++;
       else results.failed++;
     } catch (err: any) {

@@ -19,29 +19,6 @@ import { calculateStudentStatus } from "../services/statusEngine";
 
 const router = express.Router();
 
-// --- TEMPORARY DATABASE CLEANUP ---
-// mongoose.connection.once("open", async () => {
-//   try {
-//     const gradeCollection = mongoose.connection.collection("finalgrades");
-    
-//     // 1. Delete records where programUnit is missing or null
-//     const result = await gradeCollection.deleteMany({
-//       $or: [
-//         { programUnit: { $exists: false } },
-//         { programUnit: null }
-//       ]
-//     });
-
-//     if (result.deletedCount > 0) {
-//       console.log(`🧹 CLEANUP SUCCESS: Deleted ${result.deletedCount} broken grade records.`);
-//     } else {
-//       console.log("✅ DATA INTEGRITY: No broken grade records found.");
-//     }
-//   } catch (err: any) {
-//     console.error("❌ CLEANUP ERROR:", err.message);
-//   }
-// });
-
 // SEARCH STUDENT BY REG NO
 router.get(
   "/search",
@@ -49,7 +26,7 @@ router.get(
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { q } = req.query;
 
-    console.log("[STUDENT SEARCH] Query received:", q); // LOG
+    // console.log("[STUDENT SEARCH] Query received:", q); 
 
     if (!q || typeof q !== "string" || q.trim().length < 3) {
       return res.status(400).json({ error: "Enter at least 3 characters" });
@@ -64,14 +41,13 @@ router.get(
       .select("regNo name program admissionYear")
       .populate("program", "name");
 
-    console.log(
-      `[STUDENT SEARCH] Found ${students.length} students for "${searchQuery}"`
-    );
+    // console.log(
+    //   `[STUDENT SEARCH] Found ${students.length} students for "${searchQuery}"`
+    // );
 
     res.json(students);
   })
 );
-
 
 // GET STUDENT FULL RESULTS + STATUS
 router.get(
@@ -99,13 +75,12 @@ router.get(
       .sort({ "academicYear.year": 1 })
       .lean();
 
-    const currentAcademicYear = "2024/2025";
+    const academicYearName = (req.query.academicYear as string) || "2024/2025";
 
     // 2. Safe mapping to prevent "undefined" errors
     const processedGrades = grades.map((g) => {
       const pUnit = g.programUnit as any;
 
-      // LOG THIS to your terminal to see why it's failing
       // if (!pUnit) {
       //   console.log(`[DEBUG] Grade ${g._id} missing programUnit for student ${regNo}`);
       // }
@@ -132,7 +107,7 @@ router.get(
     const academicStatus = await calculateStudentStatus(
       student._id,
       (student.program as any)._id,
-      currentAcademicYear,
+     academicYearName, // Use the dynamic variable
       1 // You can eventually make this dynamic: student.yearOfStudy
     );
 
@@ -200,6 +175,7 @@ router.get(
   })
 );
 
+// GET RAW MARKS FOR A STUDENT (FOR COORDINATOR USE)
 router.get(
   "/raw-marks",
   requireAuth,
@@ -248,6 +224,7 @@ router.get(
   })
 );
 
+// POST /raw-marks: Upload or Update Raw Marks for a Student
 router.post(
   "/raw-marks",
   requireAuth,

@@ -25,6 +25,7 @@ router.get(
   })
 );
 
+// GET student statistics for dashboard
 router.get(
   "/stats",
   requireAuth,
