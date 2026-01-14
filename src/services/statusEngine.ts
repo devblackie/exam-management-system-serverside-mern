@@ -6,166 +6,6 @@ import AcademicYear from "../models/AcademicYear";
 import Student from "../models/Student";
 import InstitutionSettings from "../models/InstitutionSettings";
 
-// export const calculateStudentStatus = async (
-//   studentId: any,
-//   programId: any,
-//   academicYearName: string,
-//   yearOfStudy: number = 1
-// ) => {
-//   // 0. Fetch Institution Settings (Dynamic Rules)
-//   const settings = await InstitutionSettings.findOne().lean();
-  
-//   // Fallback defaults if settings don't exist yet
-//   const rules = {
-//     passMark: settings?.passMark || 39.5,
-//     // suppThreshold: settings?.supplementaryThreshold || 39.5,
-//     retakeLimit: settings?.retakeThreshold || 5 
-//   };
-  
-//   const yearDoc = await AcademicYear.findOne({ year: academicYearName });
-//   if (!yearDoc) return null;
-
-//   // 1. Get Curriculum (What the student SHOULD do)
-//   const curriculum = await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy }).populate("unit").lean();
-
-//   // 2. Get Grades (What the student HAS done)
-//   // const grades: any[] = await FinalGrade.find({
-//   //   student: studentId,
-//   //   academicYear: yearDoc._id,
-//   // })
-//   //   .populate({
-//   //     path: "programUnit",
-//   //     populate: { path: "unit" },
-//   //   })
-//   //   .lean();
-
-//   // Fetch ALL grades for this student (not just current year) to check for carry-overs/retakes
-//   const grades = await FinalGrade.find({ student: studentId })
-//     .populate({ path: "programUnit", populate: { path: "unit" } })
-//     .sort({ createdAt: -1 }) // Get newest attempts first
-//     .lean();
-
-//   // 3. Map grades by UNIT CODE (e.g., "SRM2109" -> "PASS")
-//   // const unitResults = new Map<string, string>();
-//   const unitResults = new Map<string, { status: string; attemptType: string; attemptNumber: number }>();
-
-//   grades.forEach((g) => {
-
-//     if (!g.programUnit || !g.programUnit.unit) {
-//       console.warn(
-//         `[StatusEngine] Skipping grade record ${g._id} - missing programUnit or unit`
-//       );
-//       return;
-//     }
-
-//     // Access the unit code via the populated programUnit
-//     const unitCode = g.programUnit?.unit?.code?.toUpperCase();
-//     console.log(`Checking Grade: ${unitCode} - Status: ${g.status}`);
-//     if (!unitCode) return;
-
-//     const existingStatus = unitResults.get(unitCode);
-//     // if (existingStatus === "PASS") return;
-//     if (existingStatus?.status === "PASS") return;
-
-//     // unitResults.set(unitCode, g.status);
-//     unitResults.set(unitCode, { 
-//         status: g.status, 
-//         attemptType: g.attemptType, 
-//         attemptNumber: g.attemptNumber 
-//     });
-//   });
-
-//   let passed = 0;
-//   let failed = 0;
-//   let missing = 0;
-//   const failedUnits: string[] = [];
-//   const reRetakeUnits: string[] = [];
-//   const missingUnits: string[] = [];
-
-//   // 4. Compare Curriculum against results using the Unit Code
-//   curriculum.forEach((pUnit: any) => {
-//     const rawCode = pUnit.unit?.code;
-//   if (!rawCode) return;
-  
-//   const unitCode = rawCode.trim().toUpperCase();
-
-//     const gradeStatus = unitResults.get(unitCode);
-
-//     if (!gradeStatus) {
-//       missing++;
-//       missingUnits.push(`${unitCode}: ${pUnit.unit?.name}`);
-//     } else if (gradeStatus.status === "PASS") {
-//       passed++;
-//     } else {
-//       failed++;
-//       // failedUnits.push(unitCode || "Unknown");
-//       // Check if this specific failure is a Re-Retake
-//       if (gradeStatus.attemptType === "RE_RETAKE" || gradeStatus.attemptNumber >= 3) {
-//         reRetakeUnits.push(unitCode);
-//       } else {
-//         failedUnits.push(unitCode);
-//       }
-//     }
-//   });
-
-//   // Calculate missing count based on the curriculum gap
-//   const missingCount = missingUnits.length;
-//   const totalExpected = curriculum.length;
-
-//   // 5. Determine UI Status
-//   let status = "IN GOOD STANDING";
-//   let variant: "success" | "warning" | "error" | "info" = "success";
-
-//   // Priority 1: Check if there is missing data first
-//   if (missingCount > 0) {
-//     status = "INCOMPLETE DATA";
-//     variant = "info";
-//   }
-//   else if (reRetakeUnits.length > 0) {
-//     // Re-retake failures usually mean a mandatory repeat year or academic hearing
-//     status = "RE-RETAKE FAILURE / DISCONTINUANCE RISK";
-//     variant = "error";
-//   }else if (failed > rules.retakeLimit) {
-//     status = "RETAKE YEAR";
-//     variant = "error";
-//   } 
-//   else if (failed > 0) {
-//     status = "SUPPLEMENTARY PENDING";
-//     variant = "warning";
-//   }
-
-
-//   return {
-//     status,
-//     variant,
-//     details:
-//       missing > 0
-//         // ? `Missing marks for: ${missingUnits.join(", ")}`
-//         ? `Missing marks for:`
-//         : failedUnits.length > 0
-//         ? `Student must sit for supplementaries in: ${failedUnits.join(", ")}`
-//         // ? `Student must sit for supplementaries in: `
-//         : "Student has cleared all units for this academic year.",
-//     summary: { totalExpected: curriculum.length, passed, failed, missing },
-//     missingList: missingUnits,
-//   };
-  
-//   return {
-//     status,
-//     variant,
-//  details: missingCount > 0 
-//       ? `Missing marks for: ${missingUnits.slice(0, 2).join(", ")}...`
-//       : reRetakeUnits.length > 0
-//       ? `Critical Failure in Re-Retake Units: ${reRetakeUnits.join(", ")}`
-//       : failed > 0
-//       ? `Student has ${failed} pending units (Supp/Retake).`
-//       : "Student has cleared all units.",
-//     summary: { totalExpected: curriculum.length, passed, failed, missing: missingCount },
-//     missingList: missingUnits,
-//     reRetakeList: reRetakeUnits
-//   };
-// };
-
 export const calculateStudentStatus = async (
   studentId: any,
   programId: any,
@@ -198,6 +38,13 @@ export const calculateStudentStatus = async (
   const unitResults = new Map<string, { status: string; attemptType: string; attemptNumber: number }>();
 
   grades.forEach((g) => {
+        if (!g.programUnit || !g.programUnit.unit) {
+      console.warn(
+        `[StatusEngine] Skipping grade record ${g._id} - missing programUnit or unit`
+      );
+      return;
+    }
+
     const unitCode = g.programUnit?.unit?.code?.toUpperCase();
     if (!unitCode) return;
 
