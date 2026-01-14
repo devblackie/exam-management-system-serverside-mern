@@ -35,7 +35,7 @@ router.get(
     const stats = await Student.aggregate([
       // 1. Filter students by the coordinator's institution
       { $match: { institution: institutionId } },
-      
+
       // 2. Group by status and count
       {
         $group: {
@@ -96,16 +96,16 @@ router.post(
       (s) => !s.regNo || !s.name || !s.rawProgram
     );
     if (invalid.length > 0) {
-      return res.status(400).json({ message: "Missing Reg No, Name, or Program" });
+      return res
+        .status(400)
+        .json({ message: "Missing Reg No, Name, or Program" });
     }
 
     // --- STEP 1: LOOKUP PROGRAM IDs (Unchanged) ---
     // ... (Program lookup logic remains here) ...
-    
+
     // Get unique normalized program names
-    const normNames = [
-      ...new Set(incoming.map((s) => s.normalizedProgram)),
-    ];
+    const normNames = [...new Set(incoming.map((s) => s.normalizedProgram))];
     // Fetch all programs for this institution
     const programs = await Program.find({ institution: institutionId }).lean();
     // Build a normalized map
@@ -129,9 +129,8 @@ router.post(
       });
     }
 
-
     // --- STEP 2: LOOKUP ACADEMIC YEAR IDs (NEW LOGIC) ---
-    
+
     // 2a. Get unique academic year strings from incoming data
     const yearStrings = [
       ...new Set(incoming.map((s) => s.admissionAcademicYearString)),
@@ -145,77 +144,77 @@ router.post(
 
     // 2c. Build a map of year string -> ObjectId
     const academicYearMap = new Map<string, mongoose.Types.ObjectId>();
- const existingYearStrings = new Set(academicYears.map(y => y.year));
+    const existingYearStrings = new Set(academicYears.map((y) => y.year));
 
     // Map existing IDs
- for (const year of academicYears) {
- academicYearMap.set(year.year, year._id as mongoose.Types.ObjectId);
- }
+    for (const year of academicYears) {
+      academicYearMap.set(year.year, year._id as mongoose.Types.ObjectId);
+    }
 
     // Identify years that need to be created
- const yearsToCreate = yearStrings.filter(yearStr => !existingYearStrings.has(yearStr));
+    const yearsToCreate = yearStrings.filter(
+      (yearStr) => !existingYearStrings.has(yearStr)
+    );
 
     // 2d. CRITICAL: Create missing academic years with default dates.
     if (yearsToCreate.length > 0) {
-        // Create an array of documents to insert/upsert
-        const documentsToUpsert = yearsToCreate.map(yearStr => {
-            const [startYear, endYear] = yearStr.split('/').map(Number);
-            const defaultStartDate = new Date(`${startYear}-08-01`); // Default to Aug 1st
-            const defaultEndDate = new Date(`${endYear}-07-31`);     // Default to July 31st
+      // Create an array of documents to insert/upsert
+      const documentsToUpsert = yearsToCreate.map((yearStr) => {
+        const [startYear, endYear] = yearStr.split("/").map(Number);
+        const defaultStartDate = new Date(`${startYear}-08-01`); // Default to Aug 1st
+        const defaultEndDate = new Date(`${endYear}-07-31`); // Default to July 31st
 
-            return {
-                year: yearStr,
-                institution: institutionId,
-                startDate: defaultStartDate,
-                endDate: defaultEndDate,
-                isCurrent: false,
-            };
+        return {
+          year: yearStr,
+          institution: institutionId,
+          startDate: defaultStartDate,
+          endDate: defaultEndDate,
+          isCurrent: false,
+        };
+      });
+
+      // Use insertMany (or bulkWrite) for efficiency
+      try {
+        const bulkOps = yearsToCreate.map((yearStr) => {
+          const [startYear, endYear] = yearStr.split("/").map(Number);
+          return {
+            updateOne: {
+              filter: { year: yearStr, institution: institutionId },
+              update: {
+                $setOnInsert: {
+                  year: yearStr,
+                  institution: institutionId,
+                  startDate: new Date(`${startYear}-08-01`),
+                  endDate: new Date(`${endYear}-07-31`),
+                  isCurrent: false,
+                },
+              },
+              upsert: true,
+            },
+          };
         });
 
-        // Use insertMany (or bulkWrite) for efficiency
-        try {
-           
-            const bulkOps = yearsToCreate.map(yearStr => {
-                 const [startYear, endYear] = yearStr.split('/').map(Number);
-                 return {
-                    updateOne: {
-                        filter: { year: yearStr, institution: institutionId },
-                        update: { 
-                            $setOnInsert: { 
-                                year: yearStr,
-                                institution: institutionId,
-                                startDate: new Date(`${startYear}-08-01`),
-                                endDate: new Date(`${endYear}-07-31`),
-                                isCurrent: false,
-                            }
-                        },
-                        upsert: true,
-                    }
-                };
-            });
+        await AcademicYear.bulkWrite(bulkOps);
 
-            await AcademicYear.bulkWrite(bulkOps);
+        // Re-fetch all academic years, including the newly created ones, to populate the map with ObjectIds
+        const allAcademicYears = await AcademicYear.find({
+          institution: institutionId,
+          year: { $in: yearStrings },
+        }).lean();
 
-            // Re-fetch all academic years, including the newly created ones, to populate the map with ObjectIds
-            const allAcademicYears = await AcademicYear.find({
-                institution: institutionId,
-                year: { $in: yearStrings },
-            }).lean();
-
-            for (const year of allAcademicYears) {
-                // Map the ID (guaranteed to exist now)
-                academicYearMap.set(year.year, year._id as mongoose.Types.ObjectId);
-            }
-
-        } catch (error) {
-            // Handle any database error during creation (e.g., race condition, validation)
-            console.error("Error during bulk creation of academic years:", error);
-            return res.status(500).json({ 
-                message: "A database error occurred while defining missing academic years. Please check the logs." 
-            });
+        for (const year of allAcademicYears) {
+          // Map the ID (guaranteed to exist now)
+          academicYearMap.set(year.year, year._id as mongoose.Types.ObjectId);
         }
+      } catch (error) {
+        // Handle any database error during creation (e.g., race condition, validation)
+        console.error("Error during bulk creation of academic years:", error);
+        return res.status(500).json({
+          message:
+            "A database error occurred while defining missing academic years. Please check the logs.",
+        });
+      }
     }
-
 
     // --- STEP 3: DETECT EXISTING STUDENTS (Unchanged) ---
     const regNos = incoming.map((s) => s.regNo);
@@ -223,9 +222,8 @@ router.post(
       regNo: { $in: regNos },
       institution: institutionId,
     });
-    
-    const existingRegNos = new Set(existing.map((s) => s.regNo));
 
+    const existingRegNos = new Set(existing.map((s) => s.regNo));
 
     // --- STEP 4: BUILD FINAL PAYLOAD (UPDATED) ---
     const toCreate = incoming
@@ -235,14 +233,15 @@ router.post(
         name: s.name,
         program: programMap.get(s.normalizedProgram)!,
         currentYearOfStudy: s.yearOfStudy,
-        
+
         // 🔥 CRUCIAL CHANGE: Use ObjectId from the map
-        admissionAcademicYear: academicYearMap.get(s.admissionAcademicYearString)!,
-        
+        admissionAcademicYear: academicYearMap.get(
+          s.admissionAcademicYearString
+        )!,
+
         institution: institutionId,
         status: "active",
       }));
-
 
     // --- STEP 5: INSERT AND RESPOND (Unchanged) ---
     if (toCreate.length > 0) {
@@ -256,8 +255,8 @@ router.post(
     }
 
     return res.status(200).json({
-        message: "All students in the list are already registered.",
-        alreadyRegistered: Array.from(existingRegNos),
+      message: "All students in the list are already registered.",
+      alreadyRegistered: Array.from(existingRegNos),
     });
   })
 );

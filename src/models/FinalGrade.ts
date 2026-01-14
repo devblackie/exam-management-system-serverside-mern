@@ -7,11 +7,12 @@ export interface IFinalGrade extends Document {
   academicYear: mongoose.Types.ObjectId;
   institution: mongoose.Types.ObjectId;
   semester: string;
-
   totalMark: number;
   grade: string;
   points?: number;
   status: "PASS" | "SUPPLEMENTARY" | "RETAKE" | "INCOMPLETE";
+  attemptType: "1ST_ATTEMPT" | "SPECIAL" | "SUPPLEMENTARY" | "RETAKE" | "RE_RETAKE";
+  attemptNumber: number; // 1 for 1st/Special, 2 for Retake, 3 for Re-Retake
   cappedBecauseSupplementary: boolean;
 }
 
@@ -43,6 +44,13 @@ const schema = new Schema<IFinalGrade>(
       enum: ["PASS", "SUPPLEMENTARY", "RETAKE", "INCOMPLETE"],
       required: true,
     },
+    attemptType: {
+      type: String,
+      enum: ["1ST_ATTEMPT", "SPECIAL", "SUPPLEMENTARY", "RETAKE", "RE_RETAKE"],
+      default: "1ST_ATTEMPT",
+      required: true,
+    },
+    attemptNumber: { type: Number, default: 1 },
     cappedBecauseSupplementary: { type: Boolean, default: false },
   },
   { timestamps: true }

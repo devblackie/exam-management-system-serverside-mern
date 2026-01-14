@@ -31,7 +31,7 @@ export async function computeFinalGrade({
 
   // 1. Final Mark (Internal Mark /100) = CA Grand Total /30 + Total Exam /70
 
-  // Use the totals imported directly from the KU Scoresheet:
+  // Use the totals imported directly from the Scoresheet:
   const caScore = Number(mark.caTotal30) || 0;
   const examScore = Number(mark.examTotal70) || 0;
   // The final mark is simply the sum of the two approved totals.

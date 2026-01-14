@@ -83,7 +83,7 @@ router.get(
       if (fs.existsSync(logoPath)) {
         logoBuffer = fs.readFileSync(logoPath);
       } else {
-        console.warn("Logo file not found at:", logoPath);
+        // console.warn("Logo file not found at:", logoPath);
         logoBuffer = Buffer.alloc(0); // Fallback to empty if file is missing
       }
 
@@ -109,7 +109,7 @@ router.get(
         .send(excelBuffer);
     } catch (error: any) {
       // Handle cases where IDs are invalid or DB lookup fails
-      console.error("Error generating scoresheet template:", error.message);
+      // console.error("Error generating scoresheet template:", error.message);
 
       // Return a 400 for invalid ID format, otherwise a 500
       const status = error.message.includes("invalid") ? 400 : 500;

@@ -36,21 +36,21 @@ router.post(
      // Validate institution exists (if provided)
     let institution = null;
     if (institutionId) {
-      console.log("Received institutionId:", institutionId);
+      // console.log("Received institutionId:", institutionId);
 
       // institution = await Institution.findById(institutionId);
 
       // Validate it's a proper ObjectId string
       if (!institutionId.match(/^[0-9a-fA-F]{24}$/)) {
-        console.log("Invalid ObjectId format:", institutionId);
+        // console.log("Invalid ObjectId format:", institutionId);
         return res.status(400).json({ message: "Invalid institution ID format" });
       }
 
        institution = await Institution.findById(institutionId);
-      console.log("Found institution:", institution); // ← DEBUG LOG
+      // console.log("Found institution:", institution); // ← DEBUG LOG
 
       if (!institution) {
-        console.log("Institution not found in DB for ID:", institutionId);
+        // console.log("Institution not found in DB for ID:", institutionId);
         return res.status(400).json({ message: "Invalid institution ID" });
       }
 
