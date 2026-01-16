@@ -80,28 +80,11 @@ export const generateFullScoresheetTemplate = async (
   const fontName = "Book Antiqua";
   const fontSize = 10;
 
-  const greyColor = {
-    type: "pattern" as const,
-    pattern: "solid" as const,
-    fgColor: { argb: "FFE0E0E0" },
-  };
-  const pinkColor = {
-    type: "pattern" as const,
-    pattern: "solid" as const,
-    fgColor: { argb: "FFFFA6C9" },
-  };
-  const purpleColor = {
-    type: "pattern" as const,
-    pattern: "solid" as const,
-    fgColor: { argb: "FFC5A3FF" },
-  };
+  const greyColor = {type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFE0E0E0" },  };
+  const pinkColor = {type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFFA6C9" },  };
+  const purpleColor = {type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFC5A3FF" },  };
 
-  const thinBorder: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
+  const thinBorder: Partial<ExcelJS.Borders> = {top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" },  };
 
   // 1. LOGO
   if (logoBuffer && logoBuffer.length > 0) {
@@ -229,7 +212,7 @@ export const generateFullScoresheetTemplate = async (
   const startRow = 17;
   const endRow = startRow + MAX_MANUAL_ROWS - 1;
 
-  // for (let r = 17; r <= 50; r++) {
+
   for (let r = startRow; r <= endRow; r++) {
     const row = sheet.getRow(r);
     // Applying the style to the WHOLE ROW ensures it picks up correctly
@@ -416,13 +399,7 @@ export const generateFullScoresheetTemplate = async (
         type: "expression",
         formulae: [`AND(NOT(ISBLANK($B17)), ISBLANK(E17))`],
         style: {
-          fill: {
-            type: "pattern",
-            pattern: "solid",
-            // Note: Conditional formatting uses 'bgColor', but ExcelJS often
-            // maps this to 'fgColor' internally. argb is correct here.
-            bgColor: { argb: "FFFFA6C9" },
-          },
+          fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFFFA6C9" },  },
         },
       },
     ],

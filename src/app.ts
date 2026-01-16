@@ -25,6 +25,7 @@ import academicYearsRoutes from "./routes/academicYears";
 import institutionSettingsRoutes from "./routes/institutionSettings";
 import studentSearchRoutes from "./routes/studentSearch";
 import programUnitsRouter from './routes/programUnits';
+import promoteRoutes from "./routes/promote";
 
 dotenv.config();
 
@@ -92,6 +93,7 @@ app.use("/academic-years", academicYearsRoutes);
 app.use("/institution-settings", institutionSettingsRoutes);
 app.use("/student", studentSearchRoutes);
 app.use('/program-units', programUnitsRouter);
+app.use("/promote", promoteRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

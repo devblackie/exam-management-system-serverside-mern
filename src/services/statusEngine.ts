@@ -134,36 +134,110 @@ export const calculateStudentStatus = async (
   };
 };
 
+// serverside/src/services/statusEngine.ts
+
+export const previewPromotion = async (
+  programId: string,
+  yearToPromote: number,
+  academicYearName: string
+) => {
+  const students = await Student.find({
+    program: programId,
+    currentYearOfStudy: yearToPromote,
+    status: "active",
+  }).lean();
+
+  const eligible: any[] = [];
+  const blocked: any[] = [];
+
+  for (const student of students) {
+    const statusResult = await calculateStudentStatus(
+      student._id,
+      programId,
+      academicYearName,
+      yearToPromote
+    );
+
+    const report = {
+      id: student._id,
+      regNo: student.regNo,
+      name: student.name,
+      status: statusResult?.status,
+      summary: statusResult?.summary,
+      reasons: [] as string[]
+    };
+
+    if (statusResult?.status === "IN GOOD STANDING") {
+      eligible.push(report);
+    } else {
+      // Add specific reasons for the block
+      if (statusResult?.missingList?.length) report.reasons.push(`${statusResult.missingList.length} units missing`);
+      if (statusResult?.failedList?.length) report.reasons.push(`${statusResult.failedList.length} units failed`);
+      if (statusResult?.reRetakeList?.length) report.reasons.push("Critical Re-retake failure");
+      
+      blocked.push(report);
+    }
+  }
+
+  return {
+    totalProcessed: students.length,
+    eligibleCount: eligible.length,
+    blockedCount: blocked.length,
+    eligible,
+    blocked
+  };
+};
+
 export const promoteStudent = async (studentId: string) => {
   const student = await Student.findById(studentId);
   if (!student) throw new Error("Student not found");
 
-  // Use the correct property: currentYearOfStudy
+  // 1. Get the current active academic year for context
   const currentYear = await AcademicYear.findOne({ isActive: true });
+  const yearName = currentYear?.year || "2024/2025";
+
+  // 2. Calculate status based on the student's CURRENT year of study
   const statusResult = await calculateStudentStatus(
     student._id,
     student.program,
-    currentYear?.year || "2024/2025",
+    yearName,
     student.currentYearOfStudy || 1
   );
 
+  // 3. Promotion Guard: Only "IN GOOD STANDING" can move up
   if (statusResult?.status === "IN GOOD STANDING") {
     const nextYear = (student.currentYearOfStudy || 1) + 1;
+
+    // Check if the student has reached the maximum years for their program (Optional)
+    // if (nextYear > student.programDuration) return { success: false, message: "Student has completed final year." };
 
     await Student.findByIdAndUpdate(studentId, {
       $set: {
         currentYearOfStudy: nextYear,
-        // Optional: Reset semester to 1 upon promotion
-        currentSemester: 1,
+        currentSemester: 1, // Always reset to Semester 1 on promotion
       },
+      // Log the promotion in history if you have a history field
+      $push: { promotionHistory: { from: student.currentYearOfStudy, to: nextYear, date: new Date() } }
     });
 
-    return { success: true, message: `Promoted to Year ${nextYear}` };
+    return { 
+      success: true, 
+      message: `Successfully promoted to Year ${nextYear}` 
+    };
+  }
+
+  // 4. Detailed Failure Messages
+  let failureReason = `Cannot promote: ${statusResult?.status}.`;
+  if (statusResult?.status === "INCOMPLETE DATA") {
+    failureReason += ` Missing marks for: ${statusResult.missingList.join(", ")}`;
+  } else if (statusResult?.status === "SUPPLEMENTARY PENDING") {
+    failureReason += ` Student must clear failed units first.`;
   }
 
   return {
     success: false,
-    message: `Cannot promote: Student is currently ${statusResult?.status}`,
+    message: failureReason,
+    details: statusResult
   };
 };
 
