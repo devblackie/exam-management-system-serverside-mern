@@ -13,6 +13,7 @@ const config = Object.freeze({
   emailPass: process.env.EMAIL_PASS || "",
   appName: process.env.APP_NAME || "Exam System", 
   instName: process.env.INST_NAME || "My Institution",
+  schoolName: process.env.SCHOOL_NAME || "My School",
 });
 
 export default config;

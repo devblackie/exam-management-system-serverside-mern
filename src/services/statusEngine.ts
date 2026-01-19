@@ -134,8 +134,6 @@ export const calculateStudentStatus = async (
   };
 };
 
-// serverside/src/services/statusEngine.ts
-
 export const previewPromotion = async (
   programId: string,
   yearToPromote: number,
@@ -171,10 +169,18 @@ export const previewPromotion = async (
       eligible.push(report);
     } else {
       // Add specific reasons for the block
-      if (statusResult?.missingList?.length) report.reasons.push(`${statusResult.missingList.length} units missing`);
-      if (statusResult?.failedList?.length) report.reasons.push(`${statusResult.failedList.length} units failed`);
-      if (statusResult?.reRetakeList?.length) report.reasons.push("Critical Re-retake failure");
-      
+      if (statusResult?.missingList?.length) {
+        report.reasons.push(...statusResult.missingList.map(u => `MISSING: ${u}`));
+      }
+      if (statusResult?.failedList?.length) {
+        report.reasons.push(...statusResult.failedList.map(u => `FAILED: ${u}`));
+      }
+      if (statusResult?.retakeList?.length) {
+        report.reasons.push(...statusResult.retakeList.map(u => `RETAKE FAILED: ${u}`));
+      }
+      if (statusResult?.reRetakeList?.length) {
+        report.reasons.push(...statusResult.reRetakeList.map(u => `CRITICAL RE-RETAKE FAILED: ${u}`));
+      }
       blocked.push(report);
     }
   }

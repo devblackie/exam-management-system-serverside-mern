@@ -5,9 +5,10 @@ import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import { bulkPromoteClass, previewPromotion } from "../services/statusEngine";
 import Program from "../models/Program";
-import { generatePromotionWordDoc } from "../utils/promotionReport";
+import { generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibleSummaryDoc, generateIneligibilityNotice, PromotionData } from "../utils/promotionReport";
 import fs from "fs";
 import path from "path";
+import AdmZip from "adm-zip";
 
 const router = Router();
 
@@ -48,41 +49,258 @@ router.post(
   })
 );
 
-// 2. DOWNLOAD PROMOTION REPORT (WORD DOC)
+
 router.post(
   "/download-report",
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, yearToPromote, academicYearName } = req.body;
+    
+    // 1. SET HEADERS FOR STREAMING
+    // This tells the browser/proxy NOT to buffer the response
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=Promotion_Package_Year_${yearToPromote}.zip`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
 
-    // Fetch necessary data
+    try {
+      // 2. FETCH DATA
+      const preview = await previewPromotion(programId, yearToPromote, academicYearName);
+      const program = await Program.findById(programId).lean();
+      
+      // SEND HEARTBEAT (A single space keeps the socket open)
+      res.write(" "); 
+
+      const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      let logoBuffer = Buffer.alloc(0);
+      if (fs.existsSync(logoPath)) {
+        logoBuffer = fs.readFileSync(logoPath);
+      }
+
+      const promotionData: PromotionData = {
+        programName: program?.name || "Unknown Program",
+        academicYear: academicYearName,
+        yearOfStudy: yearToPromote,
+        eligible: preview.eligible,
+        blocked: preview.blocked,
+        logoBuffer
+      };
+
+      // 3. GENERATE DOCUMENTS WITH PULSES
+      const mainBuffer = await generatePromotionWordDoc(promotionData);
+      res.write(" "); // Pulse
+
+      const eligibleBuffer = await generateEligibleSummaryDoc(promotionData);
+      res.write(" "); // Pulse
+
+      const ineligibleBuffer = await generateIneligibleSummaryDoc(promotionData);
+      res.write(" "); // Pulse
+
+      // 4. CREATE ZIP
+      const zip = new AdmZip();
+      zip.addFile(`Promotion_Report_${program?.code}_Year${yearToPromote}.docx`, mainBuffer);
+      zip.addFile(`Eligible_Students_${program?.code}_Year${yearToPromote}.docx`, eligibleBuffer);
+      zip.addFile(`Ineligible_Students_${program?.code}_Year${yearToPromote}.docx`, ineligibleBuffer);
+
+      const zipBuffer = zip.toBuffer();
+
+      // 5. FINAL SEND
+      // We use .end() because we used .write() earlier
+      res.write(zipBuffer);
+      res.end();
+      
+      console.log("[download-report] Streaming complete");
+    } catch (err: any) {
+      console.error("[download-report] CRASH:", err);
+      // If we already sent headers/pulses, we can't send a JSON error
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to generate report" });
+      } else {
+        res.end();
+      }
+    }
+  })
+);
+
+router.post(
+  "/download-report-progress",
+  requireAuth,
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, yearToPromote, academicYearName } = req.body;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+   const sendProgress = (percent: number, message: string, file?: string) => {
+  const data = JSON.stringify({ percent, message, file });
+  res.write(`data: ${data}\n\n`); // Must have two \n
+};
+
+    try {
+      sendProgress(10, "Fetching student data...");
+      const preview = await previewPromotion(programId, yearToPromote, academicYearName);
+      const program = await Program.findById(programId).lean();
+
+      sendProgress(30, "Generating Main Word Document...");
+      const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      let logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+
+      const promotionData = {
+        programName: program?.name || "Program",
+        academicYear: academicYearName,
+        yearOfStudy: yearToPromote,
+        eligible: preview.eligible,
+        blocked: preview.blocked,
+        logoBuffer
+      };
+
+      const mainBuffer = await generatePromotionWordDoc(promotionData);
+      
+      sendProgress(60, "Generating Eligible Summary...");
+      const eligibleBuffer = await generateEligibleSummaryDoc(promotionData);
+
+      sendProgress(80, "Generating Ineligible Summary...");
+      const ineligibleBuffer = await generateIneligibleSummaryDoc(promotionData);
+
+      sendProgress(95, "Creating ZIP Archive...");
+      const zip = new AdmZip();
+      zip.addFile(`Report_${program?.code}.docx`, mainBuffer);
+      zip.addFile(`Eligible_${program?.code}.docx`, eligibleBuffer);
+      zip.addFile(`Ineligible_${program?.code}.docx`, ineligibleBuffer);
+
+      const zipBase64 = zip.toBuffer().toString('base64');
+      
+      // Final message with the file data
+      res.write(`data: ${JSON.stringify({ percent: 100, message: "Complete!", file: zipBase64 })}\n\n`);
+      res.end();
+    } catch (err) {
+      res.write(`data: ${JSON.stringify({ error: "Failed to generate" })}\n\n`);
+      res.end();
+    }
+  })
+);
+
+router.post(
+  "/download-notices",
+  requireAuth,
+  requireRole("coordinator"),
+  (req, res, next) => {
+    // Give more time — notices can still be slow if many students
+    req.setTimeout(600000);  // 10 minutes
+    res.setTimeout(600000);
+    next();
+  },
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, yearToPromote, academicYearName } = req.body;
+
     const preview = await previewPromotion(programId, yearToPromote, academicYearName);
     const program = await Program.findById(programId).lean();
 
-    // --- LOAD LOGO (Same pattern as marks.ts) ---
     const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
     let logoBuffer = Buffer.alloc(0);
     if (fs.existsSync(logoPath)) {
       logoBuffer = fs.readFileSync(logoPath);
     }
 
-    // Generate Word Buffer
-    const docBuffer = await generatePromotionWordDoc({
+    if (preview.blocked.length === 0) {
+      return res.status(400).json({ error: "No ineligible students found" });
+    }
+
+    // Optional safety: limit to avoid server overload
+    const MAX_NOTICES = 150;
+    const blockedToProcess = preview.blocked.slice(0, MAX_NOTICES);
+
+    const zip = new AdmZip();
+
+    const noticeData = {
       programName: program?.name || "Unknown Program",
       academicYear: academicYearName,
       yearOfStudy: yearToPromote,
-      eligible: preview.eligible,
-      blocked: preview.blocked,
       logoBuffer
-    });
+    };
 
-    const fileName = `Promotion_Report_${program?.code}_Year${yearToPromote}.docx`;
+    for (const student of blockedToProcess) {
+      const noticeBuffer = await generateIneligibilityNotice(student, noticeData);
+      zip.addFile(`Ineligibility_Notices/${student.regNo}_Notice.docx`, noticeBuffer);
+    }
+
+    if (preview.blocked.length > MAX_NOTICES) {
+      // Optional: add a text file explaining the limit
+      zip.addFile("README.txt", Buffer.from(
+        `Only the first ${MAX_NOTICES} notices were generated.\n` +
+        `Total ineligible students: ${preview.blocked.length}\n` +
+        `Contact system admin for the remaining notices.`
+      ));
+    }
+
+    const zipBuffer = zip.toBuffer();
 
     res
-      .header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-      .header("Content-Disposition", `attachment; filename=${fileName}`)
-      .send(docBuffer);
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", `attachment; filename=Ineligibility_Notices_${program?.code}_Y${yearToPromote}.zip`)
+      .send(zipBuffer);
+  })
+);
+
+
+router.post(
+  "/download-notices-progress",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, yearToPromote, academicYearName } = req.body;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const sendProgress = (percent: number, message: string, file?: string) => {
+      res.write(`data: ${JSON.stringify({ percent, message, file })}\n\n`);
+    };
+
+    try {
+      sendProgress(5, "Preparing notice templates...");
+      const preview = await previewPromotion(programId, yearToPromote, academicYearName);
+      const program = await Program.findById(programId).lean();
+
+      if (preview.blocked.length === 0) {
+        throw new Error("No ineligible students found to generate notices.");
+      }
+
+      const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+
+      const zip = new AdmZip();
+      const total = preview.blocked.length;
+
+      for (let i = 0; i < total; i++) {
+        const student = preview.blocked[i];
+        const noticeBuffer = await generateIneligibilityNotice(student, {
+          programName: program?.name || "Program",
+          academicYear: academicYearName,
+          yearOfStudy: yearToPromote,
+          logoBuffer
+        });
+
+        zip.addFile(`${student.regNo}_Notice.docx`, noticeBuffer);
+
+        // Send update every 5 students to keep connection alive
+        if (i % 5 === 0 || i === total - 1) {
+          const percent = Math.floor((i / total) * 80) + 10; // scale from 10% to 90%
+          sendProgress(percent, `Generated ${i + 1} of ${total} notices...`);
+        }
+      }
+
+      sendProgress(95, "Finalizing ZIP archive...");
+      const zipBase64 = zip.toBuffer().toString('base64');
+      
+      sendProgress(100, "Complete!", zipBase64);
+      res.end();
+    } catch (err: any) {
+      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.end();
+    }
   })
 );
 
