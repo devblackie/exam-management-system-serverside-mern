@@ -29,102 +29,69 @@ export async function computeFinalGrade({
 
   if (!settings) throw new Error("Institution grading settings not configured");
 
-  // 1. Final Mark (Internal Mark /100) = CA Grand Total /30 + Total Exam /70
+  // 1. Final Mark (Internal Mark /100) = CA Grand Total /30 + Total Exam /70 Calculate Final Mark: CA (from 1st attempt) + New Exam Score
 
   // Use the totals imported directly from the Scoresheet:
   const caScore = Number(mark.caTotal30) || 0;
   const examScore = Number(mark.examTotal70) || 0;
-  // The final mark is simply the sum of the two approved totals.
   let finalMark = Number((caScore + examScore).toFixed(2));
 
-  // Supplementary capping
-  if (mark.isSupplementary && finalMark > settings.supplementaryThreshold) {
-    finalMark = settings.supplementaryThreshold;
+ // 2. APPLY SUPPLEMENTARY POLICY
+  // If this is a supplementary, the maximum grade allowed is 'D' (usually 40-49%)
+  let isCapped = false;
+  if (mark.attempt === "Supplementary" || mark.isSupplementary) {
+     const gradeDMax = 49.4; // The upper limit for a 'D' grade
+     if (finalMark >= settings.passMark) {
+        // Student passed the Supp: Cap the mark at the minimum required for a 'D'
+        // or keep it as is if it's already within the 'D' range.
+        // Most institutions cap at exactly the pass mark (e.g., 40%)
+        if (finalMark > settings.passMark) {
+            finalMark = settings.passMark; 
+            isCapped = true;
+        }
+     }
   }
 
-  // 2. Determine Grade
+// 3. Determine Grade based on the (potentially capped) mark
   let grade = "E";
-  let points = 0;
+  if (finalMark >= 69.5 && !isCapped) grade = "A";
+  else if (finalMark >= 59.5 && !isCapped) grade = "B";
+  else if (finalMark >= 49.5 && !isCapped) grade = "C";
+  else if (finalMark >= settings.passMark) grade = "D";
+  else grade = "E";
 
-  if (settings.gradingScale && settings.gradingScale.length > 0) {
-    const entry = settings.gradingScale
-      .sort((a, b) => b.min - a.min)
-      .find((s) => finalMark >= s.min);
-    if (entry) {
-      grade = entry.grade;
-      points = entry.points || 0;
-    }
-  } else {
-    // Default scale
-    if (finalMark >= 69.5) {
-      grade = "A";
-      points = 4.0;
-    } else if (finalMark >= 59.5) {
-      grade = "B";
-      points = 3.0;
-    } else if (finalMark >= 49.5) {
-      grade = "C";
-      points = 2.0;
-    } else if (finalMark >= 39.5) {
-      grade = "D";
-      points = 1.0;
-    } else {
-      grade = "E";
-      points = 0;
-    }
-  }
-
-  // 3. Determine Status
+ // 4. Determine Status & Progression to Retake
   let status: "PASS" | "SUPPLEMENTARY" | "RETAKE" | "INCOMPLETE" = "INCOMPLETE";
 
-  // Check if required components are present (CA total 30 and Exam total 70)
-  if (mark.caTotal30 === 0 && mark.examTotal70 === 0) {
-    status = "INCOMPLETE";
-  } else if (finalMark >= settings.passMark) {
+  if (finalMark >= settings.passMark) {
     status = "PASS";
   } else {
-    status = "SUPPLEMENTARY";
-
-    // Check for RETAKE
-    if (!mark.isSupplementary) {
-      const suppCount = await FinalGrade.countDocuments({
-        student: mark.student,
-        programUnit: mark.programUnit, // Use programUnit for accurate unit count
-        academicYear: mark.academicYear,
-        status: "SUPPLEMENTARY",
-        unit: { $ne: mark.programUnit }, // Exclude the current unit's supplementary status
-      }).session(session || null);
-
-      if (suppCount + 1 >= settings.retakeThreshold) {
-        // +1 for the current unit
-        status = "RETAKE";
-      }
+    // If they were already sitting a Supplementary and failed again...
+    if (mark.attempt === "Supplementary" || mark.isSupplementary) {
+      status = "RETAKE"; // Second failure triggers a full Retake (Attempt 3)
+    } else {
+      status = "SUPPLEMENTARY"; // First failure triggers a Supplementary
     }
   }
 
-  // 4. Save FinalGrade
+  // 5. Save FinalGrade
   await FinalGrade.findOneAndUpdate(
     {
       student: mark.student,
       programUnit: mark.programUnit,
-      academicYear: mark.academicYear,
+      // academicYear: mark.academicYear,
     },
     {
-      totalMark: finalMark,
+    totalMark: finalMark,
       grade,
-      points,
       status,
-      cappedBecauseSupplementary:
-        mark.isSupplementary && finalMark === settings.supplementaryThreshold,
-      // Store the aggregated scores that led to the final mark for audit
-      computedFrom: {
-        caTotal30: mark.caTotal30,
-        examTotal70: mark.examTotal70,
-        // The original granular marks are available on the Mark document itself if needed
-      },
+      attemptType: mark.isSupplementary ? "SUPPLEMENTARY" : "1ST_ATTEMPT",
+      attemptNumber: mark.isSupplementary ? 2 : 1,
+      cappedBecauseSupplementary: isCapped
+      
     },
     { upsert: true, new: true, session: session || null }
   );
 
-  return { finalMark, grade, points, status, caScore, examScore };
+  return { finalMark, grade,  status, caScore, examScore };
 }

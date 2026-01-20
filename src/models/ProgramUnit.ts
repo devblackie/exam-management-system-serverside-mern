@@ -16,7 +16,7 @@ const schema = new Schema<IProgramUnit>(
     institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true },
     program: { type: Schema.Types.ObjectId, ref: "Program", required: true },
     unit: { type: Schema.Types.ObjectId, ref: "Unit", required: true },
-    academicYear: { type: String, required: true },
+    academicYear: { type: String},
     requiredYear: { type: Number, required: true, min: 1, max: 6 },
     requiredSemester: { type: Number, required: true, enum: [1, 2] },
     isElective: { type: Boolean, default: false },

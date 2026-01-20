@@ -108,7 +108,7 @@ router.get(
       student._id,
       (student.program as any)._id,
      academicYearName, // Use the dynamic variable
-      1 // You can eventually make this dynamic: student.yearOfStudy
+     student.currentYearOfStudy || 1
     );
 
     res.json({
@@ -116,6 +116,8 @@ router.get(
         name: student.name,
         regNo: student.regNo,
         program: (student.program as any)?.name,
+        currentYear: student.currentYearOfStudy || 1, 
+        currentSemester: student.currentSemester || 1,
       },
       grades: processedGrades, // Return the flattened version
       currentStatus: academicStatus?.status || "UNKNOWN",
