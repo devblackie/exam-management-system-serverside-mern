@@ -25,12 +25,7 @@ export async function importMarksFromBuffer(
   const institutionId = req.user.institution;
   if (!institutionId) throw new Error("Coordinator not linked to institution");
 
-  const result: ImportResult = {
-    total: 0,
-    success: 0,
-    errors: [],
-    warnings: [],
-  };
+  const result: ImportResult = {total: 0,success: 0,errors: [], warnings: [], };
 
   try {
     const workbook = xlsx.read(buffer, { type: "buffer" });

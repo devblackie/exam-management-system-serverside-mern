@@ -36,7 +36,7 @@ router.get(
   requireAuth,
   requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { programId, unitId, academicYearId, yearOfStudy, semester } =
+    const { programId, unitId, academicYearId, yearOfStudy, semester, examMode } =
       req.query;
 
     if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
@@ -94,7 +94,8 @@ router.get(
         parseInt(yearOfStudy as string, 10),
         parseInt(semester as string, 10),
         new mongoose.Types.ObjectId(academicYearId as string),
-        logoBuffer // Pass the actual image data here
+        logoBuffer, // Pass the actual image data here
+        examMode as string
       );
 
       res
