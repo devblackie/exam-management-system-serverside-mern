@@ -60,10 +60,12 @@ export const calculateStudentStatus = async (
 
   // Trackers for the Coordinator View
   let passedCount = 0;
-  const failedUnits: string[] = [];      // Standard Failed / Supp
-  const retakeUnits: string[] = [];      // Retakes (Attempt 2)
-  const reRetakeUnits: string[] = [];    // Re-Retakes (Attempt 3+)
-  const missingUnits: string[] = [];     // Not attempted yet
+  const failedUnits: string[] = [];      
+  const retakeUnits: string[] = [];      
+  const reRetakeUnits: string[] = [];    
+  const missingUnits: string[] = [];     
+  const specialExamUnits: string[] = []; // NEW: For Tony
+  const incompleteUnits: string[] = [];
 
   // 4. Compare Curriculum against results
   curriculum.forEach((pUnit: any) => {
@@ -73,19 +75,19 @@ export const calculateStudentStatus = async (
 
     const record = unitResults.get(unitCode);
 
-    if (!record) {
+   if (!record) {
       missingUnits.push(displayName);
     } else if (record.status === "PASS") {
       passedCount++;
+    } else if (record.status === "SPECIAL") {
+      specialExamUnits.push(displayName); // Caught Tony
+    } else if (record.status === "INCOMPLETE") {
+      incompleteUnits.push(displayName);  // Caught Jakes
     } else {
-      // Categorize the failure by attempt type
-      if (record.attemptType === "RE_RETAKE" || record.attemptNumber >= 3) {
-        reRetakeUnits.push(displayName);
-      } else if (record.attemptType === "RETAKE" || record.attemptNumber === 2) {
-        retakeUnits.push(displayName);
-      } else {
-        failedUnits.push(displayName);
-      }
+      // Handle standard failures
+      if (record.attemptNumber >= 3) reRetakeUnits.push(displayName);
+      else if (record.attemptNumber === 2) retakeUnits.push(displayName);
+      else failedUnits.push(displayName);
     }
   });
 
@@ -95,42 +97,43 @@ export const calculateStudentStatus = async (
   // 5. Determine UI Status
   let status = "IN GOOD STANDING";
   let variant: "success" | "warning" | "error" | "info" = "success";
+let details = "All curriculum units cleared.";
 
-  if (missingCount > 0) {
+if (specialExamUnits.length > 0) {
+    status = "SPECIAL EXAM PENDING";
+    variant = "info";
+    details = `Student has ${specialExamUnits.length} approved special exam(s).`;
+  } else if (incompleteUnits.length > 0) {
+    status = "INCOMPLETE MARKS";
+    variant = "warning";
+    details = `Missing CA or Exam components for ${incompleteUnits.length} unit(s).`;
+  } else if (missingUnits.length > 0) {
     status = "INCOMPLETE DATA";
     variant = "info";
+    details = `No record found for ${missingUnits.length} units.`;
   } else if (reRetakeUnits.length > 0) {
     status = "RE-RETAKE FAILURE";
     variant = "error";
+    details = "Critical: Failed third attempt at units.";
   } else if (totalFailed > rules.retakeLimit) {
     status = "RETAKE YEAR";
     variant = "error";
+    details = `Failed units (${totalFailed}) exceed limit of ${rules.retakeLimit}.`;
   } else if (totalFailed > 0) {
     status = "SUPPLEMENTARY PENDING";
     variant = "warning";
+    details = `Student must sit supplementary exams for ${totalFailed} unit(s).`;
   }
 
-  return {
-    status,
-    variant,
-    details: missingCount > 0 
-      ? `Missing marks for ${missingCount} units.`
-      : reRetakeUnits.length > 0
-      ? `Critical: Failed Re-Retake units.`
-      : totalFailed > 0
-      ? `Student has ${totalFailed} pending units.`
-      : "All curriculum units cleared.",
-    summary: { 
-      totalExpected: curriculum.length, 
-      passed: passedCount, 
-      failed: totalFailed, 
-      missing: missingCount 
-    },
-    // Detailed lists for Coordinator Search/View
+ return {
+    status, variant, details,
+    summary: { totalExpected: curriculum.length, passed: passedCount, failed: totalFailed, missing: missingUnits.length },
     missingList: missingUnits,
     failedList: failedUnits,
     retakeList: retakeUnits,
-    reRetakeList: reRetakeUnits
+    reRetakeList: reRetakeUnits,
+    specialList: specialExamUnits,    // Pass to Frontend
+    incompleteList: incompleteUnits  // Pass to Frontend
   };
 };
 
@@ -233,12 +236,15 @@ export const promoteStudent = async (studentId: string) => {
   }
 
   // 4. Detailed Failure Messages
-  let failureReason = `Cannot promote: ${statusResult?.status}.`;
-  if (statusResult?.status === "INCOMPLETE DATA") {
-    failureReason += ` Missing marks for: ${statusResult.missingList.join(", ")}`;
-  } else if (statusResult?.status === "SUPPLEMENTARY PENDING") {
-    failureReason += ` Student must clear failed units first.`;
-  }
+  let failureReason = `Cannot promote: ${statusResult?.status}. `;
+
+if (statusResult?.status === "SPECIAL EXAM PENDING") {
+    failureReason += `Pending units: ${statusResult.specialList.join(", ")}`;
+} else if (statusResult?.status === "INCOMPLETE MARKS") {
+    failureReason += `Check components for: ${statusResult.incompleteList.join(", ")}`;
+} else if (statusResult?.status === "SUPPLEMENTARY PENDING") {
+    failureReason += `Must clear: ${statusResult.failedList.join(", ")}`;
+}
 
   return {
     success: false,

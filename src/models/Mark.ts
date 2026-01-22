@@ -86,6 +86,10 @@ export interface IMark extends Document {
   // --- METADATA ---
   isSupplementary: boolean; // Derived from attempt field
   isRetake: boolean; // Derived from attempt field
+  isSpecial: boolean; // Special exam flag
+  isMissingCA: boolean; // Missing CA flag
+  remarks?: string; // Any remarks or notes
+  
   uploadedBy: mongoose.Types.ObjectId; // coordinator who entered
   uploadedAt: Date;
 }
@@ -132,13 +136,15 @@ const schema = new Schema<IMark>(
     agreedMark: { type: Number, min: 0, max: 100, required: true },
     attempt: {
       type: String,
-      enum: ["1st", "re-take", "supplementary"],
+      enum: ["1st", "re-take", "supplementary", "special"],
       default: "1st",
     },
 
     // METADATA
     isSupplementary: { type: Boolean, default: false },
     isRetake: { type: Boolean, default: false },
+    isSpecial: { type: Boolean, default: false }, // Explicit flag for Special Exams
+    remarks: { type: String },
     uploadedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
     uploadedAt: { type: Date, default: Date.now },
   },

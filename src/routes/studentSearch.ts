@@ -133,47 +133,47 @@ router.get(
   })
 );
 
-// Full Transcript Download
-router.get(
-  "/transcript",
-  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    // router.get("/transcript", requireAuth, asyncHandler(async (req: AuthenticatedRequest , res:Response) => {
-    let { regNo } = req.query;
-    if (!regNo || typeof regNo !== "string") {
-      return res.status(400).json({ error: "regNo required" });
-    }
-    regNo = decodeURIComponent(regNo);
-
-    console.log("[TRANSCRIPT] Generating for:", regNo);
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Pragma", "no-cache");
-
-    await generateStudentTranscript(regNo, res);
-  })
-);
-
-// Transcript for Specific Year
-router.get(
-  "/transcript/year",
+// POST /approve-special: One-click approval for Special Exams
+router.post(
+  "/approve-special",
   requireAuth,
+  requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    let { regNo, year } = req.query;
-    if (
-      !regNo ||
-      !year ||
-      typeof regNo !== "string" ||
-      typeof year !== "string"
-    )
-      return res.status(400).json({ error: "regNo and year required" });
+    const { markId, reason } = req.body;
 
-    regNo = decodeURIComponent(regNo);
+    if (!markId) {
+      return res.status(400).json({ error: "Mark ID is required" });
+    }
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Cache-Control", "no-cache");
+    // 1. Find the mark and update to Special status
+    const mark = await Mark.findByIdAndUpdate(
+      markId,
+      {
+        $set: {
+          isSpecial: true,
+          attempt: "special",
+          remarks: reason || "Approved by Coordinator",
+        },
+      },
+      { new: true }
+    );
 
-    await generateStudentTranscript(regNo, res, year);
+    if (!mark) {
+      return res.status(404).json({ error: "Mark record not found" });
+    }
+
+    // 2. Trigger Grade Recalculation
+    // This will update FinalGrade status to 'SPECIAL' and Grade to 'I'
+    const gradeResult = await computeFinalGrade({
+      markId: mark._id as any,
+      coordinatorReq: req,
+    });
+
+    res.json({
+      success: true,
+      message: "Special exam approved successfully",
+      newStatus: gradeResult.status,
+    });
   })
 );
 
@@ -352,6 +352,52 @@ router.post(
         grade: gradeResult.grade,
       },
     });
+  })
+);
+
+
+
+// Full Transcript Download
+router.get(
+  "/transcript",
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    // router.get("/transcript", requireAuth, asyncHandler(async (req: AuthenticatedRequest , res:Response) => {
+    let { regNo } = req.query;
+    if (!regNo || typeof regNo !== "string") {
+      return res.status(400).json({ error: "regNo required" });
+    }
+    regNo = decodeURIComponent(regNo);
+
+    console.log("[TRANSCRIPT] Generating for:", regNo);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Pragma", "no-cache");
+
+    await generateStudentTranscript(regNo, res);
+  })
+);
+
+// Transcript for Specific Year
+router.get(
+  "/transcript/year",
+  requireAuth,
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    let { regNo, year } = req.query;
+    if (
+      !regNo ||
+      !year ||
+      typeof regNo !== "string" ||
+      typeof year !== "string"
+    )
+      return res.status(400).json({ error: "regNo and year required" });
+
+    regNo = decodeURIComponent(regNo);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Cache-Control", "no-cache");
+
+    await generateStudentTranscript(regNo, res, year);
   })
 );
 

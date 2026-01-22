@@ -491,123 +491,6 @@ interface IneligibilityNoticeData {
   logoBuffer: Buffer;
 }
 
-// export const generateIneligibilityNotice = async (student: any, data: IneligibilityNoticeData): Promise<Buffer> => {
-//   const { programName, academicYear, yearOfStudy, logoBuffer } = data;
-
-//   const doc = new Document({
-//     sections: [{
-//       properties: {},
-//       children: [
-//         ...(logoBuffer.length > 0 ? [
-//           new Paragraph({
-//             alignment: AlignmentType.CENTER,
-//             children: [
-//               new ImageRun({
-//                 data: logoBuffer,
-//                 transformation: { width: 100, height: 100 },
-//                 type: "png",
-//               }),
-//             ],
-//           }),
-//         ] : []),
-
-//         new Paragraph({
-//           alignment: AlignmentType.CENTER,
-//           spacing: { before: 200 },
-//           children: [
-//             new TextRun({ text: config.instName.toUpperCase(), bold: true, size: 28 }),
-//           ],
-//         }),
-//         new Paragraph({
-//           alignment: AlignmentType.CENTER,
-//           children: [
-//             new TextRun({ text: "OFFICE OF THE REGISTRAR (ACADEMIC AFFAIRS)", bold: true, size: 20 }),
-//           ],
-//         }),
-
-//         new Paragraph({
-//           alignment: AlignmentType.CENTER,
-//           spacing: { before: 400, after: 400 },
-//           children: [
-//             new TextRun({ 
-//               text: `INELIGIBILITY NOTICE FOR PROMOTION: ${academicYear}`, 
-//               bold: true, 
-//               size: 24, 
-//               underline: { type: BorderStyle.SINGLE } 
-//             }),
-//           ],
-//         }),
-
-//         new Paragraph({
-//           spacing: { after: 200 },
-//           children: [
-//             new TextRun({ text: `To: ${formatStudentName(student.name)} (${student.regNo})` }),
-//           ],
-//         }),
-
-//         new Paragraph({
-//           children: [
-//             new TextRun({ text: `PROGRAM: `, bold: true }),
-//             new TextRun({ text: programName.toUpperCase() }),
-//           ],
-//         }),
-//         new Paragraph({
-//           children: [
-//             new TextRun({ text: `CURRENT YEAR OF STUDY: `, bold: true }),
-//             new TextRun({ text: `YEAR ${yearOfStudy}` }),
-//           ],
-//         }),
-
-//         new Paragraph({ 
-//           spacing: { before: 400, after: 200 },
-//           children: [new TextRun({ text: "Dear Student,", bold: true })]
-//         }),
-
-//         new Paragraph({
-//           spacing: { after: 200 },
-//           children: [
-//             new TextRun({ text: "This is to inform you that you are currently ineligible for promotion to the next year of study due to the following reasons:" }),
-//           ],
-//         }),
-
-//         ...student.reasons.map((reason: string) => 
-//           new Paragraph({
-//             bullet: { level: 0 },
-//             children: [new TextRun(reason)],
-//           })
-//         ),
-
-//         new Paragraph({
-//           spacing: { before: 400, after: 200 },
-//           children: [
-//             new TextRun({ text: "Please contact the academic affairs office for further guidance on how to resolve these issues." }),
-//           ],
-//         }),
-
-//         new Paragraph({
-//           spacing: { before: 1200 },
-//           children: [
-//             new TextRun({ text: "PREPARED BY: __________________________\t\tDATE: _______________", bold: true }),
-//           ],
-//         }),
-//         new Paragraph({ text: "FACULTY COORDINATOR" }),
-        
-//         new Paragraph({
-//           spacing: { before: 800 },
-//           children: [
-//             new TextRun({ text: "APPROVED BY: __________________________\t\tDATE: _______________", bold: true }),
-//           ],
-//         }),
-//         new Paragraph({ text: "CHAIRMAN, ACADEMIC BOARD" }),
-//       ],
-//     }],
-//   });
-
-//   return await Packer.toBuffer(doc);
-// };
-
-// serverside/src/utils/promotionReport.ts
-
 export const generateIneligibilityNotice = async (student: any, data: IneligibilityNoticeData): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, logoBuffer } = data;
 
@@ -755,6 +638,120 @@ export const generateIneligibilityNotice = async (student: any, data: Ineligibil
           children: [
             new TextRun({ text: "Cc: Registrar (Academic Affairs)\n    ", size: 16 }),
           ],
+        }),
+      ],
+    }],
+  });
+
+  return await Packer.toBuffer(doc);
+};
+
+// New function for individual Special Exam notice
+export const generateSpecialExamNotice = async (student: any, data: IneligibilityNoticeData): Promise<Buffer> => {
+  const { programName, academicYear, yearOfStudy, logoBuffer } = data;
+
+  const capitalizedStudentName = formatStudentName(student.name).toUpperCase();
+  const doc = new Document({
+    sections: [{
+      properties: {},
+      children: [
+        // 1. LOGO
+        ...(logoBuffer.length > 0 ? [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [new ImageRun({ data: logoBuffer, transformation: { width: 80, height: 80 }, type: "png" })],
+          }),
+        ] : []),
+
+        // 2. HEADERS
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 100 },
+          children: [new TextRun({ text: config.instName.toUpperCase(), bold: true, size: 24 })],
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: config.schoolName.toUpperCase(), bold: true, size: 20 })],
+        }),
+        
+        // 3. ADDRESSING
+        new Paragraph({
+          spacing: { before: 400 },
+          children: [new TextRun({ text: "TO: ", bold: true }), new TextRun({ text: capitalizedStudentName})],
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: "REG NO: ", bold: true }), new TextRun({ text: student.regNo })],
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: "PROGRAM: ", bold: true }), new TextRun({ text: programName.toUpperCase() })],
+        }),
+
+        // 4. SUBJECT LINE (Special Exam context)
+        new Paragraph({
+          spacing: { before: 400, after: 400 },
+          children: [
+            new TextRun({ 
+              text: `RE: APPROVAL FOR SPECIAL EXAMINATIONS - ${academicYear}`, 
+              bold: true, 
+              size: 22, 
+              underline: {} 
+            }),
+          ],
+        }),
+
+        // 5. BODY TEXT
+        new Paragraph({
+          spacing: { after: 200 },
+          children: [
+            new TextRun({ 
+              text: "This is to inform you that the School Board of Examiners has approved your application for Special Examinations in the following unit(s). This approval is granted based on the valid reasons provided (Medical/Compassionate/Administrative) regarding the missed ordinary examinations:",
+              size: 20
+            }),
+          ],
+        }),
+
+        // 6. UNIT LIST
+       ...student.reasons.map((unitString: string) => 
+          new Paragraph({
+            bullet: { level: 0 },
+            spacing: { before: 150 },
+            children: [new TextRun({ text: unitString, bold: true, size: 19 })]
+          })
+        ),
+
+        new Paragraph({
+          spacing: { before: 300, after: 200 },
+          children: [
+            new TextRun({ 
+              text: "Please note that a Special Examination is treated as an ordinary examination (First Attempt). Your results will be processed and your promotion status updated immediately following the conclusion of the Special Examination cycle.",
+              size: 20,
+              italics: true
+            }),
+          ],
+        }),
+
+        new Paragraph({
+          spacing: { after: 400 },
+          children: [
+            new TextRun({ 
+              text: "You are required to present this notice to the Departmental Invigilators during the examination period.",
+              size: 20,
+              bold: true
+            }),
+          ],
+        }),
+
+        // 7. SIGNATORY
+        new Paragraph({
+          spacing: { before: 600, after: 400 },
+          children: [new TextRun({ text: `APPROVED BY THE BOARD OF EXAMINERS, ${config.schoolName.toUpperCase()}`, bold: true, size: 18 })],
+        }),
+        new Paragraph({
+          spacing: { before: 400 },
+          children: [new TextRun({ text: "SIGNED: __________________________\t\tDATE: _______________", bold: true })],
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: `\tDEAN, ${config.schoolName.toUpperCase()}`, size: 18 })],
         }),
       ],
     }],
