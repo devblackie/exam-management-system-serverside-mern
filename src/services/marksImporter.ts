@@ -1,4 +1,4 @@
-// // src/services/marksImporter.ts
+// src/services/marksImporter.ts
 import xlsx from "xlsx";
 import mongoose, { Types } from "mongoose";
 import Student from "../models/Student";
@@ -8,7 +8,6 @@ import Mark from "../models/Mark";
 import { computeFinalGrade } from "./gradeCalculator";
 import { logAudit } from "../lib/auditLogger";
 import type { AuthenticatedRequest } from "../middleware/auth";
-import { MARKS_UPLOAD_HEADERS } from "../utils/uploadTemplate";
 
 interface ImportResult {
   total: number;
@@ -25,127 +24,60 @@ export async function importMarksFromBuffer(
   const institutionId = req.user.institution;
   if (!institutionId) throw new Error("Coordinator not linked to institution");
 
-  const result: ImportResult = {total: 0,success: 0,errors: [], warnings: [], };
+  const result: ImportResult = { total: 0, success: 0, errors: [], warnings: [] };
 
   try {
     const workbook = xlsx.read(buffer, { type: "buffer" });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
-    // --- 1. EXTRACT META DATA FROM HEADER CELLS ---
-    const unitCodeCell = sheet["I12"];
-    const unitCode = unitCodeCell
-      ? unitCodeCell.v.toString().trim().toUpperCase()
-      : null;
-
-    const academicYearCell = sheet["A8"];
-    const academicYearText = academicYearCell
-      ? academicYearCell.v.toString()
-      : "";
+    // 1. Meta Data Extraction (Shifted left by 1 column)
+    // Unit Code: H12, Academic Year: F8
+    const unitCode = sheet["H12"]?.v?.toString().trim().toUpperCase();
+    const academicYearText = sheet["F8"]?.v?.toString() || ""; 
     const yearMatch = academicYearText.match(/\d{4}\/\d{4}/);
     const academicYearStr = yearMatch ? yearMatch[0] : null;
 
+    console.log(`[Importer] Metadata Found: Unit=${unitCode}, Year=${academicYearStr}`);
+
     if (!unitCode || !academicYearStr) {
-      throw new Error(
-        "Could not find Unit Code (I12) or Academic Year (A8) in the Excel header."
-      );
+      throw new Error(`Invalid Template: Missing Unit Code (H12) or Academic Year (F8). Found: Unit=${unitCode}, Year=${academicYearStr}`);
     }
 
-    // --- 2. VALIDATE HEADERS & PARSE ROWS ---
-    const rows = xlsx.utils.sheet_to_json<any>(sheet, {
-      range: 14,
-      defval: "",
-    });
-    if (rows.length === 0)
-      throw new Error("No student data found in the file.");
+    // 2. Parse Rows as Raw Arrays (header: 1)
+    // range: 16 starts reading at Row 17 (the first student)
+    const rawRows = xlsx.utils.sheet_to_json<any[]>(sheet, { header: 1, range: 16 });
 
-    const fileHeaders = Object.keys(rows[0]).map((h) => h.trim());
+    // 3. Pre-fetch shared data
+    const academicYearDoc = await AcademicYear.findOne({ 
+      year: { $regex: new RegExp(`^${academicYearStr}$`, "i") }, 
+      institution: institutionId 
+    }).lean();
 
-    // Updated required columns list as requested
-    const required = [
-      "REG. NO.",
-      "CAT 1 Out of",
-      "AGREED MARKS /100",
-      "CATs + LABS + ASSIGNMENTS GRAND TOTAL out of 30",
-      "TOTAL CATS",
-      "TOTAL ASSGNT",
-      "TOTAL EXAM OUT OF",
-    ];
+    if (!academicYearDoc) throw new Error(`Academic Year '${academicYearStr}' not found in database.`);
 
-    const missing = required.filter((h) => !fileHeaders.includes(h));
+    const programUnits = await ProgramUnit.find({ institution: institutionId }).populate("unit").lean();
+    const programUnitMap = new Map(programUnits.map((pu: any) => [`${pu.program.toString()}_${pu.unit.code.toUpperCase()}`, pu]));
 
-    if (missing.length > 0) {
-      throw new Error(
-        `Invalid template. Missing required columns: ${missing.join(", ")}`
-      );
-    }
-
-    // --- 3. PRE-LOAD REFERENCE DATA ---
-    const regNos = rows
-      .map((r) => r["REG. NO."]?.toString().trim().toUpperCase())
-      .filter(Boolean);
-
-    const [students, academicYearDoc, programUnits] = await Promise.all([
-      Student.find({
-        regNo: { $in: regNos },
-        institution: institutionId,
-      }).lean(),
-      AcademicYear.findOne({
-        // year: academicYearStr,
-        year: { $regex: new RegExp(`^${academicYearStr}$`, "i") },
-        institution: institutionId,
-      }).lean(),
-      ProgramUnit.find({ institution: institutionId }).populate("unit").lean(),
-    ]);
-
-    if (!academicYearDoc)
-      throw new Error(
-        `Academic Year '${academicYearStr}' not found in database.`
-      );
-
-    const studentMap = new Map(students.map((s) => [s.regNo.toUpperCase(), s]));
-    const programUnitMap = new Map();
-    programUnits.forEach((pu: any) => {
-      const key = `${pu.program.toString()}_${pu.unit.code.toUpperCase()}`;
-      programUnitMap.set(key, pu);
-    });
-
-    // --- 4. DATA PROCESSING ---
-    const processedInFile = new Set<string>(); // Tracks regNo for this specific upload
-
-    for (const [index, row] of rows.entries()) {
-      const regNo = row["REG. NO."]?.toString().trim().toUpperCase();
-      if (!regNo) continue;
-
-      // --- DUPLICATE CHECK ---
-      if (processedInFile.has(regNo)) {
-        result.errors.push(
-          `Row ${
-            index + 17
-          }: Duplicate entry for ${regNo} found in this file. Skipping.`
-        );
-        continue;
-      }
-      processedInFile.add(regNo);
+    // 4. Row Processing (A=0, B=1, C=2...)
+    for (const [index, row] of rawRows.entries()) {
+      const regNo = row[1]?.toString().trim().toUpperCase(); // Col B
+      const sn = row[0]; // Col A
+      
+      if (!regNo || sn === "") continue;
 
       result.total++;
-      const rowNum = index + 17;
-
-      // Start a fresh session for each student to prevent timeouts
+      const rowNum = index + 17; 
       const session = await mongoose.startSession();
+
       try {
         await session.withTransaction(async () => {
-          const student: any = studentMap.get(regNo);
-          if (!student)
-            throw new Error(`Student ${regNo} not found in system.`);
+          const student = await Student.findOne({ regNo, institution: institutionId }).lean();
+          if (!student) throw new Error(`Student ${regNo} not found in database.`);
 
           const programUnitKey = `${student.program.toString()}_${unitCode}`;
           const programUnit = programUnitMap.get(programUnitKey);
+          if (!programUnit) throw new Error(`Unit ${unitCode} not linked to student program.`);
 
-          if (!programUnit)
-            throw new Error(`Unit ${unitCode} not linked to program.`);
-
-          // Map Excel columns to Database fields
           const markData = {
             student: student._id,
             programUnit: programUnit._id,
@@ -153,90 +85,50 @@ export async function importMarksFromBuffer(
             institution: institutionId,
             uploadedBy: req.user._id,
 
-            // --- RAW SCORES (Optional fields can be undefined, defaults are in Schema) ---
-            cat1Raw:
-              row["CAT 1 Out of"] !== "" ? Number(row["CAT 1 Out of"]) : 0,
-            cat2Raw:
-              row["CAT 2 Out of"] !== "" ? Number(row["CAT 2 Out of"]) : 0,
-            cat3Raw:
-              row["CAT3 Out of"] !== ""
-                ? Number(row["CAT3 Out of"])
-                : undefined,
-            assgnt1Raw:
-              row["Assgnt 1 Out of"] !== ""
-                ? Number(row["Assgnt 1 Out of"])
-                : 0,
+            // CA Scores (Col E - G)
+            cat1Raw: Number(row[4]) || 0,
+            cat2Raw: Number(row[5]) || 0,
+            cat3Raw: Number(row[6]) || 0,
+            // Assignments (Col I - K)
+            assgnt1Raw: Number(row[8]) || 0,
+            assgnt2Raw: Number(row[9]) || 0,
+            assgnt3Raw: Number(row[10]) || 0,
 
-            // --- ADD THESE EXAM QUESTION MAPPINGS ---
-            // Note: Ensure the string keys (e.g., "Q1 /10") match your Excel column headers exactly
-            examQ1Raw:
-              row["Q1 out of"] !== "" ? Number(row["Q1 out of"]) : undefined,
-            examQ2Raw:
-              row["Q2 out of"] !== "" ? Number(row["Q2 out of"]) : undefined,
-            examQ3Raw:
-              row["Q3 out of"] !== "" ? Number(row["Q3 out of"]) : undefined,
-            examQ4Raw:
-              row["Q4 out of"] !== "" ? Number(row["Q4 out of"]) : undefined,
-            examQ5Raw:
-              row["Q5 out of"] !== "" ? Number(row["Q5 out of"]) : undefined,
+            // Exam Questions (Col N - R)
+            examQ1Raw: Number(row[13]) || 0,
+            examQ2Raw: Number(row[14]) || 0,
+            examQ3Raw: Number(row[15]) || 0,
+            examQ4Raw: Number(row[16]) || 0,
+            examQ5Raw: Number(row[17]) || 0,
 
-            // --- FINAL AUDIT FIELDS (Required by Schema - MUST NOT BE NaN) ---
-            // Using '|| 0' ensures we never send NaN to a required Number field
-            caTotal30:
-              Number(row["CATs + LABS + ASSIGNMENTS GRAND TOTAL out of 30"]) ||
-              0,
-            examTotal70: Number(row["TOTAL EXAM OUT OF"]) || 0,
-            internalExaminerMark:
-              Number(row["INTERNAL EXAMINER MARKS /100"]) || 0,
-            agreedMark: Number(row["AGREED MARKS /100"]) || 0,
+            // Totals from Excel Formulas
+            caTotal30: Number(row[12]) || 0,   // Col M
+            examTotal70: Number(row[18]) || 0, // Col S
+            agreedMark: Number(row[21]) || 0,  // Col V
 
-            attempt: String(row["ATTEMPT"]).toLowerCase().includes("supp")
-              ? "supplementary"
-              : String(row["ATTEMPT"]).toLowerCase().includes("re-take")
-              ? "re-take"
-              : "1st",
-
-            isSupplementary: String(row["ATTEMPT"])
-              .toLowerCase()
-              .includes("supp"),
-            isRetake: String(row["ATTEMPT"]).toLowerCase().includes("re-take"),
+            attempt: row[3]?.toString().toLowerCase().includes("supp") ? "supplementary" : "1st", // Col D
+            isSupplementary: row[3]?.toString().toLowerCase().includes("supp"),
           };
 
           const mark = await Mark.findOneAndUpdate(
-            {
-              student: student._id,
-              programUnit: programUnit._id,
-              academicYear: academicYearDoc._id,
-            },
+            { student: student._id, programUnit: programUnit._id, academicYear: academicYearDoc._id },
             markData,
-            { upsert: true, new: true, session, runValidators: true }
+            { upsert: true, new: true, session }
           );
 
-          // This is the heavy part - running it inside the student-level session
-          await computeFinalGrade({
-            markId: mark._id as Types.ObjectId,
-            coordinatorReq: req,
-            session,
-          });
+          await computeFinalGrade({ markId: mark._id as Types.ObjectId, coordinatorReq: req, session });
         });
-
         result.success++;
       } catch (rowErr: any) {
-        // We log the error but the loop CONTINUES to the next student
-        result.errors.push(`Row ${rowNum}: ${rowErr.message}`);
-        console.error(`Import error at row ${rowNum}:`, rowErr.message);
+        result.errors.push(`Row ${rowNum} (${regNo}): ${rowErr.message}`);
       } finally {
         await session.endSession();
       }
     }
 
-    await logAudit(req, {
-      action: "marks_bulk_import_completed",
-      details: { file: filename, total: result.total, success: result.success },
-    });
-
     return result;
   } catch (err: any) {
+    console.error(`[Importer] Fatal Error:`, err.message);
     throw err;
   }
 }
