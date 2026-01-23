@@ -341,6 +341,14 @@ export const generateIneligibleSummaryDoc = async (data: PromotionData): Promise
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
   const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
 
+  // Separate students into two lists
+  const specialExamPending = blocked.filter(s => 
+    s.reasons?.some((r: string) => r.toLowerCase().includes("special"))
+  );
+  const failureList = blocked.filter(s => 
+    !s.reasons?.some((r: string) => r.toLowerCase().includes("special"))
+  );
+
   const doc = new Document({
     sections: [{
       properties: {},
@@ -409,16 +417,42 @@ export const generateIneligibleSummaryDoc = async (data: PromotionData): Promise
         }),
 
         // 4. INTRODUCTORY TEXT (Modified for Ineligible context)
+        // new Paragraph({
+        //   alignment: AlignmentType.LEFT,
+        //   spacing: { after: 200 },
+        //   children: [
+        //     new TextRun({ 
+        //       text: `The following ${blocked.length} candidates DID NOT satisfy the College Board of Examiners during the ${academicYear} Academic year Examinations. The College Board therefore recommends that the students NOT proceed to the next Year of study until the specified requirements are met.`,
+        //       size: 20 
+        //     }),
+        //   ],
+        // }),
+
+        // 1. SPECIAL EXAMINATIONS SECTION
         new Paragraph({
-          alignment: AlignmentType.LEFT,
-          spacing: { after: 200 },
+          spacing: { before: 400, after: 200 },
           children: [
-            new TextRun({ 
-              text: `The following ${blocked.length} candidates DID NOT satisfy the College Board of Examiners during the ${academicYear} Academic year Examinations. The College Board therefore recommends that the students NOT proceed to the next Year of study until the specified requirements are met.`,
-              size: 20 
-            }),
+            new TextRun({ text: "LIST A: SPECIAL EXAMINATIONS PENDING", bold: true, size: 22, underline: {} }),
           ],
         }),
+        new Paragraph({
+          spacing: { after: 200 },
+          children: [new TextRun({ text: "The following candidates have been granted permission to sit for Special Examinations.", size: 18, italics: true })]
+        }),
+        createIneligibleTable(specialExamPending, cellMargin),
+
+        // 2. FAIL / SUPPLEMENTARY SECTION
+        new Paragraph({
+          spacing: { before: 600, after: 200 },
+          children: [
+            new TextRun({ text: "LIST B: FAIL / SUPPLEMENTARY EXAMINATIONS", bold: true, size: 22, underline: {} }),
+          ],
+        }),
+        new Paragraph({
+          spacing: { after: 200 },
+          children: [new TextRun({ text: "The following candidates are required to sit for Supplementary Examinations or Retakes.", size: 18, italics: true })]
+        }),
+        createIneligibleTable(failureList, cellMargin),
 
         // 5. THE INELIGIBLE LIST TABLE (Maintaining Reasons)
         createIneligibleTable(blocked, cellMargin),
@@ -646,11 +680,15 @@ export const generateIneligibilityNotice = async (student: any, data: Ineligibil
   return await Packer.toBuffer(doc);
 };
 
-// New function for individual Special Exam notice
-export const generateSpecialExamNotice = async (student: any, data: IneligibilityNoticeData): Promise<Buffer> => {
-  const { programName, academicYear, yearOfStudy, logoBuffer } = data;
-
+// New function for Special Exam Notice
+export const generateSpecialExamNotice = async (student: any, data: any): Promise<Buffer> => {
+  const { programName, academicYear, logoBuffer } = data;
   const capitalizedStudentName = formatStudentName(student.name).toUpperCase();
+
+  const specialUnits = student.reasons
+    .filter((r: string) => r.toUpperCase().includes("SPECIAL"))
+    .map((r: string) => r.replace("- SPECIAL", "").replace("SPECIAL", "").trim());
+
   const doc = new Document({
     sections: [{
       properties: {},
@@ -666,56 +704,56 @@ export const generateSpecialExamNotice = async (student: any, data: Ineligibilit
         // 2. HEADERS
         new Paragraph({
           alignment: AlignmentType.CENTER,
-          spacing: { before: 100 },
           children: [new TextRun({ text: config.instName.toUpperCase(), bold: true, size: 24 })],
         }),
         new Paragraph({
           alignment: AlignmentType.CENTER,
           children: [new TextRun({ text: config.schoolName.toUpperCase(), bold: true, size: 20 })],
         }),
-        
-        // 3. ADDRESSING
-        new Paragraph({
-          spacing: { before: 400 },
-          children: [new TextRun({ text: "TO: ", bold: true }), new TextRun({ text: capitalizedStudentName})],
-        }),
-        new Paragraph({
-          children: [new TextRun({ text: "REG NO: ", bold: true }), new TextRun({ text: student.regNo })],
-        }),
-        new Paragraph({
-          children: [new TextRun({ text: "PROGRAM: ", bold: true }), new TextRun({ text: programName.toUpperCase() })],
-        }),
 
-        // 4. SUBJECT LINE (Special Exam context)
+        // 3. ADDRESSING
+        new Paragraph({ spacing: { before: 400 }, children: [new TextRun({ text: "TO: ", bold: true }), new TextRun({ text: capitalizedStudentName })] }),
+        new Paragraph({ children: [new TextRun({ text: "REG NO: ", bold: true }), new TextRun({ text: student.regNo })] }),
+          new Paragraph({
+          children: [
+            new TextRun({ text: "PROGRAM: ", bold: true }),
+            new TextRun({ text: programName.toUpperCase() }),
+          ],
+        }),
+        new Paragraph({ children: [new TextRun({ text: "ACADEMIC YEAR: ", bold: true }), new TextRun({ text: academicYear })] }),
+
+        // 4. SUBJECT
         new Paragraph({
           spacing: { before: 400, after: 400 },
           children: [
             new TextRun({ 
-              text: `RE: APPROVAL FOR SPECIAL EXAMINATIONS - ${academicYear}`, 
+              text: "RE: APPROVAL TO SIT FOR SPECIAL EXAMINATIONS", 
               bold: true, 
               size: 22, 
-              underline: {} 
+              underline: { type: BorderStyle.SINGLE } 
             }),
           ],
         }),
 
-        // 5. BODY TEXT
+        // 5. BODY
         new Paragraph({
           spacing: { after: 200 },
           children: [
             new TextRun({ 
-              text: "This is to inform you that the School Board of Examiners has approved your application for Special Examinations in the following unit(s). This approval is granted based on the valid reasons provided (Medical/Compassionate/Administrative) regarding the missed ordinary examinations:",
+              text: `This is to inform you that the College Board of Examiners has approved your request to sit for Special Examinations in the following unit(s) during the ${academicYear} academic cycle:`,
               size: 20
             }),
           ],
         }),
 
-        // 6. UNIT LIST
-       ...student.reasons.map((unitString: string) => 
+       // DYNAMIC UNIT LIST
+        ...specialUnits.map((unitName: string) => 
           new Paragraph({
             bullet: { level: 0 },
-            spacing: { before: 150 },
-            children: [new TextRun({ text: unitString, bold: true, size: 19 })]
+            spacing: { before: 100 },
+            children: [
+              new TextRun({ text: unitName, bold: true, size: 20 }) 
+            ],
           })
         ),
 
@@ -723,9 +761,8 @@ export const generateSpecialExamNotice = async (student: any, data: Ineligibilit
           spacing: { before: 300, after: 200 },
           children: [
             new TextRun({ 
-              text: "Please note that a Special Examination is treated as an ordinary examination (First Attempt). Your results will be processed and your promotion status updated immediately following the conclusion of the Special Examination cycle.",
-              size: 20,
-              italics: true
+              text: "Please note that a Special Examination is treated as a first attempt. Failure to sit for these exams will result in the units being graded as 'Incomplete'.",
+              size: 20
             }),
           ],
         }),
@@ -733,26 +770,17 @@ export const generateSpecialExamNotice = async (student: any, data: Ineligibilit
         new Paragraph({
           spacing: { after: 400 },
           children: [
-            new TextRun({ 
-              text: "You are required to present this notice to the Departmental Invigilators during the examination period.",
-              size: 20,
-              bold: true
-            }),
+            new TextRun({ text: "Check the departmental notice board for the scheduled dates and venues.", size: 20 }),
           ],
         }),
 
         // 7. SIGNATORY
         new Paragraph({
-          spacing: { before: 600, after: 400 },
-          children: [new TextRun({ text: `APPROVED BY THE BOARD OF EXAMINERS, ${config.schoolName.toUpperCase()}`, bold: true, size: 18 })],
-        }),
-        new Paragraph({
-          spacing: { before: 400 },
+          spacing: { before: 800 },
           children: [new TextRun({ text: "SIGNED: __________________________\t\tDATE: _______________", bold: true })],
         }),
-        new Paragraph({
-          children: [new TextRun({ text: `\tDEAN, ${config.schoolName.toUpperCase()}`, size: 18 })],
-        }),
+        new Paragraph({ children: [new TextRun({ text: `\tDEAN, ${config.schoolName.toUpperCase()}`, size: 18 })] }),
+        new Paragraph({ spacing: { before: 400 }, children: [new TextRun({ text: "Cc: Exam Coordinator", size: 16 })] }),
       ],
     }],
   });

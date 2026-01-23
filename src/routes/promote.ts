@@ -5,7 +5,7 @@ import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import { bulkPromoteClass, previewPromotion } from "../services/statusEngine";
 import Program from "../models/Program";
-import { generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibleSummaryDoc, generateIneligibilityNotice, PromotionData } from "../utils/promotionReport";
+import { generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibleSummaryDoc, generateIneligibilityNotice, PromotionData, generateSpecialExamNotice } from "../utils/promotionReport";
 import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
@@ -246,6 +246,66 @@ router.post(
 );
 
 
+// router.post(
+//   "/download-notices-progress",
+//   requireAuth,
+//   requireRole("coordinator"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { programId, yearToPromote, academicYearName } = req.body;
+
+//     res.setHeader('Content-Type', 'text/event-stream');
+//     res.setHeader('Cache-Control', 'no-cache');
+//     res.setHeader('Connection', 'keep-alive');
+
+//     const sendProgress = (percent: number, message: string, file?: string) => {
+//       res.write(`data: ${JSON.stringify({ percent, message, file })}\n\n`);
+//     };
+
+//     try {
+//       sendProgress(5, "Preparing notice templates...");
+//       const preview = await previewPromotion(programId, yearToPromote, academicYearName);
+//       const program = await Program.findById(programId).lean();
+
+//       if (preview.blocked.length === 0) {
+//         throw new Error("No ineligible students found to generate notices.");
+//       }
+
+//       const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
+//       const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+
+//       const zip = new AdmZip();
+//       const total = preview.blocked.length;
+
+//       for (let i = 0; i < total; i++) {
+//         const student = preview.blocked[i];
+//         const noticeBuffer = await generateIneligibilityNotice(student, {
+//           programName: program?.name || "Program",
+//           academicYear: academicYearName,
+//           yearOfStudy: yearToPromote,
+//           logoBuffer
+//         });
+
+//         zip.addFile(`${student.regNo}_Notice.docx`, noticeBuffer);
+
+//         // Send update every 5 students to keep connection alive
+//         if (i % 5 === 0 || i === total - 1) {
+//           const percent = Math.floor((i / total) * 80) + 10; // scale from 10% to 90%
+//           sendProgress(percent, `Generated ${i + 1} of ${total} notices...`);
+//         }
+//       }
+
+//       sendProgress(95, "Finalizing ZIP archive...");
+//       const zipBase64 = zip.toBuffer().toString('base64');
+      
+//       sendProgress(100, "Complete!", zipBase64);
+//       res.end();
+//     } catch (err: any) {
+//       res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+//       res.end();
+//     }
+//   })
+// );
+
 router.post(
   "/download-notices-progress",
   requireAuth,
@@ -262,41 +322,56 @@ router.post(
     };
 
     try {
-      sendProgress(5, "Preparing notice templates...");
+      sendProgress(5, "Analyzing exam records...");
       const preview = await previewPromotion(programId, yearToPromote, academicYearName);
       const program = await Program.findById(programId).lean();
-
-      if (preview.blocked.length === 0) {
-        throw new Error("No ineligible students found to generate notices.");
-      }
 
       const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
       const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
 
       const zip = new AdmZip();
-      const total = preview.blocked.length;
+      const students = preview.blocked;
 
-      for (let i = 0; i < total; i++) {
-        const student = preview.blocked[i];
-        const noticeBuffer = await generateIneligibilityNotice(student, {
-          programName: program?.name || "Program",
-          academicYear: academicYearName,
-          yearOfStudy: yearToPromote,
-          logoBuffer
-        });
+      for (let i = 0; i < students.length; i++) {
+        const student = students[i];
 
-        zip.addFile(`${student.regNo}_Notice.docx`, noticeBuffer);
+const statusText = (student.status || "").toUpperCase();
+  const hasSpecialReason = student.reasons?.some((r: string) => 
+    r.toUpperCase().includes("SPECIAL")
+  );
 
-        // Send update every 5 students to keep connection alive
-        if (i % 5 === 0 || i === total - 1) {
-          const percent = Math.floor((i / total) * 80) + 10; // scale from 10% to 90%
-          sendProgress(percent, `Generated ${i + 1} of ${total} notices...`);
+  const isSpecialCase = statusText.includes("SPECIAL") || hasSpecialReason;
+
+        let docBuffer: Buffer;
+        let fileName: string;
+
+        if (isSpecialCase) {
+            docBuffer = await generateSpecialExamNotice(student, {
+            programName: program?.name || "Program",
+            academicYear: academicYearName,
+            logoBuffer
+          });
+          fileName = `SPECIAL_NOTICE_${student.regNo}.docx`;
+        } else {
+          docBuffer = await generateIneligibilityNotice(student, {
+            programName: program?.name || "Program",
+            academicYear: academicYearName,
+            yearOfStudy: yearToPromote,
+            logoBuffer
+          });
+          fileName = `FAIL_NOTICE_${student.regNo}.docx`;
+        }
+
+        zip.addFile(fileName, docBuffer);
+
+        if (i % 5 === 0 || i === students.length - 1) {
+          const percent = Math.floor((i / students.length) * 85) + 10;
+          sendProgress(percent, `Processing ${i + 1} of ${students.length}: ${student.regNo}`);
         }
       }
 
-      sendProgress(95, "Finalizing ZIP archive...");
+      sendProgress(95, "Packing ZIP archive...");
       const zipBase64 = zip.toBuffer().toString('base64');
-      
       sendProgress(100, "Complete!", zipBase64);
       res.end();
     } catch (err: any) {

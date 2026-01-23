@@ -172,6 +172,12 @@ export const previewPromotion = async (
       eligible.push(report);
     } else {
       // Add specific reasons for the block
+      if (statusResult?.specialList?.length) {
+        report.reasons.push(...statusResult.specialList.map(u => `${u} - SPECIAL`));
+      }
+      if (statusResult?.incompleteList?.length) {
+        report.reasons.push(...statusResult.incompleteList.map(u => `${u} - INCOMPLETE`));
+      }
       if (statusResult?.missingList?.length) {
         report.reasons.push(...statusResult.missingList.map(u => `MISSING: ${u}`));
       }
