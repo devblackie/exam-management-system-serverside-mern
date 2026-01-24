@@ -3,12 +3,13 @@ import { Router, Response } from "express";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
-import { bulkPromoteClass, previewPromotion } from "../services/statusEngine";
+import { bulkPromoteClass, calculateStudentStatus, previewPromotion } from "../services/statusEngine";
 import Program from "../models/Program";
-import { generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibleSummaryDoc, generateIneligibilityNotice, PromotionData, generateSpecialExamNotice } from "../utils/promotionReport";
+import { generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibleSummaryDoc, generateIneligibilityNotice, PromotionData, generateSpecialExamNotice, generateStudentTranscript } from "../utils/promotionReport";
 import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
+import Student from "../models/Student";
 
 const router = Router();
 
@@ -371,6 +372,96 @@ const statusText = (student.status || "").toUpperCase();
       }
 
       sendProgress(95, "Packing ZIP archive...");
+      const zipBase64 = zip.toBuffer().toString('base64');
+      sendProgress(100, "Complete!", zipBase64);
+      res.end();
+    } catch (err: any) {
+      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.end();
+    }
+  })
+);
+
+
+router.post(
+  "/download-transcripts-progress",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, yearToPromote, academicYearName, studentId } = req.body;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const sendProgress = (percent: number, message: string, file?: string) => {
+      res.write(`data: ${JSON.stringify({ percent, message, file })}\n\n`);
+    };
+
+    try {
+      let targetStudents: any[] = [];
+
+      if (studentId) {
+        // SINGLE STUDENT MODE
+        sendProgress(10, "Fetching student record...");
+        const student = await Student.findById(studentId).lean();
+        if (!student) throw new Error("Student not found.");
+        
+        targetStudents = [{
+          id: student._id,
+          regNo: student.regNo,
+          name: student.name,
+          program: student.program
+        }];
+      } else {
+        // BULK MODE (Existing Logic)
+        sendProgress(5, "Filtering eligible students...");
+        const preview = await previewPromotion(programId, yearToPromote, academicYearName);
+        targetStudents = preview.eligible;
+      }
+
+      if (targetStudents.length === 0) {
+        throw new Error("No eligible students found.");
+      }
+    
+
+      const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+
+      const zip = new AdmZip();
+
+      for (let i = 0; i < targetStudents.length; i++) {
+        const student = targetStudents[i];
+        
+        // Use student's own program if programId wasn't provided (single mode)
+        const activeProgramId = programId || student.program;
+
+        const statusResult = await calculateStudentStatus(
+            student.id, 
+            activeProgramId, 
+            academicYearName, 
+            yearToPromote
+        );
+
+        if (!statusResult) continue;
+
+      const program = await Program.findById(activeProgramId).lean();
+        
+        // passedList now contains {code, name, grade} objects from our previous fix
+        const transcriptBuffer = await generateStudentTranscript(student, statusResult.passedList, {
+          programName: program?.name || "Program",
+          academicYear: academicYearName,
+          logoBuffer
+        });
+
+        const safeRegNo = student.regNo.replace(/\//g, '_');
+        zip.addFile(`TRANSCRIPT_${safeRegNo}.docx`, transcriptBuffer);
+
+       sendProgress(Math.floor(((i + 1) / targetStudents.length) * 80) + 10, `Processing ${student.regNo}...`);
+      
+      }
+
+      sendProgress(95, "Compiling ZIP file...");
       const zipBase64 = zip.toBuffer().toString('base64');
       sendProgress(100, "Complete!", zipBase64);
       res.end();

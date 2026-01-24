@@ -787,3 +787,78 @@ export const generateSpecialExamNotice = async (student: any, data: any): Promis
 
   return await Packer.toBuffer(doc);
 };
+
+export const generateStudentTranscript = async (student: any, results: any[], data: any): Promise<Buffer> => {
+  const { programName, academicYear, logoBuffer } = data;
+
+  const doc = new Document({
+    sections: [{
+      properties: {},
+      children: [
+        // 1. Logo & Headers
+        ...(logoBuffer.length > 0 ? [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [new ImageRun({ data: logoBuffer, transformation: { width: 70, height: 70 }, type: "png" })],
+          }),
+        ] : []),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: config.instName.toUpperCase(), bold: true, size: 24 })],
+        }),
+
+        // 2. Student Info Header
+        new Paragraph({
+          spacing: { before: 400 },
+          children: [
+            new TextRun({ text: `NAME: ${formatStudentName(student.name).toUpperCase()}`, bold: true }),
+            new TextRun({ text: `\t\tREG NO: ${student.regNo}`, bold: true }),
+          ],
+        }),
+        new Paragraph({
+          children: [
+            new TextRun({ text: `PROGRAM: ${programName.toUpperCase()}` }),
+          ],
+        }),
+        new Paragraph({
+          spacing: { after: 300 },
+          children: [
+            new TextRun({ text: `ACADEMIC YEAR: ${academicYear} | STATUS: ${student.status}`, bold: true, color: "2E7D32" }),
+          ],
+        }),
+
+        // 3. Results Table
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+            // Header Row
+            new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Code", bold: true })] })] }),
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Unit Name", bold: true })] })] }),
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Grade", bold: true })] })] }),
+              ],
+            }),
+            // Data Rows (Mapping the results you already calculated)
+            ...results.map((r: any) => new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph(r.code)] }),
+                new TableCell({ children: [new Paragraph(r.name)] }),
+                new TableCell({ children: [new Paragraph(r.grade)] }),
+              ],
+            })),
+          ],
+        }),
+
+        // 4. Authentication Footer
+        new Paragraph({
+          spacing: { before: 800 },
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: "--- This is a provisional statement of results and is not a final certificate ---", italics: true, size: 16 })],
+        }),
+      ],
+    }],
+  });
+
+  return await Packer.toBuffer(doc);
+};

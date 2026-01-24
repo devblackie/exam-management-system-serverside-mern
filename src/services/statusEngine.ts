@@ -19,14 +19,25 @@ export const calculateStudentStatus = async (
     retakeLimit: settings?.retakeThreshold || 5 
   };
   
-  const yearDoc = await AcademicYear.findOne({ year: academicYearName });
-  if (!yearDoc) return null;
+  // const yearDoc = await AcademicYear.findOne({ year: academicYearName });
+  // if (!yearDoc) return null;
 
   // 1. Get Curriculum & explicitly type the populated unit
   const curriculum = await ProgramUnit.find({ 
     program: programId, 
     requiredYear: yearOfStudy 
   }).populate("unit").lean() as any[];
+
+  if (!curriculum.length) {
+    return {
+        status: "NO CURRICULUM",
+        variant: "info",
+        details: `No units defined for Year ${yearOfStudy} in this program.`,
+        summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
+        passedList: []
+    };
+  }
+
 
   // 2. Get Grades (All history to track Retake -> Re-Retake lifecycle)
   const grades = await FinalGrade.find({ student: studentId })
@@ -35,7 +46,12 @@ export const calculateStudentStatus = async (
     .lean() as any[];
 
   // 3. Map grades by UNIT CODE
-  const unitResults = new Map<string, { status: string; attemptType: string; attemptNumber: number }>();
+ const unitResults = new Map<string, { 
+    status: string; 
+    attemptType: string; 
+    attemptNumber: number;
+    finalMark: number; // Added to capture actual score
+  }>();
 
   grades.forEach((g) => {
         if (!g.programUnit || !g.programUnit.unit) {
@@ -51,15 +67,17 @@ export const calculateStudentStatus = async (
     const existing = unitResults.get(unitCode);
     if (existing?.status === "PASS") return;
 
-    unitResults.set(unitCode, { 
+  unitResults.set(unitCode, { 
         status: g.status, 
         attemptType: g.attemptType, 
-        attemptNumber: g.attemptNumber 
+        attemptNumber: g.attemptNumber,
+        finalMark: g.finalMark // The actual grade scored
     });
   });
 
   // Trackers for the Coordinator View
   let passedCount = 0;
+  const passedUnits: any[] = [];
   const failedUnits: string[] = [];      
   const retakeUnits: string[] = [];      
   const reRetakeUnits: string[] = [];    
@@ -75,16 +93,21 @@ export const calculateStudentStatus = async (
 
     const record = unitResults.get(unitCode);
 
-   if (!record) {
+    if (!record) {
       missingUnits.push(displayName);
     } else if (record.status === "PASS") {
       passedCount++;
+      passedUnits.push({
+        code: unitCode,
+        name: unitName,
+        grade: record.finalMark || "PASS" // Shows actual score if available
+      });
     } else if (record.status === "SPECIAL") {
-      specialExamUnits.push(displayName); // Caught Tony
+      specialExamUnits.push(displayName);
     } else if (record.status === "INCOMPLETE") {
-      incompleteUnits.push(displayName);  // Caught Jakes
+      incompleteUnits.push(displayName);
     } else {
-      // Handle standard failures
+      // Logic for failures based on attempts
       if (record.attemptNumber >= 3) reRetakeUnits.push(displayName);
       else if (record.attemptNumber === 2) retakeUnits.push(displayName);
       else failedUnits.push(displayName);
@@ -92,48 +115,53 @@ export const calculateStudentStatus = async (
   });
 
   const totalFailed = failedUnits.length + retakeUnits.length + reRetakeUnits.length;
-  const missingCount = missingUnits.length;
 
   // 5. Determine UI Status
   let status = "IN GOOD STANDING";
   let variant: "success" | "warning" | "error" | "info" = "success";
-let details = "All curriculum units cleared.";
+  let details = `Year ${yearOfStudy} curriculum units cleared.`;
 
-if (specialExamUnits.length > 0) {
-    status = "SPECIAL EXAM PENDING";
-    variant = "info";
-    details = `Student has ${specialExamUnits.length} approved special exam(s).`;
-  } else if (incompleteUnits.length > 0) {
-    status = "INCOMPLETE MARKS";
-    variant = "warning";
-    details = `Missing CA or Exam components for ${incompleteUnits.length} unit(s).`;
-  } else if (missingUnits.length > 0) {
-    status = "INCOMPLETE DATA";
-    variant = "info";
-    details = `No record found for ${missingUnits.length} units.`;
-  } else if (reRetakeUnits.length > 0) {
+if (reRetakeUnits.length > 0) {
     status = "RE-RETAKE FAILURE";
     variant = "error";
     details = "Critical: Failed third attempt at units.";
   } else if (totalFailed > rules.retakeLimit) {
     status = "RETAKE YEAR";
     variant = "error";
-    details = `Failed units (${totalFailed}) exceed limit of ${rules.retakeLimit}.`;
+    details = `Failed Year ${yearOfStudy} units (${totalFailed}) exceed limit.`;
+  } else if (specialExamUnits.length > 0) {
+    status = "SPECIAL EXAM PENDING";
+    variant = "info";
+    details = `Pending ${specialExamUnits.length} special exam(s) for Year ${yearOfStudy}.`;
+  } else if (incompleteUnits.length > 0) {
+    status = "INCOMPLETE MARKS";
+    variant = "warning";
+    details = `Incomplete components in Year ${yearOfStudy}.`;
   } else if (totalFailed > 0) {
     status = "SUPPLEMENTARY PENDING";
     variant = "warning";
-    details = `Student must sit supplementary exams for ${totalFailed} unit(s).`;
+    details = `Must sit supplementary exams for ${totalFailed} Year ${yearOfStudy} unit(s).`;
+  } else if (missingUnits.length > 0) {
+    status = "INCOMPLETE DATA";
+    variant = "info";
+    details = `No record found for ${missingUnits.length} units in Year ${yearOfStudy}.`;
   }
 
  return {
     status, variant, details,
-    summary: { totalExpected: curriculum.length, passed: passedCount, failed: totalFailed, missing: missingUnits.length },
+    summary: { 
+        totalExpected: curriculum.length, 
+        passed: passedCount, 
+        failed: totalFailed, 
+        missing: missingUnits.length 
+    },
     missingList: missingUnits,
+    passedList: passedUnits,
     failedList: failedUnits,
     retakeList: retakeUnits,
     reRetakeList: reRetakeUnits,
-    specialList: specialExamUnits,    // Pass to Frontend
-    incompleteList: incompleteUnits  // Pass to Frontend
+    specialList: specialExamUnits,
+    incompleteList: incompleteUnits
   };
 };
 
@@ -208,20 +236,19 @@ export const promoteStudent = async (studentId: string) => {
   if (!student) throw new Error("Student not found");
 
   // 1. Get the current active academic year for context
-  const currentYear = await AcademicYear.findOne({ isActive: true });
-  const yearName = currentYear?.year || "2024/2025";
+  const actualCurrentYear = student.currentYearOfStudy || 1;
 
   // 2. Calculate status based on the student's CURRENT year of study
   const statusResult = await calculateStudentStatus(
     student._id,
     student.program,
-    yearName,
-    student.currentYearOfStudy || 1
+    "", 
+    actualCurrentYear
   );
 
   // 3. Promotion Guard: Only "IN GOOD STANDING" can move up
   if (statusResult?.status === "IN GOOD STANDING") {
-    const nextYear = (student.currentYearOfStudy || 1) + 1;
+const nextYear = actualCurrentYear + 1;
 
     // Check if the student has reached the maximum years for their program (Optional)
     // if (nextYear > student.programDuration) return { success: false, message: "Student has completed final year." };
@@ -232,7 +259,13 @@ export const promoteStudent = async (studentId: string) => {
         currentSemester: 1, // Always reset to Semester 1 on promotion
       },
       // Log the promotion in history if you have a history field
-      $push: { promotionHistory: { from: student.currentYearOfStudy, to: nextYear, date: new Date() } }
+      $push: { 
+        promotionHistory: { 
+          from: actualCurrentYear, 
+          to: nextYear, 
+          date: new Date() 
+        } 
+      }
     });
 
     return { 
@@ -242,19 +275,19 @@ export const promoteStudent = async (studentId: string) => {
   }
 
   // 4. Detailed Failure Messages
-  let failureReason = `Cannot promote: ${statusResult?.status}. `;
+//   let failureReason = `Cannot promote: ${statusResult?.status}. `;
 
-if (statusResult?.status === "SPECIAL EXAM PENDING") {
-    failureReason += `Pending units: ${statusResult.specialList.join(", ")}`;
-} else if (statusResult?.status === "INCOMPLETE MARKS") {
-    failureReason += `Check components for: ${statusResult.incompleteList.join(", ")}`;
-} else if (statusResult?.status === "SUPPLEMENTARY PENDING") {
-    failureReason += `Must clear: ${statusResult.failedList.join(", ")}`;
-}
+// if (statusResult?.status === "SPECIAL EXAM PENDING") {
+//     failureReason += `Pending units: ${statusResult.specialList.join(", ")}`;
+// } else if (statusResult?.status === "INCOMPLETE MARKS") {
+//     failureReason += `Check components for: ${statusResult.incompleteList.join(", ")}`;
+// } else if (statusResult?.status === "SUPPLEMENTARY PENDING") {
+//     failureReason += `Must clear: ${statusResult.failedList.join(", ")}`;
+// }
 
   return {
     success: false,
-    message: failureReason,
+    message: `Promotion Blocked: Student is '${statusResult?.status}' for Year ${actualCurrentYear}.`,
     details: statusResult
   };
 };

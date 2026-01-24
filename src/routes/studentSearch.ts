@@ -54,9 +54,11 @@ router.get(
   "/record",
   requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    let { regNo } = req.query;
+    let { regNo, yearOfStudy } = req.query;
     if (!regNo || typeof regNo !== "string")
       return res.status(400).json({ error: "regNo is required" });
+
+    const targetYearOfStudy = parseInt(yearOfStudy as string) || 1;
 
     regNo = decodeURIComponent(regNo);
     const student = await Student.findOne({
@@ -66,7 +68,7 @@ router.get(
     if (!student) return res.status(404).json({ error: "Student not found" });
 
     // 1. Fetch grades with the correct nested path
-    const grades = await FinalGrade.find({ student: student._id })
+   const grades = await FinalGrade.find({ student: student._id })
       .populate({
         path: "programUnit",
         populate: { path: "unit", select: "code name" },
@@ -78,56 +80,50 @@ router.get(
     const academicYearName = (req.query.academicYear as string) || "2024/2025";
 
     // 2. Safe mapping to prevent "undefined" errors
-    const processedGrades = grades.map((g) => {
-      const pUnit = g.programUnit as any;
-
-      // if (!pUnit) {
-      //   console.log(`[DEBUG] Grade ${g._id} missing programUnit for student ${regNo}`);
-      // }
-
-      // 2. Format the semester for the UI (e.g., convert 1 to "1" or "SEMESTER 1")
-      const semesterValue = pUnit?.requiredSemester || "N/A";
-
-      return {
-        ...g,
-        // Provide a fallback unit object so frontend doesn't crash
-        unit: {
-          // If programUnit is missing, try to see if 'unit' was stored directly on 'g'
-          code: pUnit?.unit?.code || "N/A",
-          name: pUnit?.unit?.name || "Unknown Unit",
-        },
-        // Semester is usually stored directly on the Grade record in most setups
-        semester: semesterValue,
-        academicYear: g.academicYear || { year: "N/A" },
-      };
-    });
+const processedGrades = grades
+      .filter((g) => {
+        const pUnit = g.programUnit as any;
+        // Only include units meant for the Year of Study selected by the user
+        return pUnit?.requiredYear === targetYearOfStudy;
+      })
+      .map((g) => {
+        const pUnit = g.programUnit as any;
+        return {
+          ...g,
+          unit: {
+            code: pUnit?.unit?.code || "N/A",
+            name: pUnit?.unit?.name || "Unknown Unit",
+          },
+          semester: pUnit?.requiredSemester || "N/A",
+          academicYear: g.academicYear || { year: "N/A" },
+        };
+      });
 
    // 2. USE THE SERVICE for Status
     // We pass studentId, programId, the Year string, and Year of Study
-    const academicStatus = await calculateStudentStatus(
+   const academicStatus = await calculateStudentStatus(
       student._id,
       (student.program as any)._id,
-     academicYearName, // Use the dynamic variable
-     student.currentYearOfStudy || 1
+      "", // academicYearName is left empty if status engine can derive it from yearOfStudy
+      targetYearOfStudy 
     );
 
-    res.json({
+res.json({
       student: {
+        _id: student._id,
         name: student.name,
         regNo: student.regNo,
         program: (student.program as any)?.name,
-        currentYear: student.currentYearOfStudy || 1, 
+        currentYear: student.currentYearOfStudy || 1, // Student's actual level
         currentSemester: student.currentSemester || 1,
       },
-      grades: processedGrades, // Return the flattened version
-      currentStatus: academicStatus?.status || "UNKNOWN",
+      grades: processedGrades, // Only Year X grades
+      viewingYearOfStudy: targetYearOfStudy,
       academicStatus: academicStatus,
       summary: academicStatus?.summary || {
-        totalUnits: grades.length,
-        passed: grades.filter((g) => g.status === "PASS").length,
-        supplementary: grades.filter((g) => g.status === "SUPPLEMENTARY")
-          .length,
-        retake: grades.filter((g) => g.status === "RETAKE").length,
+        totalUnits: processedGrades.length,
+        passed: processedGrades.filter((g) => g.status === "PASS").length,
+        failed: processedGrades.filter((g) => ["RETAKE", "SUPPLEMENTARY", "FAIL"].includes(g.status)).length,
       },
     });
   })
