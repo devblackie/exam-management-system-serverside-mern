@@ -37,7 +37,7 @@ export async function importMarksFromBuffer(
     const yearMatch = academicYearText.match(/\d{4}\/\d{4}/);
     const academicYearStr = yearMatch ? yearMatch[0] : null;
 
-    console.log(`[Importer] Metadata Found: Unit=${unitCode}, Year=${academicYearStr}`);
+    // console.log(`[Importer] Metadata Found: Unit=${unitCode}, Year=${academicYearStr}`);
 
     if (!unitCode || !academicYearStr) {
       throw new Error(`Invalid Template: Missing Unit Code (H12) or Academic Year (F8). Found: Unit=${unitCode}, Year=${academicYearStr}`);

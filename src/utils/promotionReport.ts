@@ -8,10 +8,12 @@ import {
   TableRow,
   TableCell,
   WidthType,
+  TableLayoutType,
   AlignmentType,
   HeadingLevel,
   BorderStyle,
   ImageRun,
+  VerticalAlign,
 } from "docx";
 import config from "../config/config";
 
@@ -1233,10 +1235,14 @@ export const generateStudentTranscript = async (
   results: any[],
   data: any,
 ): Promise<Buffer> => {
-    const { programName, academicYear, logoBuffer, status } = data;
+  const { programName, academicYear, logoBuffer, status } = data;
 
   // Use the value passed from the controller, falling back to student record if needed
-  const displayYear = data.yearToPromote || data.yearOfStudy || student.currentYearOfStudy || "N/A";
+  const displayYear =
+    data.yearToPromote ||
+    data.yearOfStudy ||
+    student.currentYearOfStudy ||
+    "N/A";
 
   const cellMargin = { top: 80, bottom: 80, left: 100, right: 100 };
 
@@ -1253,7 +1259,7 @@ export const generateStudentTranscript = async (
                   children: [
                     new ImageRun({
                       data: logoBuffer,
-                      transformation: { width: 80, height: 80 },
+                      transformation: { width: 200, height: 150 },
                       type: "png",
                     }),
                   ],
@@ -1273,22 +1279,13 @@ export const generateStudentTranscript = async (
               }),
             ],
           }),
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: [
-              new TextRun({
-                text: config.schoolName.toUpperCase(),
-                bold: true,
-                size: 20,
-              }),
-            ],
-          }),
+
           new Paragraph({
             alignment: AlignmentType.CENTER,
             spacing: { after: 200 },
             children: [
               new TextRun({
-                text: "PROVISIONAL STATEMENT OF RESULTS",
+                text: "UNDERGRADUATE ACADEMIC TRANSCRIPT",
                 bold: true,
                 size: 20,
                 underline: {},
@@ -1300,7 +1297,12 @@ export const generateStudentTranscript = async (
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
             borders: {
-              top: { style: BorderStyle.NONE },
+              // top: { style: BorderStyle.NONE },
+              top: {
+                style: BorderStyle.SINGLE,
+                size: 16, // 2pt thickness
+                color: "000000", // Optional: black
+              },
               bottom: { style: BorderStyle.NONE },
               left: { style: BorderStyle.NONE },
               right: { style: BorderStyle.NONE },
@@ -1315,8 +1317,13 @@ export const generateStudentTranscript = async (
                       new Paragraph({
                         children: [
                           new TextRun({
-                            text: `NAME: ${formatStudentName(student.name).toUpperCase()}`,
+                            text: "NAME: ",
                             bold: true,
+                            size: 20,
+                          }),
+                          new TextRun({
+                            text: formatStudentName(student.name).toUpperCase(),
+                            bold: false,
                             size: 20,
                           }),
                         ],
@@ -1329,8 +1336,101 @@ export const generateStudentTranscript = async (
                         alignment: AlignmentType.RIGHT,
                         children: [
                           new TextRun({
-                            text: `REG NO: ${student.regNo}`,
+                            text: "REG NO: ",
                             bold: true,
+                            size: 20,
+                          }),
+                          new TextRun({
+                            text: student.regNo,
+                            bold: false,
+                            size: 20,
+                          }),
+                        ],
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          }),
+          new Paragraph({
+            spacing: { before: 100 },
+            children: [
+              new TextRun({
+                text: "SCHOOL: ",
+                bold: true,
+                size: 18,
+              }),
+              new TextRun({
+                text: config.schoolName.toUpperCase(),
+                bold: false,
+                size: 18,
+              }),
+            ],
+          }),
+
+          new Paragraph({
+            spacing: { before: 100 },
+            children: [
+              new TextRun({
+                text: "PROGRAM: ",
+                bold: true,
+                size: 18,
+              }),
+              new TextRun({
+                text: `${programName.toUpperCase()}`,
+                size: 18,
+              }),
+            ],
+          }),
+
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            borders: {
+              top: { style: BorderStyle.NONE },
+              bottom: { style: BorderStyle.NONE },
+              left: { style: BorderStyle.NONE },
+              right: { style: BorderStyle.NONE },
+              insideHorizontal: { style: BorderStyle.NONE },
+              insideVertical: { style: BorderStyle.NONE },
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    width: { size: 70, type: WidthType.PERCENTAGE },
+                    children: [
+                      new Paragraph({
+                        spacing: { before: 100, after: 300 },
+                        children: [
+                          new TextRun({
+                            text: "ACADEMIC YEAR: ",
+                            bold: true,
+                            size: 20,
+                          }),
+                          new TextRun({
+                            text: academicYear || "N/A",
+                            bold: false,
+                            size: 20,
+                          }),
+                        ],
+                      }),
+                    ],
+                  }),
+                  new TableCell({
+                    width: { size: 30, type: WidthType.PERCENTAGE },
+                    children: [
+                      new Paragraph({
+                        alignment: AlignmentType.RIGHT,
+                        children: [
+                          new TextRun({
+                            text: "YEAR OF STUDY: ",
+                            bold: true,
+                            size: 20,
+                          }),
+                          new TextRun({
+                            text: `${displayYear}`,
+                            bold: false,
                             size: 20,
                           }),
                         ],
@@ -1342,35 +1442,20 @@ export const generateStudentTranscript = async (
             ],
           }),
 
-          new Paragraph({
-            spacing: { before: 100 },
-            children: [
-              new TextRun({
-                text: `PROGRAM: ${programName.toUpperCase()}`,
-                size: 18,
-              }),
-            ],
-          }),
-          new Paragraph({
-            spacing: { before: 100, after: 300 },
-            children: [
-              new TextRun({
-                // text: `ACADEMIC YEAR: ${academicYear || "N/A"}`,
-                text: `ACADEMIC YEAR: ${academicYear || "N/A"}`,
-                size: 18,
-              }),
-              // new TextRun({ text: `\t\tYEAR OF STUDY: ${yearOfStudy || "N/A"}`, size: 18 }),
-              new TextRun({
-                // text: `\t\tYEAR OF STUDY: ${data.yearOfStudy !== undefined ? yearOfStudy : "N/A"}`,
-                text: `\t\tYEAR OF STUDY: ${displayYear}`,
-                size: 18,
-              }),
-            ],
-          }),
-
           // 4. RESULTS TABLE (Units & Grades)
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
+
+            layout: TableLayoutType.FIXED,
+            borders: {
+              top: { style: BorderStyle.SINGLE, size: 2 },
+              bottom: { style: BorderStyle.SINGLE, size: 2 },
+              left: { style: BorderStyle.SINGLE, size: 2 },
+              right: { style: BorderStyle.SINGLE, size: 2 },
+              insideVertical: { style: BorderStyle.SINGLE, size: 2 },
+              insideHorizontal: { style: BorderStyle.NONE }, // This removes the lines between rows
+            },
+
             rows: [
               // Header Row
               new TableRow({
@@ -1379,7 +1464,11 @@ export const generateStudentTranscript = async (
                   new TableCell({
                     width: { size: 15, type: WidthType.PERCENTAGE },
                     margins: cellMargin,
-                    shading: { fill: "F2F2F2" },
+
+                    borders: {
+                      bottom: { style: BorderStyle.SINGLE, size: 2 },
+                      top: { style: BorderStyle.SINGLE, size: 2 },
+                    },
                     children: [
                       new Paragraph({
                         children: [
@@ -1391,7 +1480,11 @@ export const generateStudentTranscript = async (
                   new TableCell({
                     width: { size: 70, type: WidthType.PERCENTAGE },
                     margins: cellMargin,
-                    shading: { fill: "F2F2F2" },
+
+                    borders: {
+                      bottom: { style: BorderStyle.SINGLE, size: 2 },
+                      top: { style: BorderStyle.SINGLE, size: 2 },
+                    },
                     children: [
                       new Paragraph({
                         children: [
@@ -1407,7 +1500,11 @@ export const generateStudentTranscript = async (
                   new TableCell({
                     width: { size: 15, type: WidthType.PERCENTAGE },
                     margins: cellMargin,
-                    shading: { fill: "F2F2F2" },
+
+                    borders: {
+                      bottom: { style: BorderStyle.SINGLE, size: 2 },
+                      top: { style: BorderStyle.SINGLE, size: 2 },
+                    },
                     children: [
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
@@ -1432,6 +1529,7 @@ export const generateStudentTranscript = async (
                 return new TableRow({
                   children: [
                     new TableCell({
+                      width: { size: 15, type: WidthType.PERCENTAGE },
                       margins: cellMargin,
                       children: [
                         new Paragraph({
@@ -1440,6 +1538,7 @@ export const generateStudentTranscript = async (
                       ],
                     }),
                     new TableCell({
+                      width: { size: 70, type: WidthType.PERCENTAGE },
                       margins: cellMargin,
                       children: [
                         new Paragraph({
@@ -1448,6 +1547,7 @@ export const generateStudentTranscript = async (
                       ],
                     }),
                     new TableCell({
+                      width: { size: 15, type: WidthType.PERCENTAGE },
                       margins: cellMargin,
                       children: [
                         new Paragraph({
@@ -1469,51 +1569,262 @@ export const generateStudentTranscript = async (
           }),
 
           // 5. STATUS SUMMARY
-          new Paragraph({
-            spacing: { before: 300 },
+       
+
+           new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            borders: {
+              top: {
+                style: BorderStyle.SINGLE,
+                size: 16, // 2pt thickness
+                color: "000000", // Optional: black
+              },
+                bottom: {
+                style: BorderStyle.SINGLE,
+                size: 16, // 2pt thickness
+                color: "000000", // Optional: black
+              },
+              // bottom: { style: BorderStyle.NONE },
+              left: { style: BorderStyle.NONE },
+              right: { style: BorderStyle.NONE },
+              insideHorizontal: { style: BorderStyle.NONE },
+              insideVertical: { style: BorderStyle.NONE },
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [
+                       new Paragraph({
+                  alignment: AlignmentType.CENTER,
+
+            spacing: { before: 300 ,after:200},
             children: [
-              new TextRun({ text: "RECOMMENDATION: ", bold: true, size: 18 }),
+              new TextRun({ text: "RESULT: ", bold: true, size: 18 }),
               new TextRun({
-                text: (
-                  status ||
-                  student.status ||
-                  data.status ||
-                  "PENDING"
-                ).toUpperCase(),
+                text: "PASS",
                 size: 18,
                 bold: true,
               }),
             ],
           }),
-
-          // 6. GRADING KEY (Consistent with University Standards)
-          new Paragraph({
-            spacing: { before: 400 },
-            children: [
-              new TextRun({ text: "GRADING KEY: ", bold: true, size: 14 }),
-              new TextRun({
-                text: "A (70-100%) EXCELLENT | B (60-69%) GOOD | C (50-59%) SATISFACTORY | D (40-49%) PASS | E (0-39%) FAIL",
-                size: 14,
+                    ],
+                  }),
+                 
+                ],
               }),
             ],
           }),
 
+          // 6. GRADING KEY (Formal Table Structure)
+
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+
+            borders: {
+              top: { style: BorderStyle.NONE },
+              bottom: { style: BorderStyle.NONE },
+              left: { style: BorderStyle.NONE },
+              right: { style: BorderStyle.NONE },
+              insideHorizontal: { style: BorderStyle.NONE },
+              insideVertical: { style: BorderStyle.NONE },
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  // LEFT CELL: The Grading Key Table
+                  new TableCell({
+                    width: { size: 50, type: WidthType.PERCENTAGE },
+                    children: [
+                      new Table({
+                        width: { size: 100, type: WidthType.PERCENTAGE },
+                        borders: {
+                          top: { style: BorderStyle.SINGLE, size: 2 },
+                          bottom: { style: BorderStyle.SINGLE, size: 2 },
+                          left: { style: BorderStyle.SINGLE, size: 2 },
+                          right: { style: BorderStyle.SINGLE, size: 2 },
+                          insideVertical: {
+                            style: BorderStyle.SINGLE,
+                            size: 2,
+                          },
+                          insideHorizontal: { style: BorderStyle.NONE },
+                        },
+                        rows: [
+                          // Header Row
+                          new TableRow({
+                            tableHeader: true,
+                            children: [
+                              ["GRADE", 20],
+                              ["RANGE", 30],
+                              ["DESCRIPTION", 50],
+                            ].map(
+                              ([text, width]) =>
+                                new TableCell({
+                                  width: {
+                                    size: width as number,
+                                    type: WidthType.PERCENTAGE,
+                                  },
+                                  shading: { fill: "F2F2F2" },
+                                  children: [
+                                    new Paragraph({
+                                      alignment: AlignmentType.CENTER,
+                                      children: [
+                                        new TextRun({
+                                          text: text as string,
+                                          bold: true,
+                                          size: 16,
+                                        }),
+                                      ],
+                                    }),
+                                  ],
+                                }),
+                            ),
+                          }),
+                          // Data Rows
+                          ...[
+                            { g: "A", r: "70 - 100%", d: "EXCELLENT" },
+                            { g: "B", r: "60 - 69%", d: "GOOD" },
+                            { g: "C", r: "50 - 59%", d: "SATISFACTORY" },
+                            { g: "D", r: "40 - 49%", d: "PASS" },
+                            { g: "E", r: "0 - 39%", d: "FAIL" },
+                          ].map(
+                            (item) =>
+                              new TableRow({
+                                children: [
+                                  new TableCell({
+                                    children: [
+                                      new Paragraph({
+                                        alignment: AlignmentType.CENTER,
+                                        children: [
+                                          new TextRun({
+                                            text: item.g,
+                                            size: 16,
+                                          }),
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                  new TableCell({
+                                    children: [
+                                      new Paragraph({
+                                        alignment: AlignmentType.CENTER,
+                                        children: [
+                                          new TextRun({
+                                            text: item.r,
+                                            size: 16,
+                                          }),
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                  new TableCell({
+                                    children: [
+                                      new Paragraph({
+                                        alignment: AlignmentType.CENTER,
+                                        children: [
+                                          new TextRun({
+                                            text: item.d,
+                                            size: 16,
+                                          }),
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                ],
+                              }),
+                          ),
+                        ],
+                      }),
+                    ],
+                  }),
+                  // RIGHT CELL: Registration Number
+                  new TableCell({
+                    width: { size: 30, type: WidthType.PERCENTAGE },
+                    verticalAlign: VerticalAlign.BOTTOM, // Keeps it aligned with bottom of grading key
+                    children: [
+                      new Paragraph({
+                        alignment: AlignmentType.RIGHT,
+                        children: [
+                          new TextRun({ text: "NB: ", bold: true, size: 20 }),
+                        ],
+                      }),
+                      new Paragraph({
+                        alignment: AlignmentType.RIGHT,
+                        children: [
+                          new TextRun({
+                            text: "1 unit consists of 35 lecture hours or equivalent (3 Practical hours of two tutorial hours are equivalent to 0ne lecture hour ) ",
+                            bold: false,
+                            size: 14,
+                          }),
+                        ],
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          }),
           // 7. FOOTER & SIGNATORIES
-          new Paragraph({
-            spacing: { before: 800 },
-            children: [
-              new TextRun({
-                text: "SIGNED: __________________________________________",
-                bold: true,
-              }),
-            ],
-          }),
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `DEAN, ${config.schoolName.toUpperCase()}`,
-                bold: true,
-                size: 18,
+
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            borders: {
+              // top: { style: BorderStyle.NONE },
+              top: { style: BorderStyle.NONE },
+              bottom: { style: BorderStyle.NONE },
+              left: { style: BorderStyle.NONE },
+              right: { style: BorderStyle.NONE },
+              insideHorizontal: { style: BorderStyle.NONE },
+              insideVertical: { style: BorderStyle.NONE },
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [
+                      new Paragraph({
+                        spacing: { before: 800 },
+                        children: [
+                          new TextRun({
+                            text: "SIGNED: __________________________________________",
+                            bold: true,
+                          }),
+                        ],
+                      }),
+                      new Paragraph({
+                        children: [
+                          new TextRun({
+                            text: `DEAN, ${config.schoolName.toUpperCase()}`,
+                            bold: true,
+                            size: 18,
+                          }),
+                        ],
+                      }),
+                    ],
+                  }),
+                  new TableCell({
+                    children: [
+                      new Paragraph({
+                        spacing: { before: 800 },
+                        children: [
+                          new TextRun({
+                            text: "SIGNED: __________________________________________",
+                            bold: true,
+                          }),
+                        ],
+                      }),
+                      new Paragraph({
+                        children: [
+                          new TextRun({
+                            text: `REGISTRAR, ${config.registrar.toUpperCase()}`,
+                            bold: true,
+                            size: 18,
+                          }),
+                        ],
+                      }),
+                    ],
+                  }),
+                ],
               }),
             ],
           }),
@@ -1546,134 +1857,3 @@ export const generateStudentTranscript = async (
 
   return await Packer.toBuffer(doc);
 };
-
-// export const generateStudentTranscript = async (student: any, results: any[], data: any): Promise<Buffer> => {
-//   const { programName, academicYear, yearOfStudy, logoBuffer } = data;
-
-//   const doc = new Document({
-//     sections: [{
-//       properties: {},
-//       children: [
-//         // 1. Logo & Headers
-//         ...(logoBuffer.length > 0 ? [
-//           new Paragraph({
-//             alignment: AlignmentType.CENTER,
-//             children: [new ImageRun({ data: logoBuffer, transformation: { width: 150, height: 150 }, type: "png" })],
-//           }),
-//         ] : []),
-//         new Paragraph({
-//           spacing: { after: 200 },
-//           alignment: AlignmentType.CENTER,
-//           children: [new TextRun({ text: config.instName.toUpperCase(), bold: true, size: 32 })],
-//         }),
-//          new Paragraph({
-//           spacing: { before: 100 ,after:200},
-//           alignment: AlignmentType.CENTER,
-//           children: [
-//             new TextRun({ text: "UNDERGRADUATE ACADEMIC TRANSCRIPT", bold: true, size: 20 }),
-//           ],
-//         }),
-//          // 2. Student Info Header
-//      new Paragraph({
-//   spacing: { before: 400 },
-//   children: [
-//     // Student Name Section
-//     new TextRun({ text: "NAME: ", bold: true }),
-//     new TextRun({ text: formatStudentName(student.name).toUpperCase(), bold: false }),
-
-//     // Spacing (Tabs)
-//     new TextRun({ text: "\t\t\t\t" }),
-
-//     // Registration Number Section
-//     new TextRun({ text: "REG NO: ", bold: true }),
-//     new TextRun({ text: student.regNo, bold: false }),
-//   ],
-// }),
-//  new Paragraph({
-//           children: [
-//             new TextRun({ text: "SCHOOL: ", bold: true}),
-//             new TextRun({ text: config.schoolName.toUpperCase(), bold: false }),
-//           ],
-//         }),
-//          new Paragraph({
-//           children: [
-//             new TextRun({ text: "DEGREE: ", bold: true}),
-//             new TextRun({ text: programName.toUpperCase, bold: false }),
-//           ],
-//         }),
-// new Paragraph({
-//   children: [
-//     // Student Name Section
-//     new TextRun({ text: "ACADEMIC YEAR: ", bold: true }),
-//     new TextRun({ text: academicYear.toUpperCase(), bold: false }),
-
-//     // Spacing (Tabs)
-//     new TextRun({ text: "\t\t\t\t" }),
-
-//     // Registration Number Section
-//     new TextRun({ text: "YEAR OF STUDY: ", bold: true }),
-//     new TextRun({ text: yearOfStudy.toString.toUpperCase(), bold: false }),
-//   ],
-// }),
-//          new Paragraph({
-//   spacing: { before: 400,after:200 },
-
-//           alignment: AlignmentType.CENTER,
-//           children: [
-//             new TextRun({ text: student.status.toUpperCase(), bold: true, size: 20, underline: true }),
-//           ],
-//         }),
-
-//         // 3. Results Table
-//         new Table({
-//           width: { size: 100, type: WidthType.PERCENTAGE },
-//           rows: [
-//             // Header Row
-//             new TableRow({
-//               children: [
-//                 new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "CODE", bold: true, size: 20 })] })] }),
-//                 new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "UNIT NAME", bold: true, size: 20 })] })] }),
-//                 new TableCell({
-//                   shading: { fill: "f2f2f2" },
-//                   alignment: AlignmentType.CENTER,
-//                   children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "GRADE", bold: true, size: 20 })] })]
-//                 }),
-//               ],
-//             }),
-//             // Data Rows (Mapping the results you already calculated)
-//             ...results.map((r: any) => new TableRow({
-//               children: [
-//                 new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.code, size: 18 })] })] }),
-//                 new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.name, size: 18 })] })] }),
-//                 new TableCell({
-//                   verticalAlign: VerticalAlign.CENTER,
-//                   children: [new Paragraph({
-//                     alignment: AlignmentType.CENTER,
-//                     children: [new TextRun({ text: r.grade.toString(), bold: true, size: 18 })]
-//                   })]
-//                 }),
-//               ],
-//             })),
-//           ],
-//         }),
-
-//         new Paragraph({
-//           spacing: { before: 400 },
-//           children: [
-//             new TextRun({ text: "GRADING KEY: ", bold: true, size: 14 }),
-//             new TextRun({ text: "A: 70-100 | B: 60-69 | C: 50-59 | D: 40-49 | E/F: 0-39", size: 14 }),
-//           ],
-//         }),
-
-//         // 4. Authentication Footer
-//         new Paragraph({
-//           spacing: { before: 800 },
-//           alignment: AlignmentType.CENTER,
-//           children: [new TextRun({ text: "--- This is a provisional statement of results and is not a final certificate ---", italics: true, size: 16 })],
-//         }),
-//       ],
-//     }],
-//   });
-
-//   return await Packer.toBuffer(doc);
-// };

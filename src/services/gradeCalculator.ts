@@ -36,8 +36,7 @@ export async function computeFinalGrade({
   const hasExam = examScore > 0;
   let finalMark = Number((caScore + examScore).toFixed(0));
 
-
-  console.log(`[GradeCalc] Processing ${studentName} (${mark.attempt}): CA=${caScore}, Exam=${examScore}, RawTotal=${finalMark}`);
+  // console.log(`[GradeCalc] Processing ${studentName} (${mark.attempt}): CA=${caScore}, Exam=${examScore}, RawTotal=${finalMark}`);
 
   const isSpecial = mark.isSpecial || mark.attempt === "special";
   const isSupp = mark.attempt === "supplementary";
@@ -45,15 +44,6 @@ export async function computeFinalGrade({
   let isCapped = false;
   const isSuppAttempt = mark.attempt === "supplementary" || mark.isSupplementary;
 
-  // if (isSuppAttempt) {
-  //   if (finalMark >= passMark) {
-  //     console.log(`[GradeCalc] Supp Passed. Capping ${finalMark} to ${passMark}`);
-  //     finalMark = passMark;
-  //     isCapped = true;
-  //   } else {
-  //     console.log(`[GradeCalc] Supp Failed. Final mark ${finalMark} remains below pass.`);
-  //   }
-  // }
 
   // 1. SPECIAL CASE HANDLING (Jakes/Tony)
   if (isSpecial) {
@@ -102,7 +92,7 @@ export async function computeFinalGrade({
       academicYear: mark.academicYear, 
       institution: mark.institution,
       semester: (mark.programUnit as any)?.requiredSemester || "SEMESTER 1",
-      
+
       totalMark: finalMark,
       grade,
       status,

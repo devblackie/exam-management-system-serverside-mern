@@ -67,12 +67,12 @@ export const calculateStudentStatus = async (
     .sort({ createdAt: -1 }) 
     .lean() as any[];
 
-    console.log(`DEBUG: Found ${grades.length} grades for student.`);
-if (grades.length > 0) {
-    console.log("Sample Grade AcademicYear Data:", JSON.stringify(grades[0].academicYear, null, 2));
-}
+//     console.log(`DEBUG: Found ${grades.length} grades for student.`);
+// if (grades.length > 0) {
+//     console.log("Sample Grade AcademicYear Data:", JSON.stringify(grades[0].academicYear, null, 2));
+// }
 
-console.log("RE-CHECK Sample Grade AcademicYear Data:", grades[0]?.academicYear);
+// console.log("RE-CHECK Sample Grade AcademicYear Data:", grades[0]?.academicYear);
 
   // 3. Map grades by UNIT CODE
 //  const unitResults = new Map<string, any>();
@@ -352,18 +352,7 @@ const nextYear = actualCurrentYear + 1;
     };
   }
 
-  // 4. Detailed Failure Messages
-//   let failureReason = `Cannot promote: ${statusResult?.status}. `;
-
-// if (statusResult?.status === "SPECIAL EXAM PENDING") {
-//     failureReason += `Pending units: ${statusResult.specialList.join(", ")}`;
-// } else if (statusResult?.status === "INCOMPLETE MARKS") {
-//     failureReason += `Check components for: ${statusResult.incompleteList.join(", ")}`;
-// } else if (statusResult?.status === "SUPPLEMENTARY PENDING") {
-//     failureReason += `Must clear: ${statusResult.failedList.join(", ")}`;
-// }
-
-  return {
+   return {
     success: false,
     message: `Promotion Blocked: Student is '${statusResult?.status}' for Year ${actualCurrentYear}.`,
     details: statusResult

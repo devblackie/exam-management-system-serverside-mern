@@ -14,6 +14,7 @@ const config = Object.freeze({
   appName: process.env.APP_NAME || "Exam System", 
   instName: process.env.INST_NAME || "My Institution",
   schoolName: process.env.SCHOOL_NAME || "My School",
+  registrar: process.env.REGISTRAR || "Registrar Office",
 });
 
 export default config;
