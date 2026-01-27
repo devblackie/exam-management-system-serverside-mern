@@ -4,6 +4,7 @@ import connectDB from "./config/db";
 import config from "./config/config";
 import { ensureDefaultInstitution } from "./config/defaultData";
 import mongoose from "mongoose";
+import { cleanupOrphanedGrades } from "./scripts/cleanupGrades";
 
 const PORT = config.port || 8000;
 
@@ -15,6 +16,7 @@ const startServer = async () => {
     // WAIT FOR MONGOOSE TO BE FULLY READY
     await mongoose.connection.once("connected", async () => {
       console.log("Mongoose fully initialized");
+      await cleanupOrphanedGrades();
       await ensureDefaultInstitution();
       console.log("Default data initialized");
     });

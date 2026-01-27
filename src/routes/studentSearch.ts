@@ -179,46 +179,45 @@ router.get(
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { regNo, academicYear, unitCode } = req.query;
+    // const { regNo, academicYear, unitCode } = req.query;
+const { regNo, yearOfStudy } = req.query;
+    // if (!regNo || typeof regNo !== "string") {
+    //   return res.status(400).json({ error: "regNo required" });
+    // }
 
-    if (!regNo || typeof regNo !== "string") {
-      return res.status(400).json({ error: "regNo required" });
-    }
+    if (!regNo) return res.status(400).json({ error: "regNo required" });
 
-    let query: any = {
-      student: (
-        await Student.findOne({
-          regNo: { $regex: `^${regNo}$`, $options: "i" },
-        })
-      )?._id,
-    };
+    const student = await Student.findOne({
+      regNo: { $regex: `^${regNo}$`, $options: "i" },
+    });
 
-    if (academicYear && typeof academicYear === "string") {
-      const year = await AcademicYear.findOne({ year: academicYear });
-      if (year) query.academicYear = year._id;
-    }
+    if (!student) return res.status(404).json({ error: "Student not found" });
 
-    if (unitCode && typeof unitCode === "string") {
-      const unit = await Unit.findOne({ code: unitCode });
-      if (unit) query.unit = unit._id;
-    }
+    
+    let query: any = { student: student._id };
 
+    // let query: any = {
+    //   student: (
+    //     await Student.findOne({
+    //       regNo: { $regex: `^${regNo}$`, $options: "i" },
+    //     })
+    //   )?._id,
+    // };
+
+ // Fetch marks linked to ProgramUnits of a specific Year of Study
     const marks = await Mark.find(query)
-      // .populate("unit", "code name")
       .populate({
         path: "programUnit",
-        populate: {
-          path: "unit",
-          select: "code name",
-        },
+        match: yearOfStudy ? { requiredYear: parseInt(yearOfStudy as string) } : {}, // FILTER BY YEAR
+        populate: { path: "unit", select: "code name" },
       })
       .populate("academicYear", "year")
-      .select(
-        "programUnit academicYear cat1Raw cat2Raw cat3Raw assgnt1Raw examQ1Raw examQ2Raw examQ3Raw examQ4Raw examQ5Raw caTotal30 examTotal70 agreedMark"
-      )
       .lean();
 
-    res.json(marks);
+    // Filter out marks where programUnit didn't match the yearOfStudy
+    const filteredMarks = marks.filter(m => m.programUnit !== null);
+
+    res.json(filteredMarks);
   })
 );
 

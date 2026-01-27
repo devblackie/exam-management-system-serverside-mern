@@ -7,8 +7,17 @@ import Invite from "../models/Invite";
 import AuditLog from "../models/AuditLog";
 import { sendInviteEmail } from "../config/email";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { cleanupOrphanedGrades } from "../scripts/cleanupGrades";
 
 const router = Router();
+
+
+
+// 📋 Get all invites
+router.get("/invites", requireAuth, requireRole("admin"), async (_, res: Response) => {
+  const invites = await Invite.find().sort({ createdAt: -1 });
+  res.json(invites);
+});
 
 // 🔑 Admin secret registration
 router.post("/secret-register", async (req: Request, res: Response) => {
@@ -89,11 +98,7 @@ router.post("/register/:token", async (req: Request, res: Response) => {
   res.json({ message: "Account created successfully" });
 });
 
-// 📋 Get all invites
-router.get("/invites", requireAuth, requireRole("admin"), async (_, res: Response) => {
-  const invites = await Invite.find().sort({ createdAt: -1 });
-  res.json(invites);
-});
+
 
 // ❌ Revoke invite
 router.delete("/invites/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {

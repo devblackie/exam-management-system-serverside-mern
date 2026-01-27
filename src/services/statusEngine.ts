@@ -6,6 +6,14 @@ import AcademicYear from "../models/AcademicYear";
 import Student from "../models/Student";
 import InstitutionSettings from "../models/InstitutionSettings";
 
+const getLetterGrade = (mark: number): string => {
+  if (mark >= 69.5) return "A";
+  if (mark >= 59.5) return "B";
+  if (mark >= 49.5) return "C";
+  if (mark >= 39.5) return "D";
+  return "E";
+};
+
 export const calculateStudentStatus = async (
   studentId: any,
   programId: any,
@@ -14,6 +22,16 @@ export const calculateStudentStatus = async (
 ) => {
   const settings = await InstitutionSettings.findOne().lean();
   
+  let displayYearName = academicYearName;
+ if (!displayYearName || displayYearName === "N/A") {
+    const latestGrade = await FinalGrade.findOne({ student: studentId })
+      .populate("academicYear")
+      .sort({ createdAt: -1 });
+    
+    // Changed .year to .name
+    displayYearName = (latestGrade?.academicYear as any)?.year || "N/A";
+  }
+
   const rules = {
     passMark: settings?.passMark || 39.5,
     retakeLimit: settings?.retakeThreshold || 5 
@@ -42,16 +60,28 @@ export const calculateStudentStatus = async (
   // 2. Get Grades (All history to track Retake -> Re-Retake lifecycle)
   const grades = await FinalGrade.find({ student: studentId })
     .populate({ path: "programUnit", populate: { path: "unit" } })
+    .populate({ 
+        path: "academicYear", 
+        model: "AcademicYear" 
+    })
     .sort({ createdAt: -1 }) 
     .lean() as any[];
 
+    console.log(`DEBUG: Found ${grades.length} grades for student.`);
+if (grades.length > 0) {
+    console.log("Sample Grade AcademicYear Data:", JSON.stringify(grades[0].academicYear, null, 2));
+}
+
+console.log("RE-CHECK Sample Grade AcademicYear Data:", grades[0]?.academicYear);
+
   // 3. Map grades by UNIT CODE
- const unitResults = new Map<string, { 
-    status: string; 
-    attemptType: string; 
-    attemptNumber: number;
-    finalMark: number; // Added to capture actual score
-  }>();
+//  const unitResults = new Map<string, any>();
+const unitResults = new Map<string, { 
+  status: string; 
+  attemptType: string; 
+  attemptNumber: number;
+  totalMark: number; // Changed from finalMark to match Model
+}>();
 
   grades.forEach((g) => {
         if (!g.programUnit || !g.programUnit.unit) {
@@ -61,17 +91,18 @@ export const calculateStudentStatus = async (
       return;
     }
 
-    const unitCode = g.programUnit?.unit?.code?.toUpperCase();
+    const unitCode = g.programUnit.unit.code.toUpperCase();
+    // const unitCode = g.programUnit?.unit?.code?.toUpperCase();
     if (!unitCode) return;
 
     const existing = unitResults.get(unitCode);
     if (existing?.status === "PASS") return;
 
-  unitResults.set(unitCode, { 
+ unitResults.set(unitCode, { 
         status: g.status, 
         attemptType: g.attemptType, 
         attemptNumber: g.attemptNumber,
-        finalMark: g.finalMark // The actual grade scored
+        totalMark: g.totalMark 
     });
   });
 
@@ -97,10 +128,15 @@ export const calculateStudentStatus = async (
       missingUnits.push(displayName);
     } else if (record.status === "PASS") {
       passedCount++;
+
+      const numericMark = record.totalMark || 0;
+      const letterGrade = getLetterGrade(numericMark);
+      
       passedUnits.push({
         code: unitCode,
         name: unitName,
-        grade: record.finalMark || "PASS" // Shows actual score if available
+        mark: numericMark,            
+        grade: letterGrade            
       });
     } else if (record.status === "SPECIAL") {
       specialExamUnits.push(displayName);
@@ -147,8 +183,46 @@ if (reRetakeUnits.length > 0) {
     details = `No record found for ${missingUnits.length} units in Year ${yearOfStudy}.`;
   }
 
+  // const sessionRecord = grades.find(g => g.programUnit?.requiredYear === yearOfStudy);
+  // const actualSessionName = sessionRecord?.academicYear?.name || "N/A";
+
+const sessionRecord = grades.find(g => g.programUnit?.requiredYear === yearOfStudy);
+
+ let actualSessionName = "N/A";
+
+if (academicYearName && academicYearName !== "N/A") {
+    actualSessionName = academicYearName;
+} else {
+    // 1. Try to find a grade in the CURRENT year of study that has a valid year
+    const yearSpecificGrade = grades.find(g => 
+        g.programUnit?.requiredYear === yearOfStudy && 
+        g.academicYear?.year
+    );
+
+    if (yearSpecificGrade?.academicYear?.year) {
+        actualSessionName = yearSpecificGrade.academicYear.year;
+    } else if (grades.length > 0) {
+        // 2. If Year 2 is empty, but Year 1 exists, we "guess" the next year
+        const previousYearGrade = grades.find(g => g.academicYear?.year);
+        if (previousYearGrade?.academicYear?.year) {
+            const baseYear = previousYearGrade.academicYear.year; // e.g., "2023/2024"
+            // Simple logic to increment if we are looking at a higher year of study
+            if (yearOfStudy > (previousYearGrade.programUnit?.requiredYear || 1)) {
+                 // Optional: Add logic to increment "2023/2024" to "2024/2025"
+                 actualSessionName = baseYear; // For now, keep as base to avoid wrong guesses
+            } else {
+                actualSessionName = baseYear;
+            }
+        }
+    }
+}
+  
+
  return {
     status, variant, details,
+    // academicYear: academicYearName, 
+    academicYearName: actualSessionName,
+    yearOfStudy: yearOfStudy,
     summary: { 
         totalExpected: curriculum.length, 
         passed: passedCount, 
@@ -170,9 +244,11 @@ export const previewPromotion = async (
   yearToPromote: number,
   academicYearName: string
 ) => {
+ // 1. Fetch students in the targeted year AND those already in the next year
+  const nextYear = yearToPromote + 1;
   const students = await Student.find({
     program: programId,
-    currentYearOfStudy: yearToPromote,
+    currentYearOfStudy: { $in: [yearToPromote, nextYear] },
     status: "active",
   }).lean();
 
@@ -180,6 +256,7 @@ export const previewPromotion = async (
   const blocked: any[] = [];
 
   for (const student of students) {
+    const isAlreadyPromoted = student.currentYearOfStudy === nextYear;
     const statusResult = await calculateStudentStatus(
       student._id,
       programId,
@@ -191,12 +268,13 @@ export const previewPromotion = async (
       id: student._id,
       regNo: student.regNo,
       name: student.name,
-      status: statusResult?.status,
+      status: isAlreadyPromoted ? "ALREADY PROMOTED" : (statusResult?.status || "PENDING"),
       summary: statusResult?.summary,
-      reasons: [] as string[]
+      reasons: [] as string[],
+      isAlreadyPromoted
     };
 
-    if (statusResult?.status === "IN GOOD STANDING") {
+    if (isAlreadyPromoted || statusResult?.status === "IN GOOD STANDING") {
       eligible.push(report);
     } else {
       // Add specific reasons for the block
@@ -297,20 +375,28 @@ export const bulkPromoteClass = async (
   yearToPromote: number,
   academicYearName: string
 ) => {
-  // Use the IStudent interface to help TypeScript understand the results
+  // 1. Get everyone currently in the year AND those already promoted to the next year
+  const nextYear = yearToPromote + 1;
   const students = await Student.find({
     program: programId,
-    currentYearOfStudy: yearToPromote,
+    currentYearOfStudy: { $in: [yearToPromote, nextYear] },
     status: "active",
   });
 
-  const results = { promoted: 0, failed: 0, errors: [] as string[] };
+  const results = { promoted: 0, failed: 0, alreadyPromoted: 0, errors: [] as string[] };
 
   for (const student of students) {
     try {
       // Cast to 'any' or use (student as any)._id to bypass the 'unknown' check
       const studentId = (student._id as any).toString();
 
+      // Skip if already in the target year or higher
+      if (student.currentYearOfStudy >= nextYear) {
+        results.alreadyPromoted++;
+        results.promoted++; // Still count them in the success total for the UI
+        continue;
+      }
+      
       const res = await promoteStudent(studentId);
 
       if (res.success) results.promoted++;
@@ -322,3 +408,5 @@ export const bulkPromoteClass = async (
 
   return results;
 };
+
+// add a "Transcript History" table so you can see a list of all previously generated PDFs for this student

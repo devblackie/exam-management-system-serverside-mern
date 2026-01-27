@@ -10,9 +10,11 @@ import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
 import Student from "../models/Student";
+import { logAudit } from "../lib/auditLogger";
 
 const router = Router();
 
+// preview-promotion
 router.post(
   "/preview-promotion",
   requireAuth,
@@ -28,7 +30,7 @@ router.post(
     res.json({ success: true, data: previewData });
   })
 );
-
+// bulk-promote
 router.post(
   "/bulk-promote",
   requireAuth,
@@ -50,7 +52,57 @@ router.post(
   })
 );
 
+// promote (individual student)
+router.post(
+  "/promote/:studentId",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { studentId } = req.params;
 
+    // 1. Find the student
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ error: "Student not found" });
+    }
+
+    // 2. Safety Check: Verify status before promoting
+    // We import calculateStudentStatus to ensure they actually passed
+    const status = await calculateStudentStatus(
+      student._id,
+      student.program,
+      "", // Academic year is optional if we are checking current curriculum
+      student.currentYearOfStudy
+    );
+
+    if (status.variant !== "success") {
+      return res.status(400).json({ 
+        error: "Promotion Denied", 
+        details: "Student has not met the requirements (Failed/Missing units)." 
+      });
+    }
+
+    // 3. Increment the year
+    const oldYear = student.currentYearOfStudy;
+    student.currentYearOfStudy += 1;
+    await student.save();
+
+    // 4. Log the Audit
+    await logAudit(req, {
+      action: "individual_student_promoted",
+      targetUser: student._id as any,
+      details: { fromYear: oldYear, toYear: student.currentYearOfStudy },
+    });
+
+    res.json({
+      success: true,
+      message: `${student.name} promoted to Year ${student.currentYearOfStudy}`,
+      newYear: student.currentYearOfStudy
+    });
+  })
+);
+
+// download-report
 router.post(
   "/download-report",
   requireAuth,
@@ -123,7 +175,7 @@ router.post(
   })
 );
 
-
+// download-report-progress
 router.post(
   "/download-report-progress",
   requireAuth,
@@ -307,6 +359,7 @@ router.post(
 //   })
 // );
 
+// download-notices-progress
 router.post(
   "/download-notices-progress",
   requireAuth,
@@ -382,13 +435,17 @@ const statusText = (student.status || "").toUpperCase();
   })
 );
 
-
+// download-transcripts-progress
 router.post(
   "/download-transcripts-progress",
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, yearToPromote, academicYearName, studentId } = req.body;
+
+    console.log("--- ROUTE DEBUG START ---");
+    console.log("INCOMING_BODY_YEAR_NAME:", academicYearName);
+    console.log("INCOMING_BODY_STUDENT_ID:", studentId);
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -445,12 +502,22 @@ router.post(
 
         if (!statusResult) continue;
 
+        // DEBUG LOG FOR ENGINE RESULT
+        console.log(`ENGINE_RESULT FOR ${student.regNo}:`, statusResult.academicYearName);
+
       const program = await Program.findById(activeProgramId).lean();
         
+      // Use the resolved year name from statusResult if the body's version is missing
+      const finalYear = (academicYearName && academicYearName !== "N/A") 
+  ? academicYearName 
+  : statusResult.academicYearName;
+        console.log(`FINAL_SENDING_TO_GENERATOR:`, finalYear);
+
         // passedList now contains {code, name, grade} objects from our previous fix
         const transcriptBuffer = await generateStudentTranscript(student, statusResult.passedList, {
           programName: program?.name || "Program",
-          academicYear: academicYearName,
+          academicYear: finalYear,
+          yearToPromote: yearToPromote,
           logoBuffer
         });
 
@@ -460,6 +527,8 @@ router.post(
        sendProgress(Math.floor(((i + 1) / targetStudents.length) * 80) + 10, `Processing ${student.regNo}...`);
       
       }
+
+      console.log("--- ROUTE DEBUG END ---");
 
       sendProgress(95, "Compiling ZIP file...");
       const zipBase64 = zip.toBuffer().toString('base64');

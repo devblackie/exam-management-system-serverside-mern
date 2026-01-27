@@ -97,8 +97,12 @@ export async function computeFinalGrade({
 
   // 5. Save FinalGrade
   await FinalGrade.findOneAndUpdate(
-{ student: mark.student, programUnit: mark.programUnit },
+{ student: mark.student, programUnit: mark.programUnit, academicYear: mark.academicYear },
     {
+      academicYear: mark.academicYear, 
+      institution: mark.institution,
+      semester: (mark.programUnit as any)?.requiredSemester || "SEMESTER 1",
+      
       totalMark: finalMark,
       grade,
       status,

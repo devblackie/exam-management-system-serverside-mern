@@ -11,6 +11,7 @@ import FinalGrade from "../models/FinalGrade";
 import Student from "../models/Student";
 import Unit from "../models/Unit";
 import AcademicYear from "../models/AcademicYear";
+import { cleanupOrphanedGrades } from "../scripts/cleanupGrades";
 
 const router = Router();
 
@@ -80,6 +81,27 @@ router.post(
     res.status(201).json({ message: "Coordinator created successfully" });
   })
 );
+
+
+
+router.post("/maintain/cleanup-grades", requireAuth,  requireRole("coordinator", "admin"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    console.log("Admin initiated manual database cleanup...");
+    await cleanupOrphanedGrades();
+    
+    res.json({ 
+      success: true, 
+      message: "Data integrity restored. Orphaned grades have been purged." 
+    });
+  } catch (error) {
+    console.error("Cleanup Route Error:", error);
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to perform database maintenance." 
+    });
+  }
+}));
 
 // Coordinator creates lecturer (no login needed)
 router.post(
@@ -207,3 +229,50 @@ router.get(
 );
 
 export default router;
+
+
+// router.get("/repair-missing-years",requireAuth,  requireRole("coordinator", "admin"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     // 1. Find the target Academic Year ID for 2024/2025
+//     const targetYear = await AcademicYear.findOne({ year: "2024/2025" });
+    
+//     if (!targetYear) {
+//         return res.status(404).json({ 
+//             message: "Target year '2024/2025' not found in database. Please create it first." 
+//         });
+//     }
+
+//     // 2. Find all grades where academicYear is null or missing
+//     // We also check for grades that have an ID but it's not a valid reference
+//     const gradesToFix = await FinalGrade.find({
+//         $or: [
+//             { academicYear: { $exists: false } },
+//             { academicYear: null }
+//         ]
+//     });
+
+//     const totalToFix = gradesToFix.length;
+
+//     if (totalToFix === 0) {
+//         return res.json({ message: "No broken grade records found. Data is healthy!" });
+//     }
+
+//     // 3. Perform the bulk update
+//     const result = await FinalGrade.updateMany(
+//         {
+//             $or: [
+//                 { academicYear: { $exists: false } },
+//                 { academicYear: null }
+//             ]
+//         },
+//         { $set: { academicYear: targetYear._id } }
+//     );
+
+//     res.json({
+//         message: "Repair complete!",
+//         foundRecords: totalToFix,
+//         updatedCount: result.modifiedCount,
+//         linkedTo: "2024/2025",
+//         targetId: targetYear._id
+//     });
+// }));
