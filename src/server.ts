@@ -21,12 +21,14 @@ const startServer = async () => {
       console.log("Default data initialized");
     });
 
-    // 2. Capture the server instance
+   // 2. Capture the server instance
     const server = app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
       console.log(`Frontend: ${config.frontendUrl}`);
-      console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log(`Environment: ${process.env.NODE_ENV || "devepment"}`);
     });
+
+
 
     // 3. SET GLOBAL TIMEOUTS
     // This prevents the underlying TCP socket from closing during long report generations

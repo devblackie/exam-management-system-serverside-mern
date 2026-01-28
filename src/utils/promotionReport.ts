@@ -66,8 +66,7 @@ export const generatePromotionWordDoc = async (
                   children: [
                     new ImageRun({
                       data: logoBuffer,
-                      transformation: { width: 100, height: 100 },
-                      // Use the correct internal type mapping for docx
+                      transformation: { width: 150, height: 100 },
                       type: "png",
                     }),
                   ],
@@ -91,10 +90,18 @@ export const generatePromotionWordDoc = async (
             alignment: AlignmentType.CENTER,
             children: [
               new TextRun({
-                text: "OFFICE OF THE REGISTRAR (ACADEMIC AFFAIRS)",
+                text: config.schoolName.toUpperCase(),
                 bold: true,
                 size: 20,
               }),
+            ],
+          }),
+            new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [
+              new TextRun({ text: programName.toUpperCase(),
+                bold: true,
+                size: 20, }),
             ],
           }),
 
@@ -104,7 +111,7 @@ export const generatePromotionWordDoc = async (
             spacing: { before: 400, after: 400 },
             children: [
               new TextRun({
-                text: `PROMOTION SUMMARY REPORT: ${academicYear}`,
+                text: `PROMOTION SUMMARY REPORT: ${academicYear}_YEAR ${yearOfStudy}`,
                 bold: true,
                 size: 24,
                 underline: { type: BorderStyle.SINGLE },
@@ -113,18 +120,18 @@ export const generatePromotionWordDoc = async (
           }),
 
           // 4. METADATA (Headers)
-          new Paragraph({
-            children: [
-              new TextRun({ text: `PROGRAM: `, bold: true }),
-              new TextRun({ text: programName.toUpperCase() }),
-            ],
-          }),
-          new Paragraph({
-            children: [
-              new TextRun({ text: `CURRENT YEAR OF STUDY: `, bold: true }),
-              new TextRun({ text: `YEAR ${yearOfStudy}` }),
-            ],
-          }),
+          // new Paragraph({
+          //   children: [
+          //     new TextRun({ text: `PROGRAM: `, bold: true }),
+          //     new TextRun({ text: programName.toUpperCase() }),
+          //   ],
+          // }),
+          // new Paragraph({
+          //   children: [
+          //     new TextRun({ text: `CURRENT YEAR OF STUDY: `, bold: true }),
+          //     new TextRun({ text: `YEAR ${yearOfStudy}` }),
+          //   ],
+          // }),
 
           // 5. EXECUTIVE SUMMARY
           new Paragraph({
@@ -576,7 +583,7 @@ export const generateIneligibleSummaryDoc = async (
                   children: [
                     new ImageRun({
                       data: logoBuffer,
-                      transformation: { width: 80, height: 80 },
+                      transformation: { width: 150, height: 80 },
                       type: "png",
                     }),
                   ],
@@ -651,7 +658,7 @@ export const generateIneligibleSummaryDoc = async (
           }),
           new Paragraph({
             alignment: AlignmentType.CENTER,
-            spacing: { after: 300 },
+            spacing: { before:200, after: 300 },
             children: [
               new TextRun({
                 text: "FAIL / INCOMPLETE / INELIGIBLE",
@@ -690,7 +697,7 @@ export const generateIneligibleSummaryDoc = async (
             spacing: { after: 200 },
             children: [
               new TextRun({
-                text: "The following candidates have been granted permission to sit for Special Examinations.",
+                text: `The following candidates have been granted permission to sit for Special Examinations.`,
                 size: 18,
                 italics: true,
               }),
@@ -714,7 +721,7 @@ export const generateIneligibleSummaryDoc = async (
             spacing: { after: 200 },
             children: [
               new TextRun({
-                text: "The following candidates are required to sit for Supplementary Examinations or Retakes.",
+                text: `The following candidates are required to sit for Supplementary Examinations or Retakes.`,
                 size: 18,
                 italics: true,
               }),
@@ -723,7 +730,7 @@ export const generateIneligibleSummaryDoc = async (
           createIneligibleTable(failureList, cellMargin),
 
           // 5. THE INELIGIBLE LIST TABLE (Maintaining Reasons)
-          createIneligibleTable(blocked, cellMargin),
+          // createIneligibleTable(blocked, cellMargin),
 
           // 6. SIGNATORIES
           new Paragraph({
@@ -896,7 +903,7 @@ export const generateIneligibilityNotice = async (
                   children: [
                     new ImageRun({
                       data: logoBuffer,
-                      transformation: { width: 80, height: 80 },
+                      transformation: { width: 150, height: 80 },
                       type: "png",
                     }),
                   ],
@@ -1087,7 +1094,7 @@ export const generateSpecialExamNotice = async (
                   children: [
                     new ImageRun({
                       data: logoBuffer,
-                      transformation: { width: 80, height: 80 },
+                      transformation: { width: 150, height: 80 },
                       type: "png",
                     }),
                   ],
@@ -1489,8 +1496,7 @@ export const generateStudentTranscript = async (
             ],
           }),
 
-             //  STATUS SUMMARY
-
+          //  STATUS SUMMARY
           new Paragraph({
             alignment: AlignmentType.CENTER,
             spacing: { after: 200 },
@@ -1660,17 +1666,11 @@ export const generateStudentTranscript = async (
             alignment: AlignmentType.CENTER,
             spacing: {  before: 200 },
             children: [
-              // new TextRun({
-              //   text: "RESULT:  PASS",
-              //   bold: true,
-              //   size: 20,
-              //   underline: {},
-              // }),
+            
             ],
           }),
 
           // 6. GRADING KEY (Formal Table Structure)
-
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
 
@@ -1817,8 +1817,8 @@ export const generateStudentTranscript = async (
               }),
             ],
           }),
-          // 7. FOOTER & SIGNATORIES
 
+          // 7. FOOTER & SIGNATORIES
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
             borders: {

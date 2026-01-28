@@ -48,6 +48,7 @@ app.use(
      origin: [
       config.frontendUrl || "http://localhost:3000",
       "http://127.0.0.1:3000",
+      "http://192.168.1.10:3000",
       "http://192.168.1.9:3000",     // ← ADD YOUR IP
       "http://192.168.1.6:3000",     // ← ADD YOUR IP
       "http://10.41.19.124:3000",    // ← ADD THIS TOO (your other device)
@@ -109,6 +110,6 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 // Connect to MongoDB
-connectDB();
+// connectDB();
 
 export default app;
