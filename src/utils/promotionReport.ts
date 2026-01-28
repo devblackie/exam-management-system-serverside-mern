@@ -1259,7 +1259,7 @@ export const generateStudentTranscript = async (
                   children: [
                     new ImageRun({
                       data: logoBuffer,
-                      transformation: { width: 200, height: 150 },
+                      transformation: { width: 150, height: 80 },
                       type: "png",
                     }),
                   ],
@@ -1270,12 +1270,58 @@ export const generateStudentTranscript = async (
           // 2. INSTITUTIONAL HEADERS
           new Paragraph({
             alignment: AlignmentType.CENTER,
-            spacing: { before: 100 },
+            spacing: { before: 50, after: 100 },
             children: [
               new TextRun({
                 text: config.instName.toUpperCase(),
                 bold: true,
                 size: 24,
+              }),
+            ],
+          }),
+
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 50 },
+            children: [
+              new TextRun({
+                text: config.postalAddress,
+
+                size: 18,
+              }),
+            ],
+          }),
+
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 50 },
+            children: [
+              new TextRun({
+                text: "Cell Phone",
+
+                size: 18,
+              }),
+            ],
+          }),
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 50 },
+            children: [
+              new TextRun({
+                text: config.cellPhone,
+
+                size: 18,
+              }),
+            ],
+          }),
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 100 },
+            children: [
+              new TextRun({
+                text: `Email: ${config.schoolEmail}`,
+
+                size: 18,
               }),
             ],
           }),
@@ -1369,6 +1415,7 @@ export const generateStudentTranscript = async (
             ],
           }),
 
+          // 5. Programme name
           new Paragraph({
             spacing: { before: 100 },
             children: [
@@ -1442,10 +1489,24 @@ export const generateStudentTranscript = async (
             ],
           }),
 
+             //  STATUS SUMMARY
+
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 200 },
+            children: [
+              new TextRun({
+                text: "RESULT:  PASS",
+                bold: true,
+                size: 20,
+                underline: {},
+              }),
+            ],
+          }),
+
           // 4. RESULTS TABLE (Units & Grades)
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
-
             layout: TableLayoutType.FIXED,
             borders: {
               top: { style: BorderStyle.SINGLE, size: 2 },
@@ -1453,18 +1514,17 @@ export const generateStudentTranscript = async (
               left: { style: BorderStyle.SINGLE, size: 2 },
               right: { style: BorderStyle.SINGLE, size: 2 },
               insideVertical: { style: BorderStyle.SINGLE, size: 2 },
-              insideHorizontal: { style: BorderStyle.NONE }, // This removes the lines between rows
+              insideHorizontal: { style: BorderStyle.NIL },
             },
-
             rows: [
               // Header Row
               new TableRow({
                 tableHeader: true,
                 children: [
                   new TableCell({
-                    width: { size: 15, type: WidthType.PERCENTAGE },
+                    width: { size: 15, type: WidthType.PERCENTAGE }, // Narrower Code
                     margins: cellMargin,
-
+                    verticalAlign: VerticalAlign.CENTER,
                     borders: {
                       bottom: { style: BorderStyle.SINGLE, size: 2 },
                       top: { style: BorderStyle.SINGLE, size: 2 },
@@ -1478,9 +1538,9 @@ export const generateStudentTranscript = async (
                     ],
                   }),
                   new TableCell({
-                    width: { size: 70, type: WidthType.PERCENTAGE },
+                    width: { size: 70, type: WidthType.PERCENTAGE }, // Larger Title
                     margins: cellMargin,
-
+                    verticalAlign: VerticalAlign.CENTER,
                     borders: {
                       bottom: { style: BorderStyle.SINGLE, size: 2 },
                       top: { style: BorderStyle.SINGLE, size: 2 },
@@ -1498,9 +1558,9 @@ export const generateStudentTranscript = async (
                     ],
                   }),
                   new TableCell({
-                    width: { size: 15, type: WidthType.PERCENTAGE },
+                    width: { size: 15, type: WidthType.PERCENTAGE }, // Narrower Grade
                     margins: cellMargin,
-
+                    verticalAlign: VerticalAlign.CENTER,
                     borders: {
                       bottom: { style: BorderStyle.SINGLE, size: 2 },
                       top: { style: BorderStyle.SINGLE, size: 2 },
@@ -1517,22 +1577,34 @@ export const generateStudentTranscript = async (
                 ],
               }),
               // Data Rows
-              // Data Rows (Mapping the results)
-              ...results.map((r: any) => {
-                // Defensive extraction to prevent .toUpperCase() on undefined
+              ...results.map((r: any, index: number) => {
                 const unitCode = String(r?.code ?? "N/A").toUpperCase();
                 const unitName = String(
                   r?.name ?? "COURSE TITLE MISSING",
                 ).toUpperCase();
                 const unitGrade = String(r?.grade ?? "-");
 
+                const isLastRow = index === results.length - 1;
+                const bottomBorderStyle = isLastRow
+                  ? BorderStyle.SINGLE
+                  : BorderStyle.NIL;
+                const bottomBorderSize = isLastRow ? 2 : 0;
+
                 return new TableRow({
                   children: [
                     new TableCell({
                       width: { size: 15, type: WidthType.PERCENTAGE },
                       margins: cellMargin,
+                      verticalAlign: VerticalAlign.CENTER,
+                      borders: {
+                        bottom: {
+                          style: bottomBorderStyle,
+                          size: bottomBorderSize,
+                        },
+                      },
                       children: [
                         new Paragraph({
+                          spacing: { after: 10 },
                           children: [new TextRun({ text: unitCode, size: 18 })],
                         }),
                       ],
@@ -1540,8 +1612,16 @@ export const generateStudentTranscript = async (
                     new TableCell({
                       width: { size: 70, type: WidthType.PERCENTAGE },
                       margins: cellMargin,
+                      verticalAlign: VerticalAlign.CENTER,
+                      borders: {
+                        bottom: {
+                          style: bottomBorderStyle,
+                          size: bottomBorderSize,
+                        },
+                      },
                       children: [
                         new Paragraph({
+                          spacing: { after: 10 },
                           children: [new TextRun({ text: unitName, size: 18 })],
                         }),
                       ],
@@ -1549,9 +1629,17 @@ export const generateStudentTranscript = async (
                     new TableCell({
                       width: { size: 15, type: WidthType.PERCENTAGE },
                       margins: cellMargin,
+                      verticalAlign: VerticalAlign.CENTER,
+                      borders: {
+                        bottom: {
+                          style: bottomBorderStyle,
+                          size: bottomBorderSize,
+                        },
+                      },
                       children: [
                         new Paragraph({
                           alignment: AlignmentType.CENTER,
+                          spacing: { after: 10 },
                           children: [
                             new TextRun({
                               text: unitGrade,
@@ -1568,51 +1656,16 @@ export const generateStudentTranscript = async (
             ],
           }),
 
-          // 5. STATUS SUMMARY
-       
-
-           new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            borders: {
-              top: {
-                style: BorderStyle.SINGLE,
-                size: 16, // 2pt thickness
-                color: "000000", // Optional: black
-              },
-                bottom: {
-                style: BorderStyle.SINGLE,
-                size: 16, // 2pt thickness
-                color: "000000", // Optional: black
-              },
-              // bottom: { style: BorderStyle.NONE },
-              left: { style: BorderStyle.NONE },
-              right: { style: BorderStyle.NONE },
-              insideHorizontal: { style: BorderStyle.NONE },
-              insideVertical: { style: BorderStyle.NONE },
-            },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({
-                    children: [
-                       new Paragraph({
-                  alignment: AlignmentType.CENTER,
-
-            spacing: { before: 300 ,after:200},
+        new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: {  before: 200 },
             children: [
-              new TextRun({ text: "RESULT: ", bold: true, size: 18 }),
-              new TextRun({
-                text: "PASS",
-                size: 18,
-                bold: true,
-              }),
-            ],
-          }),
-                    ],
-                  }),
-                 
-                ],
-              }),
+              // new TextRun({
+              //   text: "RESULT:  PASS",
+              //   bold: true,
+              //   size: 20,
+              //   underline: {},
+              // }),
             ],
           }),
 
@@ -1634,18 +1687,18 @@ export const generateStudentTranscript = async (
                 children: [
                   // LEFT CELL: The Grading Key Table
                   new TableCell({
-                    width: { size: 50, type: WidthType.PERCENTAGE },
+                    width: { size: 40, type: WidthType.PERCENTAGE },
                     children: [
                       new Table({
                         width: { size: 100, type: WidthType.PERCENTAGE },
                         borders: {
-                          top: { style: BorderStyle.SINGLE, size: 2 },
-                          bottom: { style: BorderStyle.SINGLE, size: 2 },
-                          left: { style: BorderStyle.SINGLE, size: 2 },
-                          right: { style: BorderStyle.SINGLE, size: 2 },
+                          top: { style: BorderStyle.SINGLE, size: 1 },
+                          bottom: { style: BorderStyle.SINGLE, size: 1 },
+                          left: { style: BorderStyle.SINGLE, size: 1 },
+                          right: { style: BorderStyle.SINGLE, size: 1 },
                           insideVertical: {
                             style: BorderStyle.SINGLE,
-                            size: 2,
+                            size: 1,
                           },
                           insideHorizontal: { style: BorderStyle.NONE },
                         },
@@ -1754,7 +1807,7 @@ export const generateStudentTranscript = async (
                           new TextRun({
                             text: "1 unit consists of 35 lecture hours or equivalent (3 Practical hours of two tutorial hours are equivalent to 0ne lecture hour ) ",
                             bold: false,
-                            size: 14,
+                            size: 16,
                           }),
                         ],
                       }),
@@ -1828,6 +1881,7 @@ export const generateStudentTranscript = async (
               }),
             ],
           }),
+
           new Paragraph({
             spacing: { before: 100 },
             children: [

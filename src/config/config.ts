@@ -15,6 +15,9 @@ const config = Object.freeze({
   instName: process.env.INST_NAME || "My Institution",
   schoolName: process.env.SCHOOL_NAME || "My School",
   registrar: process.env.REGISTRAR || "Registrar Office",
+  postalAddress: process.env.POSTAL_ADDRESS || "Postal Address",
+  cellPhone: process.env.CELL_PHONE || "Cell Phone",
+  schoolEmail: process.env.SCHOOL_EMAIL || "School Email",
 });
 
 export default config;

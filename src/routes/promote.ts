@@ -383,9 +383,9 @@ router.post(
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, yearToPromote, academicYearName, studentId } = req.body;
 
-    console.log("--- ROUTE DEBUG START ---");
-    console.log("INCOMING_BODY_YEAR_NAME:", academicYearName);
-    console.log("INCOMING_BODY_STUDENT_ID:", studentId);
+    // console.log("--- ROUTE DEBUG START ---");
+    // console.log("INCOMING_BODY_YEAR_NAME:", academicYearName);
+    // console.log("INCOMING_BODY_STUDENT_ID:", studentId);
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -443,7 +443,7 @@ router.post(
         if (!statusResult) continue;
 
         // DEBUG LOG FOR ENGINE RESULT
-        console.log(`ENGINE_RESULT FOR ${student.regNo}:`, statusResult.academicYearName);
+        // console.log(`ENGINE_RESULT FOR ${student.regNo}:`, statusResult.academicYearName);
 
       const program = await Program.findById(activeProgramId).lean();
         
@@ -451,7 +451,7 @@ router.post(
       const finalYear = (academicYearName && academicYearName !== "N/A") 
   ? academicYearName 
   : statusResult.academicYearName;
-        console.log(`FINAL_SENDING_TO_GENERATOR:`, finalYear);
+        // console.log(`FINAL_SENDING_TO_GENERATOR:`, finalYear);
 
         // passedList now contains {code, name, grade} objects from our previous fix
         const transcriptBuffer = await generateStudentTranscript(student, statusResult.passedList, {
@@ -468,7 +468,7 @@ router.post(
       
       }
 
-      console.log("--- ROUTE DEBUG END ---");
+      // console.log("--- ROUTE DEBUG END ---");
 
       sendProgress(95, "Compiling ZIP file...");
       const zipBase64 = zip.toBuffer().toString('base64');
