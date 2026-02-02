@@ -5,7 +5,6 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
-import connectDB from "./config/db";
 import config from "./config/config";
 import { errorHandler } from "./middleware/errorHandler";
 import { logAudit } from "./lib/auditLogger";
@@ -109,8 +108,5 @@ app.use((req, res) => {
 
 // Global error handler
 app.use(errorHandler);
-
-// Connect to MongoDB
-// connectDB();
 
 export default app;
