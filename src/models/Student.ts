@@ -45,3 +45,5 @@ schema.index({ regNo: 1 });
 schema.index({ institution: 1, program: 1, admissionAcademicYear: 1 });
 
 export default mongoose.model<IStudent>("Student", schema);
+
+// set up the Mongoose Indexes to optimize those multi-tenant queries?

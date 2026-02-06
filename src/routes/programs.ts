@@ -8,7 +8,7 @@ import type { AuthenticatedRequest } from "../middleware/auth";
 const router = Router();
 
 // CREATE Program
- 
+
 router.post(
   "/",
   requireAuth,
@@ -37,7 +37,7 @@ router.post(
     });
 
     res.status(201).json(program);
-  })
+  }),
 );
 
 /**
@@ -53,7 +53,7 @@ router.get(
     }).sort({ code: 1 });
 
     res.json(programs);
-  })
+  }),
 );
 
 /**
@@ -70,7 +70,7 @@ router.put(
         institution: req.user.institution, // ← Security: can't edit other inst
       },
       req.body,
-      { new: true, runValidators: true }
+      { new: true, runValidators: true },
     );
 
     if (!program) {
@@ -78,7 +78,7 @@ router.put(
     }
 
     res.json(program);
-  })
+  }),
 );
 
 /**
@@ -99,7 +99,7 @@ router.delete(
     }
 
     res.json({ message: "Program deleted successfully" });
-  })
+  }),
 );
 
 export default router;

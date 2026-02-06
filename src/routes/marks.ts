@@ -31,6 +31,7 @@ const router = Router();
 // });
 // -------------------------------
 
+// Route: GET /api/marks/template?programId=&unitId=&academicYearId=&yearOfStudy=&semester=
 router.get(
   "/template",
   requireAuth,
@@ -123,6 +124,7 @@ router.get(
   })
 );
 
+// Route: POST marks/upload
 router.post(
   "/upload",
   requireAuth,

@@ -318,8 +318,9 @@ export const promoteStudent = async (studentId: string) => {
   const statusResult = await calculateStudentStatus(
     student._id,
     student.program,
-    "", 
-    actualCurrentYear
+    // "",
+    "N/A",
+    actualCurrentYear,
   );
 
   // 3. Promotion Guard: Only "IN GOOD STANDING" can move up

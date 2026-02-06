@@ -39,7 +39,7 @@ router.get(
       regNo: { $regex: `^${searchQuery}`, $options: "i" }
     });
 
-    console.log("Final Scoped Query:", JSON.stringify(query, null, 2)); 
+    // console.log("Final Scoped Query:", JSON.stringify(query, null, 2)); 
     const students = await Student.find(query)
       .limit(10)
       .select("regNo name program admissionYear")
@@ -323,13 +323,13 @@ router.post(
       markId: mark!._id as any,
       coordinatorReq: req,
     });
-    console.log("[SUCCESS] Marks saved & grade recalculated:", {
-      regNo,
-      unit: unitCode,
-      year: academicYear,
-      finalGrade: gradeResult.grade,
-      status: gradeResult.status,
-    });
+    // console.log("[SUCCESS] Marks saved & grade recalculated:", {
+    //   regNo,
+    //   unit: unitCode,
+    //   year: academicYear,
+    //   finalGrade: gradeResult.grade,
+    //   status: gradeResult.status,
+    // });
 
     res.json({
       success: true,

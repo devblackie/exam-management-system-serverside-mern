@@ -3,7 +3,7 @@ import { Router, Response } from "express";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
-import { bulkPromoteClass, calculateStudentStatus, previewPromotion } from "../services/statusEngine";
+import { bulkPromoteClass, calculateStudentStatus, previewPromotion, promoteStudent } from "../services/statusEngine";
 import Program from "../models/Program";
 import { generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibleSummaryDoc, generateIneligibilityNotice, PromotionData, generateSpecialExamNotice, generateStudentTranscript } from "../utils/promotionReport";
 import fs from "fs";
@@ -54,51 +54,29 @@ router.post(
 
 // promote (individual student)
 router.post(
-  "/promote/:studentId",
+  "/:studentId",
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { studentId } = req.params;
 
-    // 1. Find the student
-    const student = await Student.findById(studentId);
-    if (!student) {
-      return res.status(404).json({ error: "Student not found" });
-    }
+    const result = await promoteStudent(studentId);
 
-    // 2. Safety Check: Verify status before promoting
-    // We import calculateStudentStatus to ensure they actually passed
-    const status = await calculateStudentStatus(
-      student._id,
-      student.program,
-      "", // Academic year is optional if we are checking current curriculum
-      student.currentYearOfStudy
-    );
-
-    if (status.variant !== "success") {
+    if (!result.success) {
       return res.status(400).json({ 
         error: "Promotion Denied", 
-        details: "Student has not met the requirements (Failed/Missing units)." 
+        message: result.message,
+        details: result.details 
       });
     }
 
-    // 3. Increment the year
-    const oldYear = student.currentYearOfStudy;
-    student.currentYearOfStudy += 1;
-    await student.save();
-
-    // 4. Log the Audit
     await logAudit(req, {
       action: "individual_student_promoted",
-      targetUser: student._id as any,
-      details: { fromYear: oldYear, toYear: student.currentYearOfStudy },
+      targetUser: studentId as any,
+      details: { message: result.message },
     });
 
-    res.json({
-      success: true,
-      message: `${student.name} promoted to Year ${student.currentYearOfStudy}`,
-      newYear: student.currentYearOfStudy
-    });
+    res.json(result);
   })
 );
 
