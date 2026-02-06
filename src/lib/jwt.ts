@@ -3,17 +3,23 @@ import jwt from "jsonwebtoken";
 import { Response } from "express";
 import config from "../config/config";
 
-const JWT_SECRET = config.jwtSecret || "supersecret";
+const JWT_SECRET = config.jwtSecret;
 
 // Create JWT and store in HttpOnly cookie
-export const setAuthCookie = (res: Response, userId: string, role: string, institution?: string | null) => {
-
-   const payload = {
+export const setAuthCookie = (
+  res: Response,
+  userId: string,
+  role: string,
+  institution?: string | null,
+  version: number = 0,
+) => {
+  const payload = {
     id: userId,
     role,
     institution: institution || null, // ← Always include (even if null)
+ version,
   };
- // 1. JWT expires in 1 day
+  // 1. JWT expires in 1 day
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "1d" });
 
   // 2. Cookie expires in 1 day (24 hours * 60 mins * 60 secs * 1000 ms)

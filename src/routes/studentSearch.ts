@@ -16,6 +16,7 @@ import AcademicYear from "../models/AcademicYear";
 import ProgramUnit from "../models/ProgramUnit";
 import { computeFinalGrade } from "../services/gradeCalculator";
 import { calculateStudentStatus } from "../services/statusEngine";
+import { scopeQuery } from "../lib/multiTenant";
 
 const router = express.Router();
 
@@ -34,9 +35,12 @@ router.get(
 
     const searchQuery = q.trim();
 
-    const students = await Student.find({
-      regNo: { $regex: `^${searchQuery}`, $options: "i" }, // Case-insensitive + starts with
-    })
+    const query = scopeQuery(req, {
+      regNo: { $regex: `^${searchQuery}`, $options: "i" }
+    });
+
+    console.log("Final Scoped Query:", JSON.stringify(query, null, 2)); 
+    const students = await Student.find(query)
       .limit(10)
       .select("regNo name program admissionYear")
       .populate("program", "name");
@@ -45,7 +49,7 @@ router.get(
     //   `[STUDENT SEARCH] Found ${students.length} students for "${searchQuery}"`
     // );
 
-    res.json(students);
+       res.json(students);
   })
 );
 
@@ -61,9 +65,9 @@ router.get(
     const targetYearOfStudy = parseInt(yearOfStudy as string) || 1;
 
     regNo = decodeURIComponent(regNo);
-    const student = await Student.findOne({
-      regNo: { $regex: `^${regNo}$`, $options: "i" },
-    }).populate("program");
+    const student = await Student.findOne(scopeQuery(req, {
+      regNo: { $regex: `^${regNo}$`, $options: "i" }
+    })).populate("program");
 
     if (!student) return res.status(404).json({ error: "Student not found" });
 
@@ -179,11 +183,8 @@ router.get(
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    // const { regNo, academicYear, unitCode } = req.query;
 const { regNo, yearOfStudy } = req.query;
-    // if (!regNo || typeof regNo !== "string") {
-    //   return res.status(400).json({ error: "regNo required" });
-    // }
+    
 
     if (!regNo) return res.status(400).json({ error: "regNo required" });
 
@@ -195,14 +196,6 @@ const { regNo, yearOfStudy } = req.query;
 
     
     let query: any = { student: student._id };
-
-    // let query: any = {
-    //   student: (
-    //     await Student.findOne({
-    //       regNo: { $regex: `^${regNo}$`, $options: "i" },
-    //     })
-    //   )?._id,
-    // };
 
  // Fetch marks linked to ProgramUnits of a specific Year of Study
     const marks = await Mark.find(query)
@@ -349,8 +342,6 @@ router.post(
     });
   })
 );
-
-
 
 // Full Transcript Download
 router.get(

@@ -35,27 +35,31 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Security & Performance Middleware
-app.use(
-  helmet({
-    contentSecurityPolicy: false, // Allow if using React inline scripts
-  })
-);
+// app.use(
+//   helmet({
+//     contentSecurityPolicy: false, // Allow if using React inline scripts
+//   })
+// );
+app.use(helmet());
+app.disable("x-powered-by");
 
+const allowedOrigins = [
+  config.frontendUrl,
+  "http://127.0.0.1:3000",
+  "http://192.168.1.10:3000",
+];
 app.use(
   cors({
-    // origin: config.frontendUrl || "http://localhost:3000",
-     origin: [
-      config.frontendUrl || "http://localhost:3000",
-      "http://127.0.0.1:3000",
-      "http://172.24.2.124:3000",
-      "http://192.168.1.10:3000",
-      "http://192.168.1.9:3000",     // ← ADD YOUR IP
-      "http://192.168.1.6:3000",     // ← ADD YOUR IP
-      "http://10.41.19.124:3000",    // ← ADD THIS TOO (your other device)
-    ],
-  
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS Blocking: Unauthorized Origin"));
+      }
+    },
+
     credentials: true,
-  })
+  }),
 );
 
 app.use(cookieParser());

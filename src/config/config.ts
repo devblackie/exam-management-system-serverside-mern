@@ -6,7 +6,7 @@ dotenv.config();
 const config = Object.freeze({
   port: process.env.PORT || 3000,
   databaseURI: process.env.MONGODB_URI || "mongodb://localhost:2701",
-  frontendUrl: process.env.FRONTEND_URL || "http://localhost:3000",
+  frontendUrl: process.env.FRONTEND_URL,
   // jwtSecret: process.env.JWT_SECRET || "please-change-me",
   jwtSecret: process.env.JWT_SECRET!,
   emailUser: process.env.EMAIL_USER || "",

@@ -16,7 +16,7 @@ export interface IStudent extends Document {
 }
 
 const schema = new Schema<IStudent>({
-  institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true },
+  institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true ,index: true},
   regNo: { type: String, required: true, uppercase: true, trim: true },
   name: { type: String, required: true, trim: true },
   email: { type: String, lowercase: true, trim: true },

@@ -183,8 +183,6 @@ if (reRetakeUnits.length > 0) {
     details = `No record found for ${missingUnits.length} units in Year ${yearOfStudy}.`;
   }
 
-  // const sessionRecord = grades.find(g => g.programUnit?.requiredYear === yearOfStudy);
-  // const actualSessionName = sessionRecord?.academicYear?.name || "N/A";
 
 const sessionRecord = grades.find(g => g.programUnit?.requiredYear === yearOfStudy);
 
