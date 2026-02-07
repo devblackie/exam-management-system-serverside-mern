@@ -4,6 +4,7 @@ import Mark from "../models/Mark";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import mongoose from "mongoose";
 
 const router = Router();
 
@@ -102,6 +103,47 @@ router.get(
     }));
 
     res.json(formattedCurriculum);
+  })
+);
+
+// --- GET /program-units/lookup?programId=...: Get a simple list of Units for dropdowns, filtered by Program ---
+
+router.get(
+  "/lookup",
+  requireAuth,
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId } = req.query;
+
+    // 1. Validation check
+    if (!mongoose.Types.ObjectId.isValid(programId as string)) {
+      return res.status(400).json({
+        message: "Invalid Program ID format. Expected ObjectId.",
+      });
+    }
+
+    try {
+      // 2. Querying ProgramUnit (The Join Table)
+      const curriculum = await ProgramUnit.find({
+        institution: req.user.institution,
+        program: programId,
+      })
+      .populate("unit", "code name") // Make sure "unit" matches the field in your ProgramUnit schema
+      .lean();
+
+      // 3. Mapping with a safety check (Senior Pattern)
+      const flatList = curriculum
+        .filter((item: any) => item.unit) // Remove entries where the unit might have been deleted
+        .map((item: any) => ({
+          code: item.unit.code,
+          name: item.unit.name,
+          _id: item.unit._id.toString()
+        }));
+
+      res.json(flatList);
+    } catch (dbError) {
+      console.error("Database Error in Lookup:", dbError);
+      res.status(500).json({ message: "Database query failed" });
+    }
   })
 );
 
