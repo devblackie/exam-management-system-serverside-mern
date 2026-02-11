@@ -47,34 +47,22 @@ export interface IMark extends Document {
 
 const schema = new Schema<IMark>(
   {
-    institution: {
-      type: Schema.Types.ObjectId,
-      ref: "Institution",
-      required: true,
-    },
+    institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true, },
     student: { type: Schema.Types.ObjectId, ref: "Student", required: true },
-    programUnit: {
-      type: Schema.Types.ObjectId,
-      ref: "ProgramUnit",
-      required: true,
-    }, // IMPORTANT
-    academicYear: {
-      type: Schema.Types.ObjectId,
-      ref: "AcademicYear",
-      required: true,
-    },
+    programUnit: { type: Schema.Types.ObjectId, ref: "ProgramUnit", required: true, }, // IMPORTANT
+    academicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true, },
 
     // RAW CA SCORES (The system will derive the final CA/30 from these)
-    cat1Raw: { type: Number, min: 0, max: 20, default: 0 },
-    cat2Raw: { type: Number, min: 0, max: 20, default: 0 },
-    cat3Raw: { type: Number, min: 0, max: 20 },
+    cat1Raw: { type: Number, min: 0,  default: 0 },
+    cat2Raw: { type: Number, min: 0,  default: 0 },
+    cat3Raw: { type: Number, min: 0 },
     assgnt1Raw: { type: Number, min: 0, max: 10, default: 0 },
     assgnt2Raw: { type: Number, min: 0, max: 10 },
     assgnt3Raw: { type: Number, min: 0, max: 10 },
     practicalRaw: { type: Number, min: 0, max: 100 }, // Assume flexible scale if not explicitly 20/10
 
     // RAW EXAM SCORES
-    examQ1Raw: { type: Number, min: 0, max: 10, default: 0 },
+    examQ1Raw: { type: Number, min: 0,  default: 0 },
     examQ2Raw: { type: Number, min: 0, max: 20, default: 0 },
     examQ3Raw: { type: Number, min: 0, max: 20, default: 0 },
     examQ4Raw: { type: Number, min: 0, max: 20, default: 0 },
@@ -83,18 +71,10 @@ const schema = new Schema<IMark>(
     // FINAL AUDIT FIELDS (Filled with scoresheet data)
     caTotal30: { type: Number, min: 0, max: 30, required: true },
     examTotal70: { type: Number, min: 0, max: 70, required: true },
-    internalExaminerMark: { type: Number, min: 0, max: 100, required: true },
+    internalExaminerMark: { type: Number, min: 0, max: 100, required: false },
     agreedMark: { type: Number, min: 0, max: 100, required: true },
-    attempt: {
-      type: String,
-      enum: ["1st", "re-take", "supplementary", "special"],
-      default: "1st",
-    },
-    examMode: {
-      type: String,
-      enum: ["standard", "mandatory_q1"],
-      default: "standard"
-    },
+    attempt: { type: String, enum: ["1st", "re-take", "supplementary", "special"], default: "1st", },
+    examMode: { type: String, enum: ["standard", "mandatory_q1"], default: "standard"},
 
     // METADATA
     isSupplementary: { type: Boolean, default: false },

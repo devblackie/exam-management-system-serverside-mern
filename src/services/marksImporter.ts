@@ -11,9 +11,7 @@ import type { AuthenticatedRequest } from "../middleware/auth";
 interface ImportResult {
   total: number;
   success: number;
-  errors: string[];
-  warnings: string[];
-}
+  errors: string[]; warnings: string[];}
 
 /**
  * Senior Engineer Note:
@@ -82,6 +80,29 @@ export async function importMarksFromBuffer(
           const programUnit = programUnitMap.get(programUnitKey);
           if (!programUnit) throw new Error(`Unit ${unitCode} not linked to program.`);
 
+          // --- SMART ATTEMPT DETECTION ---
+          const previousMarks = await Mark.find({ 
+            student: student._id, 
+            programUnit: programUnit._id 
+          }).session(session).sort({ createdAt: 1 }).lean();
+
+          const excelAttemptLabel = row[3]?.toString().trim(); // Column D
+          let finalAttempt = "1st";
+
+          // Priority 1: Check Excel Label
+          if (excelAttemptLabel?.toLowerCase().includes("supp")) {
+            finalAttempt = "supplementary";
+          } else if (excelAttemptLabel?.toLowerCase().includes("special")) {
+            finalAttempt = "special";
+          } 
+          // Priority 2: Auto-detect from history if Excel is generic "1st" or empty
+          else if (previousMarks.length > 0) {
+            const historyCount = previousMarks.length;
+            if (historyCount === 1) finalAttempt = "supplementary";
+            else if (historyCount === 2) finalAttempt = "re-take";
+            else if (historyCount >= 3) finalAttempt = "re-retake";
+          }
+
           const markData = {
             student: student._id,
             programUnit: programUnit._id,
@@ -112,12 +133,13 @@ export async function importMarksFromBuffer(
             // Totals and Final Fields
             caTotal30: Number(row[13]) || 0, // Col N (CA GRAND TOTAL)
             examTotal70: Number(row[19]) || 0, // Col T (TOTAL EXAM)
+            internalExaminerMark: Number(row[20]) || Number(row[22]), // Col U (INT. EXAMINER) or fallback to Col W (AGREED MARK) if U is empty
             agreedMark: Number(row[22]) || 0, // Col W (AGREED MARKS)
 
-            attempt: row[3]?.toString().toLowerCase().includes("supp")
-              ? "supplementary"
-              : "1st", // Col D
-            isSupplementary: row[3]?.toString().toLowerCase().includes("supp"),
+            attempt: finalAttempt,
+            isSpecial: finalAttempt === "special",
+            isSupplementary: finalAttempt === "supplementary",
+            isRetake: finalAttempt.includes("re-take"),
             examMode: sheet["O16"]?.v === 30 ? "mandatory_q1" : "standard",
           };
 

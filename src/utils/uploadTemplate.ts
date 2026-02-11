@@ -174,18 +174,42 @@ export const generateFullScoresheetTemplate = async (
 
       if (student) {
       const prevMark = previousMarks.find(m => m.student.toString() === student._id.toString());
-      const isSupp = !!(prevMark && (prevMark.agreedMark < settings.passMark || prevMark.attempt === "supplementary"));
+      // const isSupp = !!(prevMark && (prevMark.agreedMark < settings.passMark || prevMark.attempt === "supplementary"));
       
+    let attemptLabel = "1st";
+    let isSupp = false;
+    let isSpecial = false;
+
+    if (prevMark) {
+      if (prevMark.isSpecial || prevMark.attempt === "special") {
+        attemptLabel = "Special";
+        isSpecial = true;
+      } else if (prevMark.agreedMark < settings.passMark || prevMark.attempt === "supplementary") {
+        attemptLabel = "Supp";
+        isSupp = true;
+      } else if (prevMark.attempt === "re-take") {
+        attemptLabel = "Retake";
+      }
+    }
+
+      sheet.getRow(r).getCell(4).value = attemptLabel;
+
       sheet.getRow(r).getCell(1).value = r - 16;
       sheet.getRow(r).getCell(2).value = student.regNo;
       sheet.getRow(r).getCell(3).value = student.name.toUpperCase();
       sheet.getRow(r).getCell(3).font = { name: fontName, size: 8 };
-      sheet.getRow(r).getCell(4).value = isSupp ? "Supp" : "1st";
+      // sheet.getRow(r).getCell(4).value = isSupp ? "Supp" : "1st";
 
-            if (isSupp && prevMark) {
+      if ((isSupp || isSpecial) && prevMark) {
         row.getCell(5).value = prevMark.cat1Raw; row.getCell(6).value = prevMark.cat2Raw; 
         row.getCell(7).value = prevMark.cat3Raw; row.getCell(9).value = prevMark.assgnt1Raw;
         row.getCell(13).value = prevMark.practicalRaw;
+
+        for (let c = 5; c <= 13; c++) {
+          const cell = row.getCell(c);
+          cell.fill = greyFill;
+          cell.protection = { locked: true };
+        }
       }
     }
 
@@ -242,7 +266,10 @@ const examFormula = `${q1} + IFERROR(LARGE(${others}, 1), 0) + IFERROR(LARGE(${o
 sheet.getCell(`T${r}`).value = { formula: `IF(${isRowEmpty}, "", ${examFormula})` };
 
     sheet.getCell(`U${r}`).value = { formula: `IF(${isRowEmpty}, "", ROUND(N${r}+T${r}, 0))` };
-    sheet.getCell(`W${r}`).value = { formula: `IF(${isRowEmpty}, "", IF(D${r}="Supp", MIN(${settings.passMark}, IF(V${r}<>"", V${r}, U${r})), IF(V${r}<>"", V${r}, U${r})))` };
+    // const passMark = settings.passMark;
+    const {passMark} = settings;
+    sheet.getCell(`W${r}`).value = { formula: `IF(${isRowEmpty}, "", IF(D${r}="Supp", MIN(${passMark}, IF(V${r}<>"", V${r}, U${r})), IF(V${r}<>"", V${r}, U${r})))` };
+    // sheet.getCell(`W${r}`).value = { formula: `IF(${isRowEmpty}, "", IF(D${r}="Supp", MIN(${settings.passMark}, IF(V${r}<>"", V${r}, U${r})), IF(V${r}<>"", V${r}, U${r})))` };
     // Grade Nesting
     const sortedScale = [...(settings.gradingScale || [])].sort((a, b) => a.min - b.min);
     let gradeIfs = `"E"`;

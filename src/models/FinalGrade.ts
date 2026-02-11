@@ -19,41 +19,28 @@ export interface IFinalGrade extends Document {
 const schema = new Schema<IFinalGrade>(
   {
     student: { type: Schema.Types.ObjectId, ref: "Student", required: true },
-    programUnit: { type: Schema.Types.ObjectId, ref: "ProgramUnit", required: true },
-    academicYear: {
-      type: Schema.Types.ObjectId,
-      ref: "AcademicYear",
-      required: true,
+    programUnit: { type: Schema.Types.ObjectId,  ref: "ProgramUnit", required: true, },
+    academicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true,  },
+    institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true,
     },
-    institution: {
-      type: Schema.Types.ObjectId,
-      ref: "Institution",
-      required: true,
-    },
-    semester: {
-      type: Schema.Types.Mixed,
-      enum: ["SEMESTER 1", "SEMESTER 2", "SEMESTER 3"], // or Number: 1, 2, 3
+    semester: { type: Schema.Types.Mixed, enum: ["SEMESTER 1", "SEMESTER 2", "SEMESTER 3"], // or Number: 1, 2, 3
       required: true,
     },
 
     totalMark: { type: Number, required: true },
     grade: { type: String, required: true },
     points: Number,
-    status: {
-      type: String,
-      enum: ["PASS", "SUPPLEMENTARY", "RETAKE", "INCOMPLETE"],
+    status: {  type: String, enum: ["PASS", "SUPPLEMENTARY", "RETAKE", "INCOMPLETE", "SPECIAL"],
       required: true,
     },
-    attemptType: {
-      type: String,
-      enum: ["1ST_ATTEMPT", "SPECIAL", "SUPPLEMENTARY", "RETAKE", "RE_RETAKE"],
+    attemptType: { type: String, enum: ["1ST_ATTEMPT", "SPECIAL", "SUPPLEMENTARY", "RETAKE", "RE_RETAKE"],
       default: "1ST_ATTEMPT",
       required: true,
     },
     attemptNumber: { type: Number, default: 1 },
     cappedBecauseSupplementary: { type: Boolean, default: false },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 schema.index({ student: 1, academicYear: 1 });

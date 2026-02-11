@@ -6,12 +6,20 @@ import AcademicYear from "../models/AcademicYear";
 import Student from "../models/Student";
 import InstitutionSettings from "../models/InstitutionSettings";
 
-const getLetterGrade = (mark: number): string => {
-  if (mark >= 69.5) return "A";
-  if (mark >= 59.5) return "B";
-  if (mark >= 49.5) return "C";
-  if (mark >= 39.5) return "D";
-  return "E";
+const getLetterGrade = (mark: number, settings: any): string => {
+  if (!settings || !settings.gradingScale) {
+    // Fallback if settings are missing
+    if (mark >= 69.5) return "A";
+    if (mark >= 59.5) return "B";
+    if (mark >= 49.5) return "C";
+    if (mark >= 39.5) return "D";
+    return "E";
+  }
+
+  // Sort scale descending (e.g., 70, 60, 50...) to find the first match
+  const sortedScale = [...settings.gradingScale].sort((a, b) => b.min - a.min);
+  const matched = sortedScale.find((s) => mark >= s.min);
+  return matched ? matched.grade : settings.failingGrade || "E";
 };
 
 export const calculateStudentStatus = async (
@@ -21,7 +29,8 @@ export const calculateStudentStatus = async (
   yearOfStudy: number = 1
 ) => {
   const settings = await InstitutionSettings.findOne().lean();
-  
+  if (!settings) throw new Error("Institution settings not found. Please configure grading scales.");
+
   let displayYearName = academicYearName;
  if (!displayYearName || displayYearName === "N/A") {
     const latestGrade = await FinalGrade.findOne({ student: studentId })
@@ -33,8 +42,8 @@ export const calculateStudentStatus = async (
   }
 
   const rules = {
-    passMark: settings?.passMark || 39.5,
-    retakeLimit: settings?.retakeThreshold || 5 
+    passMark: settings.passMark,
+    retakeLimit: settings.retakeThreshold || 5 
   };
   
   // const yearDoc = await AcademicYear.findOne({ year: academicYearName });
@@ -130,7 +139,8 @@ const unitResults = new Map<string, {
       passedCount++;
 
       const numericMark = record.totalMark || 0;
-      const letterGrade = getLetterGrade(numericMark);
+      // const letterGrade = getLetterGrade(numericMark);
+      const letterGrade = getLetterGrade(numericMark, settings);
       
       passedUnits.push({
         code: unitCode,

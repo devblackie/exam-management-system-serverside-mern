@@ -17,7 +17,6 @@ import programsRoutes from "./routes/programs";
 import unitsRoutes from "./routes/units";
 import coordinatorRoutes from "./routes/coordinator";
 import marksRoutes from "./routes/marks";
-import reportsRoutes from "./routes/reports"; // ← UNCOMMENTED & ADDED
 import institutionsRoutes from "./routes/institutions";
 import studentsRoutes from "./routes/students";
 import academicYearsRoutes from "./routes/academicYears";
@@ -94,7 +93,6 @@ app.use("/programs", programsRoutes);
 app.use("/units", unitsRoutes);
 app.use("/coordinator", coordinatorRoutes);
 app.use("/marks", marksRoutes);
-app.use("/reports", reportsRoutes);
 app.use("/institutions", institutionsRoutes);
 app.use("/students", studentsRoutes);
 app.use("/academic-years", academicYearsRoutes);

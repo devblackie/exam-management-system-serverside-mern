@@ -4,11 +4,8 @@ import mongoose from "mongoose";
 import Student from "../models/Student";
 import FinalGrade from "../models/FinalGrade";
 import {
-  AuthenticatedRequest,
-  requireAuth,
-  requireRole,
+  AuthenticatedRequest,requireAuth, requireRole,
 } from "../middleware/auth";
-import { generateStudentTranscript } from "../services/pdfGenerator";
 import { asyncHandler } from "../middleware/asyncHandler";
 import Mark from "../models/Mark";
 import Unit from "../models/Unit";
@@ -116,9 +113,7 @@ router.get(
 
     res.json({
       student: {
-        _id: student._id,
-        name: student.name,
-        regNo: student.regNo,
+        _id: student._id, name: student.name, regNo: student.regNo,
         programId: (student.program as any)?._id || student.program,
         programName: (student.program as any)?.name,
         currentYear: student.currentYearOfStudy || 1, // Student's actual level
@@ -226,38 +221,23 @@ router.post(
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const {
-      regNo,
-      unitCode,
-      academicYear,
-      cat1,
-      cat2,
-      cat3,
-      assignment1,
-      assignment2,
-      assignment3,
-      examQ1,
-      examQ2,
-      examQ3,
-      examQ4,
-      examQ5,
+      regNo, unitCode, academicYear,
+      cat1, cat2, cat3,
+      assignment1, practicalRaw,
+      examQ1, examQ2, examQ3, examQ4, examQ5,
+      attempt,
     } = req.body;
 
     if (!regNo || !unitCode || !academicYear) {
-      return res
-        .status(400)
-        .json({ error: "regNo, unitCode, and academicYear are required" });
+      return res.status(400).json({ error: "regNo, unitCode, and academicYear are required" });
     }
 
-    const student = await Student.findOne({
-      regNo: { $regex: `^${regNo}$`, $options: "i" },
-    });
+    const student = await Student.findOne({ regNo: { $regex: `^${regNo}$`, $options: "i" },});
     const unitDoc = await Unit.findOne({ code: unitCode });
     const yearDoc = await AcademicYear.findOne({ year: academicYear });
 
     if (!student || !unitDoc || !yearDoc) {
-      return res
-        .status(404)
-        .json({ error: "Student, Unit, or Academic Year not found" });
+      return res.status(404).json({ error: "Student, Unit, or Academic Year not found" });
     }
 
     const programUnit = await ProgramUnit.findOne({
@@ -265,57 +245,54 @@ router.post(
       unit: unitDoc._id,
     });
     if (!programUnit) {
-      return res
-        .status(400)
-        .json({ error: `Unit ${unitCode} is not linked to program.` });
+      return res.status(400).json({ error: `Unit ${unitCode} is not linked to program.` });
     }
 
-    // --- Math Calculation ---
-    const cats = [cat1, cat2, cat3].filter(
-      (v) => v !== undefined && v !== "" && v !== null,
-    );
-    const catAvg =
-      cats.length > 0
-        ? cats.reduce((a, b) => Number(a) + Number(b), 0) / cats.length
-        : 0;
-    const assgns = [assignment1, assignment2, assignment3].filter(
-      (v) => v !== undefined && v !== "" && v !== null,
-    );
-    const assgnAvg =
-      assgns.length > 0
-        ? assgns.reduce((a, b) => Number(a) + Number(b), 0) / assgns.length
-        : 0;
+    const previousMarks = await Mark.find({
+      student: student._id,
+      programUnit: programUnit._id,
+    }).sort({ createdAt: 1 });
 
-    const caTotal30 = Number((catAvg + assgnAvg).toFixed(2));
-    const examTotal70 = [examQ1, examQ2, examQ3, examQ4, examQ5].reduce(
-      (sum, q) => sum + (Number(q) || 0),
-      0,
-    );
-    const finalAgreed = Math.round(caTotal30 + examTotal70);
+    let detectedAttempt = "1st";
+    let isSpecial = false;
 
-    // --- Update Database ---
+    if (previousMarks.length > 0) {
+      const lastMark = previousMarks[previousMarks.length - 1];
+
+      // If the last mark was flagged as "Special" but never completed, keep it Special
+      // Or if the coordinator explicitly requested a Special Exam
+      if (req.body.isSpecial || lastMark.attempt === "special") {
+        detectedAttempt = "special";
+        isSpecial = true;
+      }
+      // If student previously had a 1st attempt and failed -> Supplementary
+      else if (previousMarks.length === 1) {
+        detectedAttempt = "supplementary";
+      }
+      // If student failed a Supp -> Retake
+      else if (previousMarks.length === 2) {
+        detectedAttempt = "re-take";
+      }
+      // If student failed a Retake -> Re-Retake
+      else if (previousMarks.length >= 3) {
+        detectedAttempt = "re-retake"; // Note: Ensure "re-retake" is in your Mark model enum
+      }
+    }
+
     const mark = await Mark.findOneAndUpdate(
+      { student: student._id, programUnit: programUnit._id, academicYear: yearDoc._id, },
       {
-        student: student._id,
-        programUnit: programUnit._id,
-        academicYear: yearDoc._id,
-      },
-      {
-        cat1Raw: Number(cat1) || 0,
-        cat2Raw: Number(cat2) || 0,
+        cat1Raw: Number(cat1) || 0, cat2Raw: Number(cat2) || 0,
         cat3Raw: cat3 ? Number(cat3) : undefined,
-        assgnt1Raw: Number(assignment1) || 0,
-        examQ1Raw: Number(examQ1) || 0,
-        examQ2Raw: Number(examQ2) || 0,
-        examQ3Raw: Number(examQ3) || 0,
-        examQ4Raw: Number(examQ4) || 0,
-        examQ5Raw: Number(examQ5) || 0,
-        caTotal30,
-        examTotal70,
-        agreedMark: finalAgreed,
+        assgnt1Raw: Number(assignment1) || 0, practicalRaw: Number(practicalRaw) || 0, examQ1Raw: Number(examQ1) || 0,
+        examQ2Raw: Number(examQ2) || 0, examQ3Raw: Number(examQ3) || 0,
+        examQ4Raw: Number(examQ4) || 0, examQ5Raw: Number(examQ5) || 0,
+        attempt: detectedAttempt,
+        isSpecial: isSpecial,
+        isSupplementary: detectedAttempt === "supplementary",
+        isRetake: detectedAttempt.includes("re-take"),
         uploadedBy: req.user._id,
         uploadedAt: new Date(),
-        attempt: "1st",
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     ).populate({
@@ -329,66 +306,12 @@ router.post(
       coordinatorReq: req,
     });
     // console.log("[SUCCESS] Marks saved & grade recalculated:", {
-    //   regNo,
-    //   unit: unitCode,
-    //   year: academicYear,
-    //   finalGrade: gradeResult.grade,
-    //   status: gradeResult.status,
-    // });
+    //   regNo, unit: unitCode,year: academicYear,finalGrade: gradeResult.grade,status: gradeResult.status, });
+    //   });
 
-    res.json({
-      success: true,
-      data: {
-        caTotal: caTotal30,
-        examTotal: examTotal70,
-        finalMark: finalAgreed,
-        grade: gradeResult.grade,
-      },
-    });
-  }),
-);
+    // res.json({ success: true, data: { caTotal: gradeResult.caTotal30, examTotal: gradeResult.examTotal70, finalMark: gradeResult.finalMark, grade: gradeResult.grade, status: gradeResult.status,},});
 
-// Full Transcript Download
-router.get(
-  "/transcript",
-  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    // router.get("/transcript", requireAuth, asyncHandler(async (req: AuthenticatedRequest , res:Response) => {
-    let { regNo } = req.query;
-    if (!regNo || typeof regNo !== "string") {
-      return res.status(400).json({ error: "regNo required" });
-    }
-    regNo = decodeURIComponent(regNo);
-
-    console.log("[TRANSCRIPT] Generating for:", regNo);
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Pragma", "no-cache");
-
-    await generateStudentTranscript(regNo, res);
-  }),
-);
-
-// Transcript for Specific Year
-router.get(
-  "/transcript/year",
-  requireAuth,
-  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    let { regNo, year } = req.query;
-    if (
-      !regNo ||
-      !year ||
-      typeof regNo !== "string" ||
-      typeof year !== "string"
-    )
-      return res.status(400).json({ error: "regNo and year required" });
-
-    regNo = decodeURIComponent(regNo);
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Cache-Control", "no-cache");
-
-    await generateStudentTranscript(regNo, res, year);
+    res.json({ success: true, data: gradeResult });
   }),
 );
 
