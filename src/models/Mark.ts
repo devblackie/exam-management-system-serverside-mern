@@ -82,6 +82,7 @@ export interface IMark extends Document {
   internalExaminerMark: number; // The "INTERNAL EXAMINER MARKS /100"
   agreedMark: number; // The "AGREED MARKS /100" (The final score used for grading)
   attempt: string; // "1st", "re-take", "supplementary"
+  examMode: "standard" | "mandatory_q1";
 
   // --- METADATA ---
   isSupplementary: boolean; // Derived from attempt field
@@ -89,7 +90,7 @@ export interface IMark extends Document {
   isSpecial: boolean; // Special exam flag
   isMissingCA: boolean; // Missing CA flag
   remarks?: string; // Any remarks or notes
-  
+
   uploadedBy: mongoose.Types.ObjectId; // coordinator who entered
   uploadedAt: Date;
 }
@@ -138,6 +139,11 @@ const schema = new Schema<IMark>(
       type: String,
       enum: ["1st", "re-take", "supplementary", "special"],
       default: "1st",
+    },
+    examMode: {
+      type: String,
+      enum: ["standard", "mandatory_q1"],
+      default: "standard"
     },
 
     // METADATA
