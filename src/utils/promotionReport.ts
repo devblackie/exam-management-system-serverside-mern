@@ -1,29 +1,13 @@
 // serverside/src/utils/promotionReport.ts
 import {
-  Document,
-  Packer,
-  Paragraph,
-  TextRun,
-  Table,
-  TableRow,
-  TableCell,
-  WidthType,
-  TableLayoutType,
-  AlignmentType,
-  HeadingLevel,
-  BorderStyle,
-  ImageRun,
-  VerticalAlign,
+  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType,
+  TableLayoutType, AlignmentType, HeadingLevel, BorderStyle, ImageRun, VerticalAlign,
 } from "docx";
 import config from "../config/config";
 
 export interface PromotionData {
-  programName: string;
-  academicYear: string;
-  yearOfStudy: number;
-  eligible: any[];
-  blocked: any[];
-  logoBuffer: Buffer;
+  programName: string;  academicYear: string;  yearOfStudy: number;  
+  eligible: any[];  blocked: any[];  logoBuffer: Buffer;
 }
 
 const formatStudentName = (fullName: string): string => {

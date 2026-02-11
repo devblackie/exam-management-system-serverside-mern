@@ -1,4 +1,4 @@
-// src/routes/institutions.ts → FINAL & PERFECT (WORKS 100%)
+// src/routes/institutions.ts 
 
 import { Request, Response, Router } from "express";
 import Institution from "../models/Institution";

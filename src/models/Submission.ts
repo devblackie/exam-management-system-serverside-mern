@@ -1,3 +1,4 @@
+// serverside/src/models/Submission.ts
 import mongoose, { Schema, Document } from "mongoose";
 
 export type SubmissionStatus = "pending" | "accepted" | "rejected";
