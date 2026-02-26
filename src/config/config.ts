@@ -14,6 +14,7 @@ const config = Object.freeze({
   appName: process.env.APP_NAME || "Exam System", 
   instName: process.env.INST_NAME || "My Institution",
   schoolName: process.env.SCHOOL_NAME || "My School",
+  departmentName: process.env.DEPARTMENT_NAME || "My Department",
   registrar: process.env.REGISTRAR || "Registrar Office",
   postalAddress: process.env.POSTAL_ADDRESS || "Postal Address",
   cellPhone: process.env.CELL_PHONE || "Cell Phone",

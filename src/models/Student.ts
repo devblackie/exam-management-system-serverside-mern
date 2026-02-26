@@ -1,49 +1,66 @@
-// src/models/Student
+// src/models/Student.ts
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface IStudent extends Document {
   institution: mongoose.Types.ObjectId;
-  regNo: string;                   // e.g. "SC/ICT/001/2023"
+  regNo: string;
   name: string;
-  email?: string;
-  phone?: string;
   program: mongoose.Types.ObjectId;
+  programType: string; // "B.Sc", "B.Ed", "Diploma"
+  entryType: "Direct" | "Mid-Entry-Y2" | "Mid-Entry-Y3" | "Mid-Entry-Y4";
   currentYearOfStudy: number;
-  currentSemester: 1 | 2 | 3;
-  // admissionAcademicYear: string;   // e.g. "2023/2024"
+  currentSemester: number;
+  status: "active" | "graduated" | "discontinued" | "deregistered" | "repeat";
   admissionAcademicYear: mongoose.Types.ObjectId;
-  status: "active" | "inactive" | "graduated" | "suspended" | "deferred";
+
+  // ENG 22.b: Track attempts per unit (Limit: 5)
+  unitAttemptRegistry: {
+    unitId: mongoose.Types.ObjectId;
+    attempts: {
+      attemptNumber: number;
+      mark: number;
+      passed: boolean;
+      type: string;
+    }[];
+  }[];
+
+  // ENG 25.b: Store snapshots of each year for final classification
+  academicHistory: {
+    yearOfStudy: number;
+    annualMeanMark: number;
+    weightedContribution: number;
+    failedUnitsCount: number;
+  }[];
 }
 
 const schema = new Schema<IStudent>({
-  institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true ,index: true},
-  regNo: { type: String, required: true, uppercase: true, trim: true },
-  name: { type: String, required: true, trim: true },
-  email: { type: String, lowercase: true, trim: true },
-  phone: String,
+  institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true },
+  regNo: { type: String, required: true, uppercase: true },
+  name: { type: String, required: true },
   program: { type: Schema.Types.ObjectId, ref: "Program", required: true },
-  currentYearOfStudy: { type: Number, min: 1, default: 1 },
-  currentSemester: { type: Number, enum: [1, 2, 3], default: 1 },
-  // admissionAcademicYear: { type: String, required: true }, // e.g. "2023/2024"
-  admissionAcademicYear: { 
-    type: Schema.Types.ObjectId, 
-    ref: "AcademicYear", 
-    required: true // Now it must point to a valid year
-  },
-  status: {
-    type: String,
-    enum: ["active", "inactive", "graduated", "suspended", "deferred"],
-    default: "active"
-  },
+  programType: { type: String, required: true },
+  entryType: { type: String, default: "Direct" },
+  currentYearOfStudy: { type: Number, default: 1 },
+  currentSemester: { type: Number, default: 1 },
+  admissionAcademicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true },
+  status: { type: String, default: "active" },
+  unitAttemptRegistry: [{
+    unitId: { type: Schema.Types.ObjectId, ref: "Unit" },
+    attempts: [{ attemptNumber: Number, mark: Number, passed: Boolean, type: String }]
+  }],
+  academicHistory: [{
+    yearOfStudy: Number,
+    annualMeanMark: Number,
+    weightedContribution: Number,
+    failedUnitsCount: Number
+  }]
 }, { timestamps: true });
 
-// Critical: regNo must be unique per institution
 schema.index({ institution: 1, regNo: 1 }, { unique: true });
-// Fast search by regNo (most common lookup)
 schema.index({ regNo: 1 });
-// For student history reports
 schema.index({ institution: 1, program: 1, admissionAcademicYear: 1 });
-
 export default mongoose.model<IStudent>("Student", schema);
 
 // set up the Mongoose Indexes to optimize those multi-tenant queries?
+
+

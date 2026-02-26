@@ -9,6 +9,7 @@ export interface IFinalGrade extends Document {
   semester: string;
   totalMark: number;
   grade: string;
+  remarks?: string;
   points?: number;
   status: "PASS" | "SUPPLEMENTARY" | "RETAKE" | "INCOMPLETE";
   attemptType: "1ST_ATTEMPT" | "SPECIAL" | "SUPPLEMENTARY" | "RETAKE" | "RE_RETAKE";
@@ -29,6 +30,7 @@ const schema = new Schema<IFinalGrade>(
 
     totalMark: { type: Number, required: true },
     grade: { type: String, required: true },
+    remarks : {type: String},
     points: Number,
     status: {  type: String, enum: ["PASS", "SUPPLEMENTARY", "RETAKE", "INCOMPLETE", "SPECIAL"],
       required: true,
@@ -47,3 +49,5 @@ schema.index({ student: 1, academicYear: 1 });
 schema.index({ institution: 1, academicYear: 1, status: 1 });
 
 export default mongoose.model<IFinalGrade>("FinalGrade", schema);
+
+

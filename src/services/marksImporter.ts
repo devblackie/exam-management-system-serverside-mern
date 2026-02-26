@@ -32,10 +32,16 @@ export async function importMarksFromBuffer(
     const workbook = xlsx.read(buffer, { type: "buffer" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
+    const modeIndicator = sheet["E10"]?.v?.toString().toUpperCase() || "";
+    let detectedUnitType: "theory" | "lab" | "workshop" = "theory";
+    
+    if (modeIndicator.includes("LAB")) detectedUnitType = "lab";
+    if (modeIndicator.includes("WORKSHOP")) detectedUnitType = "workshop";
+
     // 1. Meta Data Extraction
     // Unit Code: H12, Academic Year: F8 (as merged cells)
     const unitCode = sheet["H12"]?.v?.toString().trim().toUpperCase();
-    const academicYearText = sheet["E8"]?.v?.toString() || ""; 
+    const academicYearText = sheet["D8"]?.v?.toString() || ""; 
 
     // console.log(`[Importer] Checking E8: "${academicYearText}", H12: "${unitCode}"`);
 
@@ -43,7 +49,9 @@ export async function importMarksFromBuffer(
     const academicYearStr = yearMatch ? yearMatch[0] : null;
 
     if (!unitCode || !academicYearStr) {
-      throw new Error(`Invalid Template: Missing Unit Code (H12) or Academic Year (F8).`);
+      throw new Error(
+        `Invalid Template: Missing Unit Code (H12) or Academic Year (D8). Found Unit: ${unitCode}, Year: ${academicYearStr}`,
+      );
     }
 
     // 2. Parse Rows starting from Row 17 (range: 16)
@@ -60,6 +68,7 @@ export async function importMarksFromBuffer(
     const programUnits = await ProgramUnit.find({ institution: institutionId }).populate("unit").lean();
     const programUnitMap = new Map(programUnits.map((pu: any) => [`${pu.program.toString()}_${pu.unit.code.toUpperCase()}`, pu]));
 
+    
     // 4. Processing Mapping (A=0, B=1, C=2...)
     for (const [index, row] of rawRows.entries()) {
       const regNo = row[1]?.toString().trim().toUpperCase(); // Col B
@@ -140,6 +149,8 @@ export async function importMarksFromBuffer(
             isSpecial: finalAttempt === "special",
             isSupplementary: finalAttempt === "supplementary",
             isRetake: finalAttempt.includes("re-take"),
+
+            unitType: detectedUnitType,
             examMode: sheet["O16"]?.v === 30 ? "mandatory_q1" : "standard",
           };
 

@@ -44,8 +44,10 @@ app.disable("x-powered-by");
 
 const allowedOrigins = [
   config.frontendUrl,
+  "http://localhost:8000",
   "http://127.0.0.1:3000",
   "http://192.168.1.10:3000",
+  "http://10.105.149.124:3000",
 ];
 app.use(
   cors({

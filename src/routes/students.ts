@@ -270,72 +270,45 @@ router.post(
   requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { students } = req.body;
-    if (!Array.isArray(students) || students.length === 0) {
-      return res.status(400).json({ message: "No students provided" });
-    }
-
+    if (!Array.isArray(students) || students.length === 0) return res.status(400).json({ message: "No students provided" });
+    
     const institutionId = req.user.institution;
 
-    // CLEAN & NORMALIZE INPUT
+    // 1. CLEAN & NORMALIZE INPUT
     const incoming = students.map((s) => ({
       regNo: s.regNo?.trim().toUpperCase(),
       name: s.name?.trim(),
       rawProgram: s.program?.trim(),
       normalizedProgram: normalizeProgramName(s.program?.trim() || ""),
-      yearOfStudy: Number(s.yearOfStudy) || 1,
-     academicYearId: s.academicYearId, 
-      admissionAcademicYearString: s.admissionAcademicYear || "2024/2025",
+      yearOfStudy: Number(s.currentYearOfStudy) || 1, // Note: using currentYearOfStudy from frontend
+      academicYearId: s.academicYearId,
+      admissionAcademicYearString: s.admissionAcademicYearString || "2024/2025",
     }));
 
     // Validate required fields (Reg No, Name, Program) - unchanged
-    const invalid = incoming.filter(
-      (s) => !s.regNo || !s.name || !s.rawProgram
-    );
-    if (invalid.length > 0) {
-      return res
-        .status(400)
-        .json({ message: "Missing Reg No, Name, or Program" });
-    }
-
-    // --- STEP 1: LOOKUP PROGRAM IDs (Unchanged) ---
-  
-
-    // Get unique normalized program names
+    const invalid = incoming.filter((s) => !s.regNo || !s.name || !s.rawProgram);
+    if (invalid.length > 0) return res.status(400).json({ message: "Missing Reg No, Name, or Program" });
+    
+    // 2. LOOKUP PROGRAMS (Retrieve Full Objects, not just IDs)
     const normNames = [...new Set(incoming.map((s) => s.normalizedProgram))];
-    // Fetch all programs for this institution
     const programs = await Program.find({ institution: institutionId }).lean();
-    // Build a normalized map
-    const programMap = new Map<string, string>();
-    for (const p of programs) {
-      const norm = normalizeProgramName(p.name);
-      programMap.set(norm, p._id.toString());
-    }
+    const programNameMap = new Map(
+      programs.map((p) => [normalizeProgramName(p.name), p])
+    );
+    const programIdMap = new Map(
+      programs.map((p) => [p._id.toString(), p])
+    );
 
     // Identify missing programs
-    const missingPrograms: any[] = [];
-    for (const n of normNames) {
-      if (!programMap.has(n)) {
-        missingPrograms.push(n);
-      }
-    }
-    if (missingPrograms.length > 0) {
-      return res.status(400).json({
-        message: "Some programs not found",
-        notFound: missingPrograms,
-      });
-    }
+    const missingPrograms = [...new Set(incoming.map(s => s.rawProgram))]
+      .filter(raw => !programIdMap.has(raw) && !programNameMap.has(normalizeProgramName(raw)));
 
-    // --- STEP 3: LOOKUP ACADEMIC YEAR IDs (NEW LOGIC) ---
-
-    // Logic: If frontend sent academicYearId, we use it. If not, we find/create by string.
+    if (missingPrograms.length > 0) return res.status(400).json({ message: "Programs not found", notFound: missingPrograms });
+    
+    // 3. RESOLVE ACADEMIC YEARS
     const academicYearMap = new Map<string, mongoose.Types.ObjectId>();
-
-    // Filter out rows that don't have an ID already and need string resolution
-    const yearsToResolve = incoming
-      .filter(s => !s.academicYearId)
-      .map(s => s.admissionAcademicYearString);
-
-const uniqueYearStrings = [...new Set(yearsToResolve)];
+    const yearsToResolve = incoming.filter(s => !s.academicYearId).map(s => s.admissionAcademicYearString);
+    const uniqueYearStrings = [...new Set(yearsToResolve)];
 
       // Use insertMany (or bulkWrite) for efficiency
      if (uniqueYearStrings.length > 0) {
@@ -344,85 +317,120 @@ const uniqueYearStrings = [...new Set(yearsToResolve)];
         return {
           updateOne: {
             filter: { year: yearStr, institution: institutionId },
-            update: {
-              $setOnInsert: {
-                year: yearStr,
-                institution: institutionId,
-                startDate: new Date(`${startYear}-08-01`),
-                endDate: new Date(`${endYear}-07-31`),
-                isCurrent: false,
-              },
-            },
+            update: { $setOnInsert: { year: yearStr, institution: institutionId, startDate: new Date(`${startYear}-08-01`), endDate: new Date(`${endYear}-07-31`), isCurrent: false }},
             upsert: true,
           },
         };
       });
-
-          await AcademicYear.bulkWrite(bulkOps);
-      const resolvedYears = await AcademicYear.find({
-        institution: institutionId,
-        year: { $in: uniqueYearStrings },
-      }).lean();
-
-      for (const y of resolvedYears) {
-        academicYearMap.set(y.year, y._id as mongoose.Types.ObjectId);
-      }
+      await AcademicYear.bulkWrite(bulkOps);
+      const resolvedYears = await AcademicYear.find({ institution: institutionId, year: { $in: uniqueYearStrings }}).lean();
+      resolvedYears.forEach(y => academicYearMap.set(y.year, y._id as mongoose.Types.ObjectId));
     }
 
-    // --- STEP 4: DETECT EXISTING STUDENTS (Unchanged) ---
+    // 4. DETECT EXISTING STUDENTS
     const regNos = incoming.map((s) => s.regNo);
-    const existing = await Student.find({
-      regNo: { $in: regNos },
-      institution: institutionId,
-    }).select("regNo").lean();
-
+    const existing = await Student.find({ regNo: { $in: regNos }, institution: institutionId }).select("regNo").lean();
     const existingRegNos = new Set(existing.map((s) => s.regNo));
 
     // --- STEP 5: BUILD FINAL PAYLOAD  ---
     const toCreate = incoming
       .filter((s) => !existingRegNos.has(s.regNo)) // Only include non-existing students
       .map((s) => {
-        // Resolve ID: Use academicYearId if provided, else look up in the map
-        let finalYearId: mongoose.Types.ObjectId;
+        const progDoc = programIdMap.get(s.rawProgram) || programNameMap.get(s.normalizedProgram)!;
         
-        if (s.academicYearId && mongoose.Types.ObjectId.isValid(s.academicYearId)) {
-          finalYearId = new mongoose.Types.ObjectId(s.academicYearId);
-        } else {
-          finalYearId = academicYearMap.get(s.admissionAcademicYearString)!;
-        }
+        // A. Program Type (B.Sc vs B.Ed vs Diploma)
+        let pType = "B.Sc";
+        if (progDoc.name.toLowerCase().includes("education")) pType = "B.Ed";
+        else if (progDoc.name.toLowerCase().includes("diploma")) pType = "Diploma";
 
+        // B. Entry Type Detection (Direct vs Mid-Entry)
+        let eType: "Direct" | "Mid-Entry-Y2" | "Mid-Entry-Y3" | "Mid-Entry-Y4" = "Direct";
+        if (s.yearOfStudy === 2) eType = "Mid-Entry-Y2";
+        else if (s.yearOfStudy === 3) eType = "Mid-Entry-Y3";
+        else if (s.yearOfStudy === 4) eType = "Mid-Entry-Y4";
+
+        // C. Academic Year ID
+        let finalYearId: mongoose.Types.ObjectId;
+        if (s.academicYearId && mongoose.Types.ObjectId.isValid(s.academicYearId)) finalYearId = new mongoose.Types.ObjectId(s.academicYearId);
+        else { finalYearId = academicYearMap.get(s.admissionAcademicYearString)!;}
+        
         return {
-          regNo: s.regNo,
-          name: s.name,
-          program: programMap.get(s.normalizedProgram)!,
-          currentYearOfStudy: s.yearOfStudy,
-          admissionAcademicYear: finalYearId,
-          institution: institutionId,
-          status: "active",
+          regNo: s.regNo, name: s.name, institution: institutionId, program: progDoc._id, programType: pType, entryType: eType,
+          currentYearOfStudy: s.yearOfStudy, admissionAcademicYear: finalYearId, status: "active", initialRegistrationDate: new Date(),
         };
   });
 
-    // --- STEP 6: INSERT AND RESPOND (Unchanged) ---
-    if (toCreate.length > 0) {
-      await Student.insertMany(toCreate);
-
-      await logAudit(req, {
-        action: "bulk_student_registration",
-        details: { count: toCreate.length }
-      });
-
-      return res.status(200).json({
-        message: `${toCreate.length} students registered successfully.`,
-        registered: toCreate.map((s) => s.regNo),
-        alreadyRegistered: Array.from(existingRegNos),
-      });
-    }
+  try {
+    const result = await Student.insertMany(toCreate, { ordered: false });
 
     return res.status(200).json({
-      message: "All students in the list are already registered.",
-      alreadyRegistered: Array.from(existingRegNos),
+      message: `${result.length} students registered successfully.`,
+      registered: result.map((r) => r.regNo),
     });
+    
+  } catch (error: any) {
+    const insertedDocs = error.insertedDocs || [];
+    const writeErrors = error.writeErrors || [];
+
+    const duplicateRegNos = writeErrors.filter((err: any) => err.code === 11000).map((err: any) => err.op.regNo);
+
+    return res.status(207).json({
+      // 207 Multi-Status
+      message: `${insertedDocs.length} registered, ${duplicateRegNos.length} skipped (duplicates).`,
+      registered: insertedDocs.map((d: any) => d.regNo),
+      alreadyRegistered: duplicateRegNos,
+    });
+    
+  }
   })
 );
 
+router.post("/bulk/graduate", requireAuth, requireRole("coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { studentIds } = req.body; // Array of IDs
+  
+  const result = await Student.updateMany(
+    { _id: { $in: studentIds }, institution: req.user.institution },
+    { $set: { status: "graduated" } }
+  );
+
+  res.json({ message: `${result.modifiedCount} students marked as graduated.` });
+}));
+
+// A. DELETE SINGLE STUDENT
+router.delete("/:id", requireAuth, requireRole("admin"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const student = await Student.findOneAndDelete({ 
+    _id: req.params.id, 
+    institution: req.user.institution 
+  });
+  if (!student) return res.status(404).json({ message: "Student not found" });
+
+  await logAudit(req, { action: "delete_student", details: { regNo: student.regNo } });
+  res.json({ message: "Student deleted successfully" });
+}));
+
+
+// B. DELETE BY PROGRAM (e.g., if a program is decommissioned)
+router.delete("/bulk/by-program", requireAuth, requireRole("admin"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { programId } = req.body;
+  if (!programId) return res.status(400).json({ message: "Program ID required" });
+
+  const result = await Student.deleteMany({ 
+    program: programId, 
+    institution: req.user.institution 
+  });
+
+  await logAudit(req, { action: "bulk_delete_program_students", details: { programId, count: result.deletedCount } });
+  res.json({ message: `Deleted ${result.deletedCount} students from program.` });
+}));
+
+// C. CLEANUP GRADUATED STUDENTS (Move to an archive or delete)
+// Useful for removing old records after 10 years (ENG 19.d)
+router.delete("/bulk/cleanup-graduated", requireAuth, requireRole("admin"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const result = await Student.deleteMany({ 
+    status: "graduated", 
+    institution: req.user.institution 
+  });
+
+  res.json({ message: `Cleanup complete. ${result.deletedCount} records removed.` });
+}));
 export default router;

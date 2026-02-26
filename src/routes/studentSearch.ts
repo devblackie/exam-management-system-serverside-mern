@@ -3,9 +3,7 @@ import express, { Response } from "express";
 import mongoose from "mongoose";
 import Student from "../models/Student";
 import FinalGrade from "../models/FinalGrade";
-import {
-  AuthenticatedRequest,requireAuth, requireRole,
-} from "../middleware/auth";
+import { AuthenticatedRequest,requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import Mark from "../models/Mark";
 import Unit from "../models/Unit";
@@ -139,23 +137,33 @@ router.post(
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { markId, reason } = req.body;
+    const { markId, reason, undo = false } = req.body;
 
     if (!markId) {
       return res.status(400).json({ error: "Mark ID is required" });
     }
 
+    let updateData;
+    if (undo) {
+      // Revert to normal state
+      updateData = {
+        $set: { isSpecial: false, attempt: "1st", remarks: "Special Exam Revoked" },
+      };
+    } else {
+      // Set to Special state
+      // Validate reason for granting
+      const finalReason = ["Financial", "Compassionate"].includes(reason)
+        ? reason
+        : "Administrative";
+        
+      updateData = {
+        $set: { isSpecial: true, attempt: "special", remarks: `Special Granted: ${finalReason}` },
+      };
+    }
+
     // 1. Find the mark and update to Special status
     const mark = await Mark.findByIdAndUpdate(
-      markId,
-      {
-        $set: {
-          isSpecial: true,
-          attempt: "special",
-          remarks: reason || "Approved by Coordinator",
-        },
-      },
-      { new: true },
+      markId, updateData, { new: true },
     );
 
     if (!mark) {
@@ -164,16 +172,9 @@ router.post(
 
     // 2. Trigger Grade Recalculation
     // This will update FinalGrade status to 'SPECIAL' and Grade to 'I'
-    const gradeResult = await computeFinalGrade({
-      markId: mark._id as any,
-      coordinatorReq: req,
-    });
+    const gradeResult = await computeFinalGrade({ markId: mark._id as any, coordinatorReq: req,   });
 
-    res.json({
-      success: true,
-      message: "Special exam approved successfully",
-      newStatus: gradeResult.status,
-    });
+    res.json({ success: true, message: undo ? "Special exam revoked" : "Special exam approved", newStatus: gradeResult.status, });
   }),
 );
 
@@ -187,9 +188,7 @@ router.get(
 
     if (!regNo) return res.status(400).json({ error: "regNo required" });
 
-    const student = await Student.findOne({
-      regNo: { $regex: `^${regNo}$`, $options: "i" },
-    });
+    const student = await Student.findOne({ regNo: { $regex: `^${regNo}$`, $options: "i" }});
 
     if (!student) return res.status(404).json({ error: "Student not found" });
 
