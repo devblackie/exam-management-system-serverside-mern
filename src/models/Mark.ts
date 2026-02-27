@@ -1,11 +1,12 @@
 // src/models/Mark.ts
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema, Document, Query } from "mongoose";
 
 export interface IMark extends Document {
   institution: mongoose.Types.ObjectId;
   student: mongoose.Types.ObjectId;
   programUnit: mongoose.Types.ObjectId; // Links to the unit's curriculum config
   academicYear: mongoose.Types.ObjectId;
+  semester: "SEMESTER 1" | "SEMESTER 2" | "SEMESTER 3";
 
   // --- RAW CONTINUOUS ASSESSMENT SCORES ---
   // Based on the scoresheet breakdown: CATs out of 20, Assignments out of 10
@@ -42,7 +43,8 @@ export interface IMark extends Document {
   remarks?: string; // Any remarks or notes
 
   uploadedBy: mongoose.Types.ObjectId; // coordinator who entered
-  uploadedAt: Date;
+  uploadedAt: Date; 
+  deletedAt?:    Date;
 }
 
 const schema = new Schema<IMark>(
@@ -51,6 +53,7 @@ const schema = new Schema<IMark>(
     student: { type: Schema.Types.ObjectId, ref: "Student", required: true },
     programUnit: { type: Schema.Types.ObjectId, ref: "ProgramUnit", required: true, }, // IMPORTANT
     academicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true, },
+    semester: { type: String, enum: ["SEMESTER 1", "SEMESTER 2", "SEMESTER 3"], required: true, default: "SEMESTER 1" },
 
     // RAW CA SCORES (The system will derive the final CA/30 from these)
     cat1Raw: { type: Number, min: 0,  default: 0 },
@@ -83,11 +86,20 @@ const schema = new Schema<IMark>(
     remarks: { type: String },
     uploadedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
     uploadedAt: { type: Date, default: Date.now },
+    deletedAt: { type: Date, default: null },
+    
   },
   { timestamps: true }
 );
 
 // Unique index must be on the combination of Student, ProgramUnit, and AcademicYear
 schema.index({ student: 1, programUnit: 1, academicYear: 1 }, { unique: true });
+schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
+  // If the query specifically searches for deletedAt, don't override it
+  if (!this.getQuery().deletedAt) {
+    this.where({ deletedAt: null });
+  }
+  next();
+});
 
 export default mongoose.model<IMark>("Mark", schema);

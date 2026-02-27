@@ -7,8 +7,7 @@ export interface ConsolidatedData {
   programName: string; academicYear: string; yearOfStudy: number;
   students: any[]; marks: any[];
   offeredUnits: { code: string; name: string }[];
-  logoBuffer?: any;
-  institutionId?: string;
+  logoBuffer?: any; institutionId?: string;
 }
 
 export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Promise<Buffer> => {
@@ -78,10 +77,7 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
     sheet.getCell(subRow, colIdx).style = { alignment: { horizontal: "center", vertical: "middle", textRotation: 90 }, font: { bold: true, size: 8, name: fontName }, border: thinBorder };
   });
 
-
   // 3. STUDENT DATA (Row 11+)  
-
-
   const statsSummary = { PASS: 0, SUPPLEMENTARY: 0, "REPEAT YEAR": 0, "STAY OUT": 0, SPECIAL: 0, INCOMPLETE: 0, DISCONTINUED: 0, DEREGISTERED: 0 };
   students.sort((a, b) => (a.regNo || "").localeCompare(b.regNo || "")).forEach((student, index) => {
     const rIdx = 11 + index;

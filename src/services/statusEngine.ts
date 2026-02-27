@@ -153,35 +153,53 @@ export const previewPromotion = async (programId: string, yearToPromote: number,
 };
 
 export const promoteStudent = async (studentId: string) => {
-  const student = await Student.findById(studentId);
+  const student = await Student.findById(studentId).populate("program");
   if (!student) throw new Error("Student not found");
 
   const program = student.program as any;
+  const duration = program.durationYears || 4;
   const actualCurrentYear = student.currentYearOfStudy || 1;
-  const statusResult = await calculateStudentStatus( student._id, student.program, "N/A", actualCurrentYear );
-
-  // REGULATION ENG 15 (b/c): Must have passed ALL units to register for the final year(s)
-  // REGULATION ENG 18: Specials must be cleared before progression in most Engineering tracks
   
+  const statusResult = await calculateStudentStatus( student._id, student.program, "N/A", actualCurrentYear);
+
   if (statusResult?.status === "IN GOOD STANDING") {
-    const nextYear = actualCurrentYear + 1;
-
-    const yearWeight = getYearWeight(program.durationYears, student.entryType || "Direct", actualCurrentYear);
-
     const rawMean = parseFloat(statusResult.weightedMean);
+    const yearWeight = getYearWeight(program, student.entryType || "Direct", actualCurrentYear);
     const weightedContribution = rawMean * yearWeight;
 
+    const historyRecord = {
+      yearOfStudy: actualCurrentYear,
+      annualMeanMark: rawMean,
+      weightedContribution: weightedContribution,
+      unitsTakenCount: statusResult.summary.totalExpected,
+      failedUnitsCount: statusResult.summary.failed,
+      isRepeatYear: false
+    };
+
+    // CASE A: FINAL YEAR STUDENT (Graduation Path)
+    if (actualCurrentYear === duration) {
+      // Calculate Final Classification using the existing history + current year
+      const fullHistory = [...(student.academicHistory || []), historyRecord];
+      const finalWAA = fullHistory.reduce((acc, curr) => acc + (curr.weightedContribution || 0), 0);
+      
+      let classification = "PASS";
+      if (finalWAA >= 70) classification = "FIRST CLASS HONOURS";
+      else if (finalWAA >= 60) classification = "SECOND CLASS HONOURS (UPPER DIVISION)";
+      else if (finalWAA >= 50) classification = "SECOND CLASS HONOURS (LOWER DIVISION)";
+
+      await Student.findByIdAndUpdate(studentId, {
+        $set: { status: "graduand", finalWeightedAverage: finalWAA.toFixed(2), classification: classification, graduationYear: new Date().getFullYear() },
+        $push: { academicHistory: historyRecord }
+      });
+
+      return { success: true, message: `Student completed final year. Classified as ${classification}`, isGraduation: true };
+    }
+
+    // CASE B: NORMAL PROMOTION (N -> N+1)
+    const nextYear = actualCurrentYear + 1;
     await Student.findByIdAndUpdate(studentId, {
       $set: { currentYearOfStudy: nextYear, currentSemester: 1 },
-      $push: { promotionHistory: { from: actualCurrentYear, to: nextYear, date: new Date()},
-      academicHistory: {
-        yearOfStudy: actualCurrentYear,
-        annualMeanMark: rawMean,
-        weightedContribution: weightedContribution,
-        unitsTakenCount: statusResult.summary.totalExpected,
-        failedUnitsCount: statusResult.summary.failed,
-        isRepeatYear: false
-      } }
+      $push: { promotionHistory: { from: actualCurrentYear, to: nextYear, date: new Date() }, academicHistory: historyRecord }
     });
 
     return { success: true, message: `Successfully promoted to Year ${nextYear}` };
@@ -197,11 +215,7 @@ export const promoteStudent = async (studentId: string) => {
     blockMessage += `Current status is '${statusResult?.status}'.`;
   }
 
-  return { 
-    success: false, 
-    message: blockMessage, 
-    details: statusResult 
-  };
+  return { success: false, message: blockMessage, details: statusResult };
 };
 
 export const bulkPromoteClass = async ( programId: string, yearToPromote: number, academicYearName: string ) => {

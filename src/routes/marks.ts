@@ -145,11 +145,7 @@ router.post(
     }
 
     try {
-      const result = await importMarksFromBuffer(
-        req.file.buffer,
-        req.file.originalname,
-        req
-      );
+      const result = await importMarksFromBuffer( req.file.buffer, req.file.originalname, req );
 
       await logAudit(req, {
         action: "marks_upload_success",

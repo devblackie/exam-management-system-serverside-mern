@@ -24,10 +24,8 @@ router.get(
 
     // console.log("[STUDENT SEARCH] Query received:", q);
 
-    if (!q || typeof q !== "string" || q.trim().length < 3) {
-      return res.status(400).json({ error: "Enter at least 3 characters" });
-    }
-
+    if (!q || typeof q !== "string" || q.trim().length < 3) return res.status(400).json({ error: "Enter at least 3 characters" });
+    
     const searchQuery = q.trim();
 
     const query = scopeQuery(req, {
@@ -54,8 +52,7 @@ router.get(
   requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     let { regNo, yearOfStudy } = req.query;
-    if (!regNo || typeof regNo !== "string")
-      return res.status(400).json({ error: "regNo is required" });
+    if (!regNo || typeof regNo !== "string") return res.status(400).json({ error: "regNo is required" });
 
     const targetYearOfStudy = parseInt(yearOfStudy as string) || 1;
 
@@ -70,13 +67,8 @@ router.get(
 
     // 1. Fetch grades with the correct nested path
     const grades = await FinalGrade.find({ student: student._id })
-      .populate({
-        path: "programUnit",
-        populate: { path: "unit", select: "code name" },
-      })
-      .populate("academicYear", "year")
-      .sort({ "academicYear.year": 1 })
-      .lean();
+      .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
+      .populate("academicYear", "year").sort({ "academicYear.year": 1 }).lean();
 
     const academicYearName = (req.query.academicYear as string) || "2024/2025";
 
@@ -219,99 +211,80 @@ router.post(
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const {
-      regNo, unitCode, academicYear,
-      cat1, cat2, cat3,
-      assignment1, practicalRaw,
-      examQ1, examQ2, examQ3, examQ4, examQ5,
-      attempt,
-    } = req.body;
+    const { regNo, unitCode, academicYear, semester, cat1, cat2, cat3, assignment1, practicalRaw, examQ1, examQ2, examQ3, examQ4, examQ5, isSpecial, examMode } = req.body;
 
-    if (!regNo || !unitCode || !academicYear) {
-      return res.status(400).json({ error: "regNo, unitCode, and academicYear are required" });
-    }
+    if (!regNo || !unitCode || !academicYear) return res.status(400).json({ error: "regNo, unitCode, and academicYear are required" });    
+
+    console.log(`[LOG] Incoming Update -> Student: ${regNo}, Unit: ${unitCode}, Year: ${academicYear}`);
 
     const student = await Student.findOne({ regNo: { $regex: `^${regNo}$`, $options: "i" },});
     const unitDoc = await Unit.findOne({ code: unitCode });
     const yearDoc = await AcademicYear.findOne({ year: academicYear });
 
+    if (!student || !unitDoc || !yearDoc) return res.status(404).json({ error: "Student, Unit, or Academic Year not found" });
+
     if (!student || !unitDoc || !yearDoc) {
-      return res.status(404).json({ error: "Student, Unit, or Academic Year not found" });
+      console.error(`[ERROR] Missing Metadata: Student(${!!student}), Unit(${!!unitDoc}), Year(${!!yearDoc})`);
+      return res.status(404).json({ error: "Required metadata (Student/Unit/Year) not found" });
     }
+    
 
-    const programUnit = await ProgramUnit.findOne({
-      program: student.program,
-      unit: unitDoc._id,
-    });
-    if (!programUnit) {
-      return res.status(400).json({ error: `Unit ${unitCode} is not linked to program.` });
-    }
 
-    const previousMarks = await Mark.find({
-      student: student._id,
-      programUnit: programUnit._id,
-    }).sort({ createdAt: 1 });
+    const programUnit = await ProgramUnit.findOne({ program: student.program, unit: unitDoc._id });
+    if (!programUnit) return res.status(400).json({ error: `Unit ${unitCode} is not linked to program.` });
+    
+    // let isSpecial = false;
+
+    
+    let existingMark = await Mark.findOne({ student: student._id, programUnit: programUnit._id, academicYear: yearDoc._id });
 
     let detectedAttempt = "1st";
-    let isSpecial = false;
-
-    if (previousMarks.length > 0) {
-      const lastMark = previousMarks[previousMarks.length - 1];
-
-      // If the last mark was flagged as "Special" but never completed, keep it Special
-      // Or if the coordinator explicitly requested a Special Exam
-      if (req.body.isSpecial || lastMark.attempt === "special") {
-        detectedAttempt = "special";
-        isSpecial = true;
-      }
-      // If student previously had a 1st attempt and failed -> Supplementary
-      else if (previousMarks.length === 1) {
-        detectedAttempt = "supplementary";
-      }
-      // If student failed a Supp -> Retake
-      else if (previousMarks.length === 2) {
-        detectedAttempt = "re-take";
-      }
-      // If student failed a Retake -> Re-Retake
-      else if (previousMarks.length >= 3) {
-        detectedAttempt = "re-retake"; // Note: Ensure "re-retake" is in your Mark model enum
-      }
+    if (!existingMark) {
+      // Only check previous years if this is a BRAND NEW mark entry
+      const totalPastAttempts = await Mark.countDocuments({ student: student._id, programUnit: programUnit._id });
+      if (totalPastAttempts === 1) detectedAttempt = "supplementary";
+      else if (totalPastAttempts >= 2) detectedAttempt = "re-take";
+    } else {
+      // If mark exists for this year, keep its current attempt status!
+      detectedAttempt = existingMark.attempt;
     }
 
-    const mark = await Mark.findOneAndUpdate(
-      { student: student._id, programUnit: programUnit._id, academicYear: yearDoc._id, },
+  const updateData = {
+    institution: student.institution, student: student._id, programUnit: programUnit._id, academicYear: yearDoc._id, semester: semester || "SEMESTER 1",
+    cat1Raw: Number(cat1) || 0, cat2Raw: Number(cat2) || 0, cat3Raw: cat3 ? Number(cat3) : undefined, assgnt1Raw: Number(assignment1) || 0, practicalRaw: Number(practicalRaw) || 0,
+    examQ1Raw: Number(examQ1) || 0, examQ2Raw: Number(examQ2) || 0, examQ3Raw: Number(examQ3) || 0, examQ4Raw: Number(examQ4) || 0, examQ5Raw: Number(examQ5) || 0,
+    examMode: examMode || "standard", isSpecial: isSpecial === true || isSpecial === "true", attempt: isSpecial ? "special" : detectedAttempt,
+    // isSupplementary: detectedAttempt === "supplementary",
+    // isRetake: detectedAttempt.includes("re-take"),
+    uploadedBy: req.user._id, uploadedAt: new Date(),
+    caTotal30: existingMark?.caTotal30 || 0, examTotal70: existingMark?.examTotal70 || 0, agreedMark: existingMark?.agreedMark || 0,
+  };
+
+    // const mark = await Mark.findOneAndUpdate(
+    const updatedMark = await Mark.findOneAndUpdate(
       {
-        cat1Raw: Number(cat1) || 0, cat2Raw: Number(cat2) || 0,
-        cat3Raw: cat3 ? Number(cat3) : undefined,
-        assgnt1Raw: Number(assignment1) || 0, practicalRaw: Number(practicalRaw) || 0, examQ1Raw: Number(examQ1) || 0,
-        examQ2Raw: Number(examQ2) || 0, examQ3Raw: Number(examQ3) || 0,
-        examQ4Raw: Number(examQ4) || 0, examQ5Raw: Number(examQ5) || 0,
-        attempt: detectedAttempt,
-        isSpecial: isSpecial,
-        isSupplementary: detectedAttempt === "supplementary",
-        isRetake: detectedAttempt.includes("re-take"),
-        uploadedBy: req.user._id,
-        uploadedAt: new Date(),
+        student: student._id,
+        programUnit: programUnit._id,
+        academicYear: yearDoc._id,
       },
+     updateData,
       { upsert: true, new: true, setDefaultsOnInsert: true },
     ).populate({
       path: "programUnit",
       populate: { path: "unit", select: "code name" },
     });
 
+    console.log(`[LOG] Mark Document ${updatedMark._id} updated. Triggering Grade Calc...`);
+
     // Recalculate Final Grade
-    const gradeResult = await computeFinalGrade({
-      markId: mark!._id as any,
-      coordinatorReq: req,
-    });
-    // console.log("[SUCCESS] Marks saved & grade recalculated:", {
-    //   regNo, unit: unitCode,year: academicYear,finalGrade: gradeResult.grade,status: gradeResult.status, });
-    //   });
+    const gradeResult = await computeFinalGrade({ markId: updatedMark._id as any, coordinatorReq: req  });
 
-    // res.json({ success: true, data: { caTotal: gradeResult.caTotal30, examTotal: gradeResult.examTotal70, finalMark: gradeResult.finalMark, grade: gradeResult.grade, status: gradeResult.status,},});
-
-    res.json({ success: true, data: gradeResult });
+    console.log(`[SUCCESS] Grade Processed: ${gradeResult.finalMark} (${gradeResult.grade}) - Status: ${gradeResult.status}`);
+    res.json({ success: true, message: "Marks updated and grades recalculated", data: gradeResult });
   }),
 );
+
+
+
 
 export default router;

@@ -524,6 +524,7 @@ function createDocFooter() {
     ];
 }
 
+// ---- StayOut and Repeat Year Block ----
 
 export const generateStayoutExamsDoc = async ( data: PromotionData ): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
@@ -552,26 +553,16 @@ export const generateStayoutExamsDoc = async ( data: PromotionData ): Promise<Bu
             spacing: { before: 400, after: 300 },
             children: [
               new TextRun({ text: `The following `, size: 22 }),
-              new TextRun({
-                text: `${candidateCountWords} (${count}) `,
-                bold: true,
-                size: 22,
-              }),
-              new TextRun({
-                text: `candidate(s) failed more than one-third (1/3) but less than half (1/2) of the prescribed units in the `,
-                size: 22,
-              }),
+              new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22  }),
+              new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22   }),
               new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
               new TextRun({ text: `Academic Year, `, size: 22 }),
-              new TextRun({
-                text: `${currentYearOrdinal} Year `,
-                bold: true,
-                size: 22,
-              }),
+              new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22  }),
               new TextRun({ text: `Examinations for the `, size: 22 }),
-              new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
+              new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
+              new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they Stay Out according to `, size: 22 }),         
               new TextRun({
-                text: `In accordance with ENG Rule 15 (h) “A candidate who fails more than a third and less than a half of the prescribed units in any year of study shall be required to retake examinations only in the failed units during the ordinary examination period when examinations for the individual units are offered. Such a candidate will not be allowed to retake examinations during the supplementary period immediately following the ordinary examinations period in which he/she failed the units”.`,
+                text: `ENG Rule 15 (h) “A candidate who fails more than a third and less than a half of the prescribed units in any year of study shall be required to retake examinations only in the failed units during the ordinary examination period when examinations for the individual units are offered. Such a candidate will not be allowed to retake examinations during the supplementary period immediately following the ordinary examinations period in which he/she failed the units”.`,
                 size: 22, bold: true, italics: true,
               }),
             ],
@@ -602,14 +593,21 @@ export const generateRepeatYearDoc = async (data: PromotionData): Promise<Buffer
           spacing: { before: 400, after: 300 },
           children: [
             new TextRun({ text: `The following `, size: 22 }),
-            new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
-            new TextRun({ text: `candidate(s) failed fifty percent (50%) or more of the units or obtained a mean mark of less than 40% in the `, size: 22 }),
+            new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22  }),
+            new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22   }),
             new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
-            new TextRun({ text: `Academic Year. In accordance with ENG Rule 16, they are required to `, size: 22 }),
-            new TextRun({ text: `REPEAT THE YEAR `, bold: true, size: 22 }),
-            new TextRun({ text: `and attend classes in all the failed units.`, size: 22 }),
+            new TextRun({ text: `Academic Year, `, size: 22 }),
+            new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22  }),
+            new TextRun({ text: `Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
+            new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they Repeat according to `, size: 22 }),         
+            new TextRun({
+              text: `ENG Rule 16 (c) “A candidate, who attains an average mark of less than 40% in any year of study based on the marks obtained on the 1st attempt for each unit, shall be required to repeat the entire year. Such a candidate will enrol for all the units and sit for all CATs and assignment and the exams will be marked out of 100%. `,
+              size: 22, bold: true, italics: true,
+            }),
           ],
         }),
+        
         createFailureAnalysisTable(list, { top: 100, bottom: 100, left: 100, right: 100 }),
         ...createDocFooter(),
       ],
@@ -647,9 +645,9 @@ function createFailureAnalysisTable(students: any[], cellMargin: any) {
   });
   return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows });
 }
+// ---- StayOut Repeat Year Block End -----
 
 // ---- Academic Leave and Deferment Block -----
-
 // 
 export const generateAcademicLeaveDoc = async (data: PromotionData, type: "ACADEMIC LEAVE" | "DEFERMENT"): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
@@ -677,8 +675,6 @@ export const generateAcademicLeaveDoc = async (data: PromotionData, type: "ACADE
   });
   return await Packer.toBuffer(doc);
 };
-
-
 
 //  For Deferment / Academic Leave (Status focused)
 function createAdministrativeTable(students: any[], cellMargin: any) {
@@ -800,11 +796,19 @@ export const generateDiscontinuationDoc = async (data: PromotionData): Promise<B
           children: [
             new TextRun({ text: "The following ", size: 22 }),
             new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
-            new TextRun({ text: "candidate(s) failed to satisfy the Board of Examiners in the unit(s) indicated against their names on the maximum allowed attempts. In accordance with ", size: 22 }),
-            new TextRun({ text: "ENG Rule 22", bold: true, size: 22 }),
-            new TextRun({ text: ", the Board recommends that they be ", size: 22 }),
-            new TextRun({ text: "DISCONTINUED ", bold: true, size: 22, color: "FF0000" }),
-            new TextRun({ text: "from the program of study.", size: 22 }),
+            new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22   }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year, `, size: 22 }),
+            new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22  }),
+            new TextRun({ text: `Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
+            new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they be `, size: 22 }),         
+            new TextRun({ text: `Discontinued  `, bold:true,  size: 22 }),         
+            new TextRun({ text: `according to `, size: 22 }),         
+            new TextRun({
+              text: `ENG Rule 23 (c) “A candidate who fails third but less than half units of a year of study after the first attempt and subsequently fails the same units after retaking the examinations shall be discontinued.”  `,
+              size: 22, bold: true, italics: true,
+            }),
           ],
         }),
         createDiscontinuationTable(list, { top: 100, bottom: 100, left: 100, right: 100 }),
@@ -857,6 +861,8 @@ export const generateDeregistrationDoc = async (data: PromotionData): Promise<Bu
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
   const list = blocked.filter(s => s.status === "DEREGISTERED");
   const count = list.length;
+  const candidateCountWords = numberToWords(count);
+  const currentYearOrdinal = getOrdinalYear(yearOfStudy);
 
   const doc = new Document({
     sections: [{
@@ -866,12 +872,21 @@ export const generateDeregistrationDoc = async (data: PromotionData): Promise<Bu
           alignment: AlignmentType.JUSTIFIED,
           spacing: { before: 400, after: 300 },
           children: [
-            new TextRun({ text: "In accordance with ", size: 22 }),
-            new TextRun({ text: "ENG Rule 23 (c)", bold: true, size: 22 }),
-            new TextRun({ text: ", the following candidate(s) were absent from six (6) or more examinations in the ", size: 22 }),
+            new TextRun({ text: `The following `, size: 22 }),
+            new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22  }),
+            new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22   }),
             new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
-            new TextRun({ text: "Academic Year without official permission. They are therefore deemed to have deserted the program and are hereby ", size: 22 }),
-            new TextRun({ text: "DEREGISTERED.", bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year, `, size: 22 }),
+            new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22  }),
+            new TextRun({ text: `Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
+            new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they be `, size: 22 }),         
+            new TextRun({ text: `Deregistered  `, bold:true,  size: 22 }),         
+            new TextRun({ text: `according to `, size: 22 }),         
+            new TextRun({
+              text: `ENG 23 (e) “A candidate who absents himself/herself from all the Special Examinations which he/she was required to sit, or fails to undertake all extra assignments for continuous assessment without good cause, shall be assumed to have deserted the degree course, and shall be deregistered forthwith.  `,
+              size: 22, bold: true, italics: true,
+            }),
           ],
         }),
         createDeregistrationTable(list, { top: 100, bottom: 100, left: 100, right: 100 }),
@@ -967,6 +982,42 @@ function createAwardTable(students: any[]) {
 }
 
 
+export const generateSimpleNameListDoc = async (data: PromotionData): Promise<Buffer> => {
+  const { eligible, programName, academicYear } = data;
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph({
+          text: `${programName.toUpperCase()} - ${academicYear} NAME LIST`,
+          heading: HeadingLevel.HEADING_1,
+          alignment: AlignmentType.CENTER,
+        }),
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+           
+            new TableRow({
+              children: ["S/No", "Reg No.", "Full Name"].map(
+                (h) =>
+                  new TableCell({ children: [ new Paragraph({ children: [new TextRun({ text: h, bold: true })] }) ] }),
+              ),
+            }),
+            ...eligible.map((s, i) => new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph({ text: (i + 1).toString() })] }),
+                new TableCell({ children: [new Paragraph({ text: s.regNo })] }),
+                new TableCell({ children: [new Paragraph({ text: s.name.toUpperCase() })] }),
+              ],
+            })),
+          ],
+        }),
+      ],
+    }],
+  });
+
+  return await Packer.toBuffer(doc);
+};
 
 
 
