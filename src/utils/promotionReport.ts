@@ -51,9 +51,12 @@ export const generatePromotionWordDoc = async (
     "SUPPLEMENTARY (After Stayout)": blocked.filter(s => s.status === "SUPPLEMENTARY" && s.reasons?.some((r: string) => r.toLowerCase().includes("stayout"))).length,
     "SUPPLEMENTARY (After Carry Forward)": blocked.filter(s => s.status === "SUPPLEMENTARY" && s.reasons?.some((r: string) => r.toLowerCase().includes("carry forward"))).length,
     "ACADEMIC LEAVE": blocked.filter(s => s.status === "ACADEMIC LEAVE").length,
+    "ACADEMIC LEAVE (FINANCIAL GROUNDS)": blocked.filter(s => s.status === "ACADEMIC LEAVE" && s.remarks?.toLowerCase().includes("financial")).length,
+    "ACADEMIC LEAVE (COMPASSIONATE GROUNDS)": blocked.filter(s => s.status === "ACADEMIC LEAVE" && s.remarks?.toLowerCase().includes("compassionate")).length,
+    "DEFERMENT": blocked.filter(s => s.status === "DEFERMENT").length,
     // "SPECIALS": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special"))).length,
-    "SPECIALS (FINANCIAL GROUNDS)": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("financial"))).length,
-    "SPECIALS (COMPASSIONATE GROUNDS)": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("compassionate"))).length,
+    "SPECIALS": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("financial"))).length,
+    "SPECIALS ": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("compassionate"))).length,
     "STAYOUT": blocked.filter(s => s.status === "STAYOUT").length,
     "DISCONTINUATION": blocked.filter(s => s.status === "CRITICAL FAILURE" || s.status === "DISCONTINUED").length,
     "DEREGISTRATION": blocked.filter(s => s.status === "DEREGISTERED").length,
@@ -374,6 +377,47 @@ export const generateSupplementaryExamsDoc = async ( data: PromotionData ): Prom
   return await Packer.toBuffer(doc);
 };
 
+// --- NEW FUNCTION: GENERATE INCOMPLETE LIST ---
+export const generateIncompleteListDoc = async (data: PromotionData): Promise<Buffer> => {
+  const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
+  
+  // Filter for students with 'INCOMPLETE' status
+  const incompleteList = blocked.filter((s) => s.status === "INCOMPLETE");
+  
+  const count = incompleteList.length;
+  const candidateCountWords = numberToWords(count);
+  const currentYearOrdinal = getOrdinalYear(yearOfStudy);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        ...createDocHeader(logoBuffer, programName, academicYear, currentYearOrdinal, "INCOMPLETE RESULTS"),
+
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED, spacing: { before: 400, after: 300 },
+          children: [
+            new TextRun({ text: `The following `, size: 22 }),
+            new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22 }),
+            new TextRun({ text: `candidate(s) have incomplete results in the unit(s) indicated against their names during the `, size: 22 }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year, `, size: 22 }),
+            new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22 }),
+            new TextRun({ text: `Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
+            new TextRun({ text: `These results are pending due to missing marks or unfinished assessments. `, size: 22 }),
+          ],
+        }),
+
+        createAcademicTable(incompleteList, cellMargin),
+        ...createDocFooter(),
+      ],
+    }],
+  });
+
+  return await Packer.toBuffer(doc);
+};
+
 // function createAcademicTable(students: any[], cellMargin: any, groundType?: string) {
 //   const headerRow = new TableRow({
 //     children: [ { text: "S/No", width: 5 }, { text: "Reg No.", width: 20 }, { text: "Name", width: 35 }, { text: "Unit Code", width: 15 }, { text: "Unit Name", width: 25 } ].map((col) =>
@@ -648,10 +692,28 @@ function createFailureAnalysisTable(students: any[], cellMargin: any) {
 // ---- StayOut Repeat Year Block End -----
 
 // ---- Academic Leave and Deferment Block -----
-// 
-export const generateAcademicLeaveDoc = async (data: PromotionData, type: "ACADEMIC LEAVE" | "DEFERMENT"): Promise<Buffer> => {
+
+// Filter function to identify leave/deferment based on status
+const filterLeaveByGrounds = (students: any[], ground: "Financial" | "Compassionate") => {
+  return students.filter((s) => {
+    // Only check students with the appropriate status
+    if (s.status !== "ACADEMIC LEAVE" && s.status !== "DEFERMENT") return false;
+    
+    // Check remarks for grounds (set during grantAcademicLeave)
+    const remarks = s.remarks?.toLowerCase() || "";
+    if (ground === "Financial") return remarks.includes("financial");
+    if (ground === "Compassionate") return remarks.includes("compassionate");
+    return false;
+  });
+};
+
+export const generateAcademicLeaveDoc = async (data: PromotionData, groundType: "Financial" | "Compassionate", type: "ACADEMIC LEAVE" | "DEFERMENT"): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
-  const list = blocked.filter((s) => s.status === type);
+
+  // 1. Filter candidates based on status AND ground type
+  const list = filterLeaveByGrounds(blocked, groundType);
+  const currentYearOrdinal = getOrdinalYear(yearOfStudy);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
 
   const doc = new Document({
     sections: [{
@@ -663,12 +725,14 @@ export const generateAcademicLeaveDoc = async (data: PromotionData, type: "ACADE
           children: [
             new TextRun({ text: `The following candidate(s) have been officially granted `, size: 22 }),
             new TextRun({ text: `${type} `, bold: true, size: 22 }),
+            new TextRun({ text: `on `, size: 22 }),
+            new TextRun({ text: `${groundType} Grounds `, bold: true, size: 22 }),
             new TextRun({ text: `for the `, size: 22 }),
             new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
             new TextRun({ text: `Academic Year. They are expected to resume studies at the beginning of the next academic cycle.`, size: 22 }),
           ],
         }),
-        createAdministrativeTable(list, { top: 100, bottom: 100, left: 100, right: 100 }),
+        createAdministrativeTable(list, cellMargin),
         ...createDocFooter(),
       ],
     }],

@@ -9,28 +9,18 @@ export interface IStudent extends Document {
   programType: string; // "B.Sc", "B.Ed", "Diploma"
   entryType: "Direct" | "Mid-Entry-Y2" | "Mid-Entry-Y3" | "Mid-Entry-Y4";
   currentYearOfStudy: number;
+  remarks?: string;
   currentSemester: number;
-  status: "active" | "graduated" | "discontinued" | "deregistered" | "repeat";
+  status: "active" | "graduated" | "discontinued" | "deregistered" | "repeat" | "on_leave" | "deferred";
   admissionAcademicYear: mongoose.Types.ObjectId;
 
+  academicLeavePeriod?: { startDate: Date; endDate: Date; reason: string; type: "compassionate" | "financial" | "other"; };
+  totalTimeOutYears: number; // ENG 19.d/e: Total years allowed out
   // ENG 22.b: Track attempts per unit (Limit: 5)
-  unitAttemptRegistry: {
-    unitId: mongoose.Types.ObjectId;
-    attempts: {
-      attemptNumber: number;
-      mark: number;
-      passed: boolean;
-      type: string;
-    }[];
-  }[];
+  unitAttemptRegistry: { unitId: mongoose.Types.ObjectId; attempts: { attemptNumber: number; mark: number; passed: boolean; type: string; }[]; }[];
 
   // ENG 25.b: Store snapshots of each year for final classification
-  academicHistory: {
-    yearOfStudy: number;
-    annualMeanMark: number;
-    weightedContribution: number;
-    failedUnitsCount: number;
-  }[];
+  academicHistory: { yearOfStudy: number; annualMeanMark: number; weightedContribution: number; failedUnitsCount: number; isRepeatYear?: boolean; }[];
 }
 
 const schema = new Schema<IStudent>({
@@ -44,20 +34,14 @@ const schema = new Schema<IStudent>({
   currentSemester: { type: Number, default: 1 },
   admissionAcademicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true },
   status: { type: String, default: "active" },
-  unitAttemptRegistry: [{
-    unitId: { type: Schema.Types.ObjectId, ref: "Unit" },
-    attempts: [{ attemptNumber: Number, mark: Number, passed: Boolean, type: String }]
-  }],
-  academicHistory: [{
-    yearOfStudy: Number,
-    annualMeanMark: Number,
-    weightedContribution: Number,
-    failedUnitsCount: Number
-  }]
+  academicLeavePeriod: { startDate: Date, endDate: Date, reason: String, type: { type: String, enum: ["compassionate", "financial", "other"] }},
+  totalTimeOutYears: { type: Number, default: 0 },
+  unitAttemptRegistry: [{ unitId: { type: Schema.Types.ObjectId, ref: "Unit" }, attempts: [{ attemptNumber: Number, mark: Number, passed: Boolean, type: String }]}],
+  academicHistory: [{ yearOfStudy: Number, annualMeanMark: Number, weightedContribution: Number, failedUnitsCount: Number, isRepeatYear: Boolean }]
 }, { timestamps: true });
 
 schema.index({ institution: 1, regNo: 1 }, { unique: true });
-schema.index({ regNo: 1 });
+// schema.index({ regNo: 1 });
 schema.index({ institution: 1, program: 1, admissionAcademicYear: 1 });
 export default mongoose.model<IStudent>("Student", schema);
 

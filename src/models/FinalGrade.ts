@@ -8,7 +8,8 @@ export interface IFinalGrade extends Document {
   institution: mongoose.Types.ObjectId;
   semester: string; totalMark: number; grade: string;
   remarks?: string; points?: number;
-  status: "PASS" | "SUPPLEMENTARY" | "RETAKE" | "INCOMPLETE";
+  status: "PASS" | "SUPPLEMENTARY" | "RETAKE" | "INCOMPLETE" | "SPECIAL";
+  isSpecial?: boolean;
   attemptType: "1ST_ATTEMPT" | "SPECIAL" | "SUPPLEMENTARY" | "RETAKE" | "RE_RETAKE";
   attemptNumber: number; // 1 for 1st/Special, 2 for Retake, 3 for Re-Retake
   cappedBecauseSupplementary: boolean;
@@ -26,6 +27,7 @@ const schema = new Schema<IFinalGrade>(
     remarks : {type: String},
     points: Number,
     status: {  type: String, enum: ["PASS", "SUPPLEMENTARY", "RETAKE", "INCOMPLETE", "SPECIAL"], required: true },
+    isSpecial: { type: Boolean, default: false },
     attemptType: { type: String, enum: ["1ST_ATTEMPT", "SPECIAL", "SUPPLEMENTARY", "RETAKE", "RE_RETAKE"], default: "1ST_ATTEMPT", required: true },
     attemptNumber: { type: Number, default: 1 },
     cappedBecauseSupplementary: { type: Boolean, default: false },

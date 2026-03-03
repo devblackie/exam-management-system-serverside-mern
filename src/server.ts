@@ -5,7 +5,7 @@ import config from "./config/config";
 import { ensureDefaultInstitution } from "./config/defaultData";
 import mongoose from "mongoose";
 import { cleanupOrphanedGrades } from "./scripts/cleanupGrades";
-
+import { startStatusReversionJob } from "./jobs/defermentCron";
 const PORT = config.port || 8000;
 
 const startServer = async () => {
@@ -19,6 +19,7 @@ const startServer = async () => {
       await cleanupOrphanedGrades();
       await ensureDefaultInstitution();
       console.log("Default data initialized");
+      startStatusReversionJob();
     });
 
    // 2. Capture the server instance

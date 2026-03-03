@@ -2,7 +2,7 @@
 import express, { Response } from "express";
 import mongoose from "mongoose";
 import Student from "../models/Student";
-import FinalGrade from "../models/FinalGrade";
+import FinalGrade, { IFinalGrade } from "../models/FinalGrade";
 import { AuthenticatedRequest,requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import Mark from "../models/Mark";
@@ -12,6 +12,7 @@ import ProgramUnit from "../models/ProgramUnit";
 import { computeFinalGrade } from "../services/gradeCalculator";
 import { calculateStudentStatus } from "../services/statusEngine";
 import { scopeQuery } from "../lib/multiTenant";
+import { deferAdmission, grantAcademicLeave, revertStatusToActive } from "../services/academicLeave";
 
 const router = express.Router();
 
@@ -46,6 +47,76 @@ router.get(
   }),
 );
 
+// // GET STUDENT FULL RESULTS + STATUS
+// router.get(
+//   "/record",
+//   requireAuth,
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     let { regNo, yearOfStudy } = req.query;
+//     if (!regNo || typeof regNo !== "string") return res.status(400).json({ error: "regNo is required" });
+
+//     const targetYearOfStudy = parseInt(yearOfStudy as string) || 1;
+
+//     regNo = decodeURIComponent(regNo);
+//     const student = await Student.findOne( scopeQuery(req, { regNo: { $regex: `^${regNo}$`, $options: "i" }})).populate("program");
+
+//     if (!student) return res.status(404).json({ error: "Student not found" });
+
+//     // 1. Fetch grades with the correct nested path
+//     const grades = await FinalGrade.find({ student: student._id })
+//       .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
+//       .populate("academicYear", "year").sort({ "academicYear.year": 1 }).lean();
+
+//     const academicYearName = (req.query.academicYear as string) || "2024/2025";
+
+//     // 2. Safe mapping to prevent "undefined" errors
+//     const processedGrades = grades
+//       .filter((g) => {
+//         const pUnit = g.programUnit as any;
+//         // Only include units meant for the Year of Study selected by the user
+//         return pUnit?.requiredYear === targetYearOfStudy;
+//       })
+//       .map((g) => {
+//         const pUnit = g.programUnit as any;
+//         return {
+//           ...g,
+//           unit: { code: pUnit?.unit?.code || "N/A", name: pUnit?.unit?.name || "Unknown Unit" },
+//           semester: pUnit?.requiredSemester || "N/A",
+//           academicYear: g.academicYear || { year: "N/A" },
+//         };
+//       });
+
+//     // 2. USE THE SERVICE for Status
+//     // We pass studentId, programId, the Year string, and Year of Study
+//     const academicStatus = await calculateStudentStatus(
+//       student._id,
+//       (student.program as any)._id,
+//       "", // academicYearName is left empty if status engine can derive it from yearOfStudy
+//       targetYearOfStudy,
+//     );
+
+//     res.json({
+//       student: {
+//         _id: student._id, name: student.name, regNo: student.regNo,
+//         programId: (student.program as any)?._id || student.program,
+//         programName: (student.program as any)?.name,
+//         currentYear: student.currentYearOfStudy || 1, // Student's actual level
+//         currentSemester: student.currentSemester || 1, status: student.status,
+//       },
+//       grades: processedGrades, // Only Year X grades
+//       viewingYearOfStudy: targetYearOfStudy,
+//       academicStatus: academicStatus,
+//       summary: academicStatus?.summary || {
+//         totalUnits: processedGrades.length,
+//         passed: processedGrades.filter((g) => g.status === "PASS").length,
+//         failed: processedGrades.filter((g) =>
+//           ["RETAKE", "SUPPLEMENTARY", "FAIL"].includes(g.status),
+//         ).length,
+//       },
+//     });
+//   }),
+// );
+
 // GET STUDENT FULL RESULTS + STATUS
 router.get(
   "/record",
@@ -55,32 +126,50 @@ router.get(
     if (!regNo || typeof regNo !== "string") return res.status(400).json({ error: "regNo is required" });
 
     const targetYearOfStudy = parseInt(yearOfStudy as string) || 1;
-
     regNo = decodeURIComponent(regNo);
-    const student = await Student.findOne(
-      scopeQuery(req, {
-        regNo: { $regex: `^${regNo}$`, $options: "i" },
-      }),
-    ).populate("program");
+    const student = await Student.findOne( scopeQuery(req, { regNo: { $regex: `^${regNo}$`, $options: "i" }})).populate("program");
 
     if (!student) return res.status(404).json({ error: "Student not found" });
 
-    // 1. Fetch grades with the correct nested path
+    // 1. Fetch grades
     const grades = await FinalGrade.find({ student: student._id })
       .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
       .populate("academicYear", "year").sort({ "academicYear.year": 1 }).lean();
 
-    const academicYearName = (req.query.academicYear as string) || "2024/2025";
+    const marks = await Mark.find({ student: student._id }).lean();
+    const marksMap = new Map();
+    marks.forEach(m => marksMap.set(m.programUnit.toString(), m));
 
-    // 2. Safe mapping to prevent "undefined" errors
+    // 2. Safe mapping and status merging
     const processedGrades = grades
       .filter((g) => {
         const pUnit = g.programUnit as any;
-        // Only include units meant for the Year of Study selected by the user
         return pUnit?.requiredYear === targetYearOfStudy;
       })
       .map((g) => {
         const pUnit = g.programUnit as any;
+        const programUnitId = pUnit._id.toString();
+
+        // Merge special status from raw marks
+        const rawMarkRecord = marksMap.get(programUnitId);
+
+        // --- FIX: Logic to determine status ---
+        let finalStatus = g.status;
+        const isSpecial =
+          rawMarkRecord?.isSpecial || g.isSpecial || g.status === "SPECIAL";
+
+        if (isSpecial) {
+          finalStatus = "SPECIAL";
+        } else if (
+          rawMarkRecord &&
+          (!rawMarkRecord.caTotal30 || !rawMarkRecord.examTotal70)
+        ) {
+          // If raw marks exist but are incomplete (CAT/Exam missing)
+          finalStatus = "INCOMPLETE";
+        } else if (g.totalMark === 0 && g.status !== "PASS") {
+          finalStatus = "INCOMPLETE";
+        }
+        // ----------------------------------------
         return {
           ...g,
           unit: {
@@ -89,15 +178,16 @@ router.get(
           },
           semester: pUnit?.requiredSemester || "N/A",
           academicYear: g.academicYear || { year: "N/A" },
+          // Override status if special
+          status: finalStatus,
         };
       });
 
-    // 2. USE THE SERVICE for Status
-    // We pass studentId, programId, the Year string, and Year of Study
+    // 3. Calculate Status
     const academicStatus = await calculateStudentStatus(
       student._id,
       (student.program as any)._id,
-      "", // academicYearName is left empty if status engine can derive it from yearOfStudy
+      "",
       targetYearOfStudy,
     );
 
@@ -106,10 +196,10 @@ router.get(
         _id: student._id, name: student.name, regNo: student.regNo,
         programId: (student.program as any)?._id || student.program,
         programName: (student.program as any)?.name,
-        currentYear: student.currentYearOfStudy || 1, // Student's actual level
-        currentSemester: student.currentSemester || 1,
+        currentYear: student.currentYearOfStudy || 1,
+        currentSemester: student.currentSemester || 1, status: student.status,
       },
-      grades: processedGrades, // Only Year X grades
+      grades: processedGrades,
       viewingYearOfStudy: targetYearOfStudy,
       academicStatus: academicStatus,
       summary: academicStatus?.summary || {
@@ -123,6 +213,130 @@ router.get(
   }),
 );
 
+// GET /journey: Fetch complete academic timeline
+// router.get(
+//   "/journey",
+//   requireAuth,
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { regNo } = req.query;
+//     if (!regNo) return res.status(400).json({ error: "regNo is required" });
+
+//     const student = await Student.findOne(scopeQuery(req, { regNo: regNo as string })).populate("admissionAcademicYear", "year");
+
+//     if (!student) return res.status(404).json({ error: "Student not found" });
+
+//     // Fetch every grade ever recorded for this student
+//     const allGrades = await FinalGrade.find({ student: student._id, deletedAt: null })
+//       .populate({ path: "programUnit", select: "requiredYear requiredSemester" })
+//       .populate("academicYear", "year")
+//       .lean();
+
+//     // Group grades by Academic Year
+//     const journey = [];
+//     const yearsEncountered = [...new Set(allGrades.map(g => (g.academicYear as any).year))].sort();
+
+//     for (const yearName of yearsEncountered) {
+//       const yearGrades = allGrades.filter(g => (g.academicYear as any).year === yearName);
+//       const yearOfStudy = (yearGrades[0].programUnit as any).requiredYear;
+
+//       const supplementary = yearGrades.filter(g => g.status === "SUPPLEMENTARY").map(g => (g as any).unit?.code || "Unit");
+//       const retakes = yearGrades.filter(g => g.status === "RETAKE").map(g => (g as any).unit?.code || "Unit");
+//       const specials = yearGrades.filter(g => g.attemptType === "SPECIAL").map(g => (g as any).unit?.code || "Unit");
+
+//       journey.push({
+//         academicYear: yearName,
+//         yearOfStudy,
+//         totalUnits: yearGrades.length,
+//         challenges: { supplementary, retakes, specials },
+//         // Check if student was repeating this specific year
+//         isRepeat: student.status === "repeat" && student.currentYearOfStudy === yearOfStudy
+//       });
+//     }
+
+//     res.json({ admissionYear: (student.admissionAcademicYear as any)?.year, currentStatus: student.status, timeline: journey });
+//   })
+// );
+
+// GET /journey: Fetch complete academic timeline including Leaves & Deferments
+router.get(
+  "/journey",
+  requireAuth,
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { regNo } = req.query;
+    if (!regNo) return res.status(400).json({ error: "regNo is required" });
+
+    const student = await Student.findOne(scopeQuery(req, { regNo: regNo as string }))
+      .populate("admissionAcademicYear", "year")
+      .lean();
+
+    if (!student) return res.status(404).json({ error: "Student not found" });
+
+    // 1. Fetch all grades ever recorded
+    const allGrades = await FinalGrade.find({ student: student._id, deletedAt: null })
+      .populate({ path: "programUnit", select: "requiredYear requiredSemester" })
+      .populate("academicYear", "year")
+      .lean();
+
+    const journey = [];
+
+    // 2. Identify Academic Years where student had grades
+    const yearsWithGrades = [...new Set(allGrades.map(g => (g.academicYear as any).year))];
+
+    // 3. Process years with academic activity
+    for (const yearName of yearsWithGrades) {
+      const yearGrades = allGrades.filter(g => (g.academicYear as any).year === yearName);
+      const firstGrade = yearGrades[0];
+      const yearOfStudy = (firstGrade?.programUnit as any)?.requiredYear || 0;
+
+      const supplementary = yearGrades.filter(g => g.status === "SUPPLEMENTARY").map(g => (g as any).unit?.code || "Unit");
+      const retakes = yearGrades.filter(g => g.status === "RETAKE").map(g => (g as any).unit?.code || "Unit");
+      const specials = yearGrades.filter(g => g.attemptType === "SPECIAL").map(g => (g as any).unit?.code || "Unit");
+
+      journey.push({
+        academicYear: yearName,
+        yearOfStudy,
+        totalUnits: yearGrades.length,
+        challenges: { supplementary, retakes, specials },
+        isRepeat: student.status === "repeat" && student.currentYearOfStudy === yearOfStudy,
+        leaveInfo: null // Normal academic year
+      });
+    }
+
+    // 4. CATCH LEAVE/DEFERMENT: Check if the current status is a break
+    // If the student is currently on leave, we add a "Current Milestone" for the leave
+    if (student.status === "on_leave" || student.status === "deferred") {
+      const leaveData = (student as any).academicLeavePeriod;
+      
+      journey.push({
+        academicYear: leaveData ? 
+          `${new Date(leaveData.startDate).getFullYear()}/${new Date(leaveData.endDate).getFullYear()}` : 
+          "Current Period",
+        yearOfStudy: student.currentYearOfStudy,
+        totalUnits: 0,
+        challenges: { supplementary: [], retakes: [], specials: [] },
+        isRepeat: false,
+        leaveInfo: {
+          type: student.status === "deferred" ? "DEFERMENT" : "ACADEMIC LEAVE",
+          reason: leaveData?.reason || student.remarks || "Authorized Break",
+          duration: leaveData ? `${leaveData.type || 'Standard'} Duration` : "Scheduled"
+        }
+      });
+    }
+
+    // 5. Sort journey by Year of Study and then Academic Year string
+    journey.sort((a, b) => {
+      if (a.yearOfStudy !== b.yearOfStudy) return a.yearOfStudy - b.yearOfStudy;
+      return a.academicYear.localeCompare(b.academicYear);
+    });
+
+    res.json({ 
+      admissionYear: (student.admissionAcademicYear as any)?.year, 
+      currentStatus: student.status.toUpperCase(), 
+      timeline: journey 
+    });
+  })
+);
+
 // POST /approve-special: One-click approval for Special Exams
 router.post(
   "/approve-special",
@@ -131,9 +345,8 @@ router.post(
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { markId, reason, undo = false } = req.body;
 
-    if (!markId) {
-      return res.status(400).json({ error: "Mark ID is required" });
-    }
+    if (!markId) return res.status(400).json({ error: "Mark ID is required" });
+    
 
     let updateData;
     if (undo) {
@@ -167,6 +380,41 @@ router.post(
     const gradeResult = await computeFinalGrade({ markId: mark._id as any, coordinatorReq: req,   });
 
     res.json({ success: true, message: undo ? "Special exam revoked" : "Special exam approved", newStatus: gradeResult.status, });
+  }),
+);
+
+// POST /api/student/leave
+router.post(
+  "/leave",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { studentId, startDate, endDate, reason, leaveType } = req.body;
+    const result = await grantAcademicLeave( studentId, new Date(startDate), new Date(endDate), reason, leaveType );
+    res.json({ success: true, student: result });
+  })
+);
+
+// POST /api/student/defer
+router.post(
+  "/defer",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { studentId, years } = req.body;
+    const result = await deferAdmission(studentId, parseInt(years) as 1 | 2);
+    res.json({ success: true, student: result });
+  })
+);
+
+router.post(
+  "/revert-active",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { studentId } = req.body;
+    const result = await revertStatusToActive(studentId);
+    res.json({ success: true, student: result });
   }),
 );
 
