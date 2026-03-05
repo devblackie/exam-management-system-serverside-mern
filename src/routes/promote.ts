@@ -9,6 +9,8 @@ import {
   generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibilityNotice,   PromotionData,
   generateSpecialExamNotice, generateStudentTranscript, generateSupplementaryExamsDoc, generateSpecialExamsDoc,
   generateStayoutExamsDoc, generateAcademicLeaveDoc, generateDeregistrationDoc, generateDiscontinuationDoc, generateRepeatYearDoc,
+  generateIncompleteListDoc,
+  generateCarryForwardDoc,
 } from "../utils/promotionReport";
 import fs from "fs";
 import path from "path";
@@ -74,6 +76,7 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       const excelData: ConsolidatedData = {
         programName: program?.name || "Program", academicYear: academicYearName, yearOfStudy: yearToPromote,
         students: [...preview.eligible, ...preview.blocked], marks: filteredMarks, offeredUnits, logoBuffer,
+          institutionId: program?.institution?.toString() || "", programId: programId,
       };
 
       // 6. Generate and Zip reports
@@ -82,17 +85,13 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       const progName = program?.name || "Program";
       const yearPrefix = `Year_${yearToPromote}`;
 
-      const getFileName = (reportType: string) => 
-        `${reportType}_${progCode}_${progName}_${cleanAcadYear}_${yearPrefix}.docx`.replace(/\s+/g, "_");
+      const getFileName = (reportType: string) => `${reportType}_${progCode}_${progName}_${cleanAcadYear}_${yearPrefix}.docx`.replace(/\s+/g, "_");
       const zip = new AdmZip();
 
       // Helper to conditionally add documents
       const addDocIfNotEmpty = async (
         list: any[], fileName: string, generator: (data: any, ...args: any[]) => Promise<Buffer>, ...extraArgs: any[] ) => {
-        if (list && list.length > 0) { 
-          const buffer = await generator(wordData, ...extraArgs);
-          zip.addFile(fileName, buffer);
-          return true; }
+        if (list && list.length > 0) { const buffer = await generator(wordData, ...extraArgs); zip.addFile(fileName, buffer); return true; }
         return false;
       };
      
@@ -121,6 +120,19 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       const repeatList = wordData.blocked.filter(s => s.status === "REPEAT YEAR");
       await addDocIfNotEmpty(repeatList, getFileName("Repeat_Year_List"), generateRepeatYearDoc);
 
+      sendProgress(75, "Checking Academic Exceptions...");
+      // 1. INCOMPLETE LIST
+      const incompleteList = wordData.blocked.filter(s => s.status === "INCOMPLETE");
+      await addDocIfNotEmpty(incompleteList, getFileName("Incomplete_Results_List"), generateIncompleteListDoc);
+
+      // 2. ACADEMIC LEAVE - Financial
+      const finLeave = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "DEFERMENT" && s.remarks?.toLowerCase().includes("financial"));
+      await addDocIfNotEmpty(finLeave, getFileName("Academic_Leave_Financial"), generateAcademicLeaveDoc, "Financial", "ACADEMIC LEAVE");
+
+      // 3. ACADEMIC LEAVE - Compassionate
+      const compLeave = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "DEFERMENT" && s.remarks?.toLowerCase().includes("compassionate"));
+      await addDocIfNotEmpty(compLeave, getFileName("Academic_Leave_Compassionate"), generateAcademicLeaveDoc, "Compassionate", "ACADEMIC LEAVE");
+
       sendProgress(80, "Checking Discontinuations & Deregistrations...");
       const discoList = wordData.blocked.filter(s => s.status === "CRITICAL FAILURE" || s.status === "DISCONTINUED");
       await addDocIfNotEmpty(discoList, getFileName("Discontinuation_List"), generateDiscontinuationDoc);
@@ -128,9 +140,13 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       const deregList = wordData.blocked.filter(s => s.status === "DEREGISTERED");
       await addDocIfNotEmpty(deregList, getFileName("Deregistration_List"), generateDeregistrationDoc);
 
-      sendProgress(90, "Checking Administrative Statuses...");
+      sendProgress(85, "Checking Administrative Statuses...");
       const leaveList = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "DEFERMENT");
       await addDocIfNotEmpty( leaveList, getFileName("Academic_Leave_Deferment"), generateAcademicLeaveDoc);
+
+      sendProgress(90, "Checking Carry Forward List...");
+      const carryList = wordData.eligible.filter(s => s.reasons?.length > 0 && s.status !== "ALREADY PROMOTED");
+      await addDocIfNotEmpty(carryList, getFileName("Carry_Forward_List"), generateCarryForwardDoc);
 
       // 7. Zip and Send
       sendProgress(95, "Creating ZIP Archive...");
@@ -145,142 +161,6 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
     }
   }),
 );
-
-// download-report
-// router.post(
-//   "/download-report",
-//   requireAuth,
-//   requireRole("coordinator"),
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     const { programId, yearToPromote, academicYearName } = req.body;
-
-//     // 1. SET HEADERS FOR STREAMING
-//     // This tells the browser/proxy NOT to buffer the response
-//     res.setHeader('Content-Type', 'application/zip');
-//     res.setHeader('Content-Disposition', `attachment; filename=Promotion_Package_Year_${yearToPromote}.zip`);
-//     res.setHeader('X-Content-Type-Options', 'nosniff');
-
-//     try {
-//       // 2. FETCH DATA
-//       const preview = await previewPromotion(programId, yearToPromote, academicYearName);
-//       const program = await Program.findById(programId).lean();
-
-//       // SEND HEARTBEAT (A single space keeps the socket open)
-//       res.write(" ");
-
-//       const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
-//       let logoBuffer = Buffer.alloc(0);
-//       if (fs.existsSync(logoPath)) {
-//         logoBuffer = fs.readFileSync(logoPath);
-//       }
-
-//       const promotionData: PromotionData = {
-//         programName: program?.name || "Unknown Program",
-//         academicYear: academicYearName,
-//         yearOfStudy: yearToPromote,
-//         eligible: preview.eligible,
-//         blocked: preview.blocked,
-//         logoBuffer
-//       };
-
-//       // 3. GENERATE DOCUMENTS WITH PULSES
-//       const mainBuffer = await generatePromotionWordDoc(promotionData);
-//       res.write(" "); // Pulse
-
-//       const eligibleBuffer = await generateEligibleSummaryDoc(promotionData);
-//       res.write(" "); // Pulse
-
-//       const ineligibleBuffer = await generateIneligibleSummaryDoc(promotionData);
-//       res.write(" "); // Pulse
-
-//       // 4. CREATE ZIP
-//       const zip = new AdmZip();
-//       zip.addFile(`Promotion_Report_${program?.code}_Year${yearToPromote}.docx`, mainBuffer);
-//       zip.addFile(`Eligible_Students_${program?.code}_Year${yearToPromote}.docx`, eligibleBuffer);
-//       zip.addFile(`Ineligible_Students_${program?.code}_Year${yearToPromote}.docx`, ineligibleBuffer);
-
-//       const zipBuffer = zip.toBuffer();
-
-//       // 5. FINAL SEND
-//       // We use .end() because we used .write() earlier
-//       res.write(zipBuffer);
-//       res.end();
-
-//       console.log("[download-report] Streaming complete");
-//     } catch (err: any) {
-//       console.error("[download-report] CRASH:", err);
-//       // If we already sent headers/pulses, we can't send a JSON error
-//       if (!res.headersSent) {
-//         res.status(500).json({ error: "Failed to generate report" });
-//       } else {
-//         res.end();
-//       }
-//     }
-//   })
-// );
-
-// download-notices
-// router.post(
-//   "/download-notices",
-//   requireAuth,
-//   requireRole("coordinator"),
-//   (req, res, next) => {
-//     // Give more time — notices can still be slow if many students
-//     req.setTimeout(600000);  // 10 minutes
-//     res.setTimeout(600000);
-//     next();
-//   },
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     const { programId, yearToPromote, academicYearName } = req.body;
-
-//     const preview = await previewPromotion(programId, yearToPromote, academicYearName);
-//     const program = await Program.findById(programId).lean();
-
-//     const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
-//     let logoBuffer = Buffer.alloc(0);
-//     if (fs.existsSync(logoPath)) {
-//       logoBuffer = fs.readFileSync(logoPath);
-//     }
-
-//     if (preview.blocked.length === 0) {
-//       return res.status(400).json({ error: "No ineligible students found" });
-//     }
-
-//     // Optional safety: limit to avoid server overload
-//     const MAX_NOTICES = 150;
-//     const blockedToProcess = preview.blocked.slice(0, MAX_NOTICES);
-
-//     const zip = new AdmZip();
-
-//     const noticeData = {
-//       programName: program?.name || "Unknown Program",
-//       academicYear: academicYearName,
-//       yearOfStudy: yearToPromote,
-//       logoBuffer
-//     };
-
-//     for (const student of blockedToProcess) {
-//       const noticeBuffer = await generateIneligibilityNotice(student, noticeData);
-//       zip.addFile(`Ineligibility_Notices/${student.regNo}_Notice.docx`, noticeBuffer);
-//     }
-
-//     if (preview.blocked.length > MAX_NOTICES) {
-//       // Optional: add a text file explaining the limit
-//       zip.addFile("README.txt", Buffer.from(
-//         `Only the first ${MAX_NOTICES} notices were generated.\n` +
-//         `Total ineligible students: ${preview.blocked.length}\n` +
-//         `Contact system admin for the remaining notices.`
-//       ));
-//     }
-
-//     const zipBuffer = zip.toBuffer();
-
-//     res
-//       .header("Content-Type", "application/zip")
-//       .header("Content-Disposition", `attachment; filename=Ineligibility_Notices_${program?.code}_Y${yearToPromote}.zip`)
-//       .send(zipBuffer);
-//   })
-// );
 
 // download-notices-progress
 router.post(

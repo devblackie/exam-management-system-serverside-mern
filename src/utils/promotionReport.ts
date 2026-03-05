@@ -38,8 +38,7 @@ const formatStudentName = (fullName: string): string => {
   return `${parts.join(" ")} ${lastName}`;
 };
 
-export const generatePromotionWordDoc = async (
-  data: PromotionData ): Promise<Buffer> => {
+export const generatePromotionWordDoc = async ( data: PromotionData ): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, eligible, blocked, logoBuffer, offeredUnits = [] } = data;
 
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
@@ -50,13 +49,14 @@ export const generatePromotionWordDoc = async (
     "SUPPLEMENTARY (After Readmission)": blocked.filter(s => s.status === "SUPPLEMENTARY" && s.reasons?.some((r: string) => r.toLowerCase().includes("readmission"))).length,
     "SUPPLEMENTARY (After Stayout)": blocked.filter(s => s.status === "SUPPLEMENTARY" && s.reasons?.some((r: string) => r.toLowerCase().includes("stayout"))).length,
     "SUPPLEMENTARY (After Carry Forward)": blocked.filter(s => s.status === "SUPPLEMENTARY" && s.reasons?.some((r: string) => r.toLowerCase().includes("carry forward"))).length,
-    "ACADEMIC LEAVE": blocked.filter(s => s.status === "ACADEMIC LEAVE").length,
-    "ACADEMIC LEAVE (FINANCIAL GROUNDS)": blocked.filter(s => s.status === "ACADEMIC LEAVE" && s.remarks?.toLowerCase().includes("financial")).length,
-    "ACADEMIC LEAVE (COMPASSIONATE GROUNDS)": blocked.filter(s => s.status === "ACADEMIC LEAVE" && s.remarks?.toLowerCase().includes("compassionate")).length,
-    "DEFERMENT": blocked.filter(s => s.status === "DEFERMENT").length,
+    "ACADEMIC LEAVE (FINANCIAL GROUNDS)": blocked.filter(s => (s.status === "ACADEMIC LEAVE" || s.status === "ON LEAVE") && s.remarks?.toLowerCase().includes("financial")).length,
+    "ACADEMIC LEAVE (COMPASSIONATE GROUNDS)": blocked.filter(s => (s.status === "ACADEMIC LEAVE" || s.status === "ON LEAVE") && s.remarks?.toLowerCase().includes("compassionate")).length,
+    "DEFERMENT": blocked.filter(s => s.status === "DEFERMENT" || s.status === "DEFERRED").length,
+    "SPECIALS (FINANCIAL GROUNDS)": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("financial"))).length,
+    "SPECIALS (COMPASSIONATE GROUNDS)": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("compassionate"))).length,
     // "SPECIALS": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special"))).length,
-    "SPECIALS": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("financial"))).length,
-    "SPECIALS ": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("compassionate"))).length,
+    // "SPECIALS": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("financial"))).length,
+    // "SPECIALS ": blocked.filter(s => s.reasons?.some((r: string) => r.toLowerCase().includes("special") && r.toLowerCase().includes("compassionate"))).length,
     "STAYOUT": blocked.filter(s => s.status === "STAYOUT").length,
     "DISCONTINUATION": blocked.filter(s => s.status === "CRITICAL FAILURE" || s.status === "DISCONTINUED").length,
     "DEREGISTRATION": blocked.filter(s => s.status === "DEREGISTERED").length,
@@ -377,13 +377,11 @@ export const generateSupplementaryExamsDoc = async ( data: PromotionData ): Prom
   return await Packer.toBuffer(doc);
 };
 
-// --- NEW FUNCTION: GENERATE INCOMPLETE LIST ---
+// --- GENERATE INCOMPLETE LIST ---
 export const generateIncompleteListDoc = async (data: PromotionData): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
   
-  // Filter for students with 'INCOMPLETE' status
   const incompleteList = blocked.filter((s) => s.status === "INCOMPLETE");
-  
   const count = incompleteList.length;
   const candidateCountWords = numberToWords(count);
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
@@ -393,7 +391,6 @@ export const generateIncompleteListDoc = async (data: PromotionData): Promise<Bu
     sections: [{
       children: [
         ...createDocHeader(logoBuffer, programName, academicYear, currentYearOrdinal, "INCOMPLETE RESULTS"),
-
         new Paragraph({
           alignment: AlignmentType.JUSTIFIED, spacing: { before: 400, after: 300 },
           children: [
@@ -401,15 +398,13 @@ export const generateIncompleteListDoc = async (data: PromotionData): Promise<Bu
             new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22 }),
             new TextRun({ text: `candidate(s) have incomplete results in the unit(s) indicated against their names during the `, size: 22 }),
             new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
-            new TextRun({ text: `Academic Year, `, size: 22 }),
-            new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22 }),
-            new TextRun({ text: `Examinations for the `, size: 22 }),
-            new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
-            new TextRun({ text: `These results are pending due to missing marks or unfinished assessments. `, size: 22 }),
+            new TextRun({ text: `Academic Year. These results are pending due to missing CATs or Examination marks.`, size: 22 }),
           ],
         }),
 
-        createAcademicTable(incompleteList, cellMargin),
+        // Inside generateIncompleteListDoc...
+createStandardUnitDetailTable(incompleteList, cellMargin, "INC"),
+        // createAcademicTable(incompleteList, cellMargin), // Using standard table for unit details
         ...createDocFooter(),
       ],
     }],
@@ -498,15 +493,19 @@ function createAcademicTable( students: any[], cellMargin: any, groundType?: "Fi
 
   students.forEach((s) => {
     // 1. FILTERING REASONS
-    const relevantReasons =
-      s.reasons?.filter((r: string) => {
+    const relevantReasons = s.reasons?.filter((r: string) => {
         const lowerR = r.toLowerCase();
+
         if (!groundType) {
-        return !lowerR.includes("special") && !lowerR.includes("incomplete");
-      }
-      // Specials list MUST match the ground
-      return lowerR.includes("special") && lowerR.includes(groundType.toLowerCase());
-    }) || [];
+          // For Incomplete list, only show reasons containing "INC" or "incomplete"
+          if (s.status === "INCOMPLETE") return lowerR.includes("inc") || lowerR.includes("incomplete");
+          // For Supps, show standard failure reasons
+          return !lowerR.includes("special");
+        }
+        
+        // For Specials, must match the ground
+        return lowerR.includes("special") && lowerR.includes(groundType.toLowerCase());
+      }) || [];
 
     if (relevantReasons.length > 0) {
       relevantReasons.forEach((rawReason: string, index: number) => {
@@ -536,6 +535,11 @@ function createAcademicTable( students: any[], cellMargin: any, groundType?: "Fi
 
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: {
+      top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
+      left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
+      insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
+    },
     rows: rows,
   });
 }
@@ -612,7 +616,10 @@ export const generateStayoutExamsDoc = async ( data: PromotionData ): Promise<Bu
             ],
           }),
 
-          createFailureAnalysisTable(stayoutList, { top: 100, bottom: 100, left: 100, right: 100 }),
+          // Inside generateStayoutExamsDoc...
+createStandardUnitDetailTable(stayoutList, cellMargin),
+
+          // createFailureAnalysisTable(stayoutList, { top: 100, bottom: 100, left: 100, right: 100 }),
         ...createDocFooter(),
         ],
       },
@@ -627,6 +634,7 @@ export const generateRepeatYearDoc = async (data: PromotionData): Promise<Buffer
   const list = blocked.filter((s) => s.status === "REPEAT YEAR");
   const count = list.length;
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
 
   const doc = new Document({
     sections: [{
@@ -651,8 +659,11 @@ export const generateRepeatYearDoc = async (data: PromotionData): Promise<Buffer
             }),
           ],
         }),
+
+        // Inside generateRepeatYearDoc...
+createStandardUnitDetailTable(list, cellMargin),
         
-        createFailureAnalysisTable(list, { top: 100, bottom: 100, left: 100, right: 100 }),
+        // createFailureAnalysisTable(list, { top: 100, bottom: 100, left: 100, right: 100 }),
         ...createDocFooter(),
       ],
     }],
@@ -778,6 +789,7 @@ export const generateCarryForwardDoc = async (data: PromotionData): Promise<Buff
   const count = carryForwardList.length;
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
   const nextYearOrdinal = getOrdinalYear(yearOfStudy + 1);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
 
   const doc = new Document({
     sections: [{
@@ -807,8 +819,9 @@ export const generateCarryForwardDoc = async (data: PromotionData): Promise<Buff
         }),
 
         // HERE IS WHERE YOU USE THE TABLE FUNCTION
-        createCarryForwardTable(carryForwardList, { top: 100, bottom: 100, left: 100, right: 100 }),
-
+        // createCarryForwardTable(carryForwardList, { top: 100, bottom: 100, left: 100, right: 100 }),
+        // Inside generateCarryForwardDoc...
+        createStandardUnitDetailTable(carryForwardList, cellMargin),
         ...createDocFooter(),
       ],
     }],
@@ -989,6 +1002,77 @@ function createDeregistrationTable(students: any[], cellMargin: any) {
 }
 
 // ---- Deregistration Block end ----
+
+
+function createStandardUnitDetailTable(students: any[], cellMargin: any, filterKeyword?: string) {
+  const headerRow = new TableRow({
+    children: [
+      { text: "S/No", w: 5 }, { text: "Reg No.", w: 20 }, { text: "Name", w: 25 },
+      { text: "Unit Code", w: 15 }, { text: "Unit Name", w: 35 }
+    ].map(h => new TableCell({
+      width: { size: h.w, type: WidthType.PERCENTAGE },
+      margins: cellMargin,
+      shading: { fill: "F2F2F2" },
+      children: [new Paragraph({ children: [new TextRun({ text: h.text, bold: true, size: 18 })] })]
+    }))
+  });
+
+  const rows: TableRow[] = [headerRow];
+  let studentCounter = 1;
+
+  students.forEach((s) => {
+    // Filter reasons to only show relevant units (e.g., only failed units, not specials)
+    const relevantReasons = s.reasons?.filter((r: string) => {
+      const lowerR = r.toLowerCase();
+      if (filterKeyword) return lowerR.includes(filterKeyword.toLowerCase());
+      // Default: show everything except "special" or "leave" tags if we just want failure units
+      return !lowerR.includes("special") && !lowerR.includes("leave");
+    }) || [];
+
+    if (relevantReasons.length > 0) {
+      relevantReasons.forEach((rawReason: string, index: number) => {
+        const isFirstUnit = index === 0;
+        let uCode = "N/A";
+        let uName = "N/A";
+
+        const colonIndex = rawReason.indexOf(":");
+        if (colonIndex !== -1) {
+          uCode = rawReason.substring(0, colonIndex).trim();
+          uName = rawReason.substring(colonIndex + 1).split(/[(\-]/)[0].trim();
+        }
+
+        rows.push(new TableRow({
+          children: [
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: isFirstUnit ? studentCounter.toString() : "", size: 18 })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: isFirstUnit ? s.regNo : "", size: 18 })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: isFirstUnit ? s.name : "", size: 18 })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: uCode, size: 18 })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: uName, size: 18 })] })] }),
+          ]
+        }));
+      });
+      studentCounter++;
+    } else {
+      // Fallback for students with status but no specific reasons listed
+      rows.push(new TableRow({
+        children: [
+          new TableCell({ children: [new Paragraph({ text: studentCounter.toString() })] }),
+          new TableCell({ children: [new Paragraph({ text: s.regNo })] }),
+          new TableCell({ children: [new Paragraph({ text: s.name })] }),
+          new TableCell({ columnSpan: 2, children: [new Paragraph({ text: "Refer to individual transcript for unit details." })] }),
+        ]
+      }));
+      studentCounter++;
+    }
+  });
+
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: {
+      top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
+      left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
+      insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
+    }, rows });
+}
 
 // graduation-list
 export const generateAwardListDoc = async ( data: PromotionData ): Promise<Buffer> => {
@@ -2128,3 +2212,4 @@ export const generateStudentTranscript = async (
 
   return await Packer.toBuffer(doc);
 };
+

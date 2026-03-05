@@ -25,8 +25,7 @@ export const performAcademicAudit = async (
     .session(session || null);
 
   if (fatalUnitFailure) {
-    const unitInfo =
-      (fatalUnitFailure.programUnit as any)?.unit?.code || "Unknown Unit";
+    const unitInfo = (fatalUnitFailure.programUnit as any)?.unit?.code || "Unknown Unit";
     await Student.findByIdAndUpdate(
       studentId,
       {

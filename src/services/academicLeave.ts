@@ -22,11 +22,6 @@ export const grantAcademicLeave = async (
 
   // Update student status and track time
   return await Student.findByIdAndUpdate(studentId, {
-      // $set: {
-      //   status: "on_leave",
-      //   academicLeavePeriod: { startDate, endDate, reason, type: leaveType },
-      //   totalTimeOutYears: (student.totalTimeOutYears || 0) + yearsRequested,
-      // },
       $set: {
         status: "on_leave",
         remarks: `Academic Leave: ${reason} (${dateRange})`,

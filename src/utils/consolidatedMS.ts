@@ -3,16 +3,17 @@ import * as ExcelJS from "exceljs";
 import config from "../config/config";
 import InstitutionSettings from "../models/InstitutionSettings";
 import { resolveStudentStatus } from "./studentStatusResolver";
+import { calculateStudentStatus } from "../services/statusEngine";
 
 export interface ConsolidatedData {
   programName: string; academicYear: string; yearOfStudy: number;
   students: any[]; marks: any[];
   offeredUnits: { code: string; name: string }[];
-  logoBuffer?: any; institutionId?: string;
+  logoBuffer?: any; institutionId?: string;  programId: string;
 }
 
 export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Promise<Buffer> => {
-  const { programName, academicYear, yearOfStudy, students, marks, offeredUnits, logoBuffer, institutionId } = data;
+  const { programName, academicYear, yearOfStudy, students, marks, offeredUnits, logoBuffer, institutionId, programId } = data;
 
   const settings = await InstitutionSettings.findOne({ institution: institutionId });
   const passMark = settings?.passMark || 40;
@@ -78,151 +79,145 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
   });
 
   // 3. STUDENT DATA (Row 11+)  
-  const statsSummary = { PASS: 0, SUPPLEMENTARY: 0, "REPEAT YEAR": 0, "STAY OUT": 0, SPECIAL: 0, INCOMPLETE: 0, DISCONTINUED: 0, DEREGISTERED: 0 };
-  students.sort((a, b) => (a.regNo || "").localeCompare(b.regNo || "")).forEach((student, index) => {
-    const rIdx = 11 + index;
+  const sortedStudents = [...students].sort((a, b) => (a.regNo || "").localeCompare(b.regNo || ""));
+  
+  let currentIndex = 0;
+  for (const student of sortedStudents) {
+    const rIdx = 11 + currentIndex;
     const sId = student.id?.toString() || student._id?.toString();
+    const audit = await calculateStudentStatus( sId, programId, academicYear, yearOfStudy );
     const resolvedStatus = resolveStudentStatus(student);
+    // --- REINSTATED FLAG LOGIC ---
+    const hasReturnHistory = student.statusHistory?.some(
+      (h: any) => h.status === "ACTIVE" && (h.previousStatus === "ACADEMIC LEAVE" || h.previousStatus === "DEFERMENT"));
 
-    let totalMarks = 0;
-    let unitCount = 0;
-    let suppCount = 0;
-    let specialCount = 0;
-    let incCount = 0;
+    // --- REPEAT FLAG LOGIC (RPT) ---
+    // Count how many times they have a record for this specific year of study in their history
+    const repeatCount =
+      student.academicHistory?.filter((h: any) => h.yearOfStudy === yearOfStudy && h.status === "REPEAT YEAR").length || 0;
 
-    // To collect unique matters (reasons) for the final column
-    const studentMattersList: string[] = [];
-    // if (resolvedStatus.isLocked && resolvedStatus.reason) {
-    //   // Clean "Financial" or "Compassionate" from the general status reason
-    //   const cleanReason =
-    //     resolvedStatus.reason.split(":").pop()?.trim() || resolvedStatus.reason;
-    //   studentMattersList.push(cleanReason);
-    // }
-    if (
-      resolvedStatus.isLocked &&
-      resolvedStatus.reason &&
-      !resolvedStatus.reason.includes("No reason provided")
-    ) {
-      const cleanReason =
-        resolvedStatus.reason.split(":").pop()?.trim() || resolvedStatus.reason;
-      studentMattersList.push(cleanReason);
-    }
+    const repeatTag = repeatCount > 0 ? ` (RPT${repeatCount})` : "";
+    const reinstatedTag = hasReturnHistory ? " (REINSTATED)" : "";
 
-    const rowData: any[] = [index + 1, student.regNo, student.name, "B/S"];
+    // Final Display Name: "John Doe (REINSTATED) (RPT1)"
+    const finalDisplayName = `${student.name}${reinstatedTag}${repeatTag}`.toUpperCase();
 
+    const rowData: any[] = [ currentIndex + 1, student.regNo, finalDisplayName, "B/S" ];
+
+    // const rowData: any[] = [currentIndex + 1, student.regNo, student.name, "B/S"];
+
+    // Fill Unit Marks
     offeredUnits.forEach((unit) => {
       const markObj = marks.find((m) => (m.student?._id?.toString() || m.student?.toString()) === sId && m.programUnit?.unit?.code === unit.code);
 
-      if (resolvedStatus.isLocked) {
-        // --- FIX: For Academic Leave, we don't put "INC" text ---
-        rowData.push(""); 
-        incCount++;
-      } else if (markObj) {
-        // const isSpecial = markObj.isSpecial || markObj.attempt === "special" || (markObj.remarks?.toLowerCase().includes("financial"));
-        const isSpecial = markObj.isSpecial || markObj.attempt === "special" || (markObj.remarks?.toLowerCase().includes("special"));
+      if (resolvedStatus.isLocked) rowData.push("");
+      else if (markObj) {
+        const isSpecial = markObj.isSpecial || markObj.remarks?.toLowerCase().includes("special");
         const markValue = markObj.agreedMark ?? 0;
+        const isMissingData = !markObj.caTotal30 || !markObj.examTotal70;
 
-        const isMissingData = !markObj.caTotal30 || !markObj.examTotal70 || markObj.examTotal70 === 0;
+        if (isSpecial) rowData.push(`${markValue}C`);
+        else if (isMissingData || markValue === 0) rowData.push("INC");
+        else rowData.push(markValue);
+      } else rowData.push("INC");
+    });
 
-        if (isSpecial && markObj.remarks) {
-          const cleanSpecialReason = markObj.remarks.split(':').pop()?.trim() || markObj.remarks;
-          studentMattersList.push(cleanSpecialReason);
-        }
+    // Formatting the Specific Recommendation Column
+    let recomm = audit.status;
+    
+    const isSpecialCase = audit.specialList.length > 0 || audit.failedList.length > 0 || audit.incompleteList.length > 0;
 
-        let displayMark: string | number = markValue;
-        if (!isSpecial && (isMissingData || markValue === 0)) {
-            displayMark = "INC";
-            incCount++;
-        } else if (isMissingData) {
-            // It's special, but maybe missing data? Still show the mark, but special rules apply.
-            displayMark = `${markValue}C`;
-        }
-        
-        rowData.push(displayMark);
-
-        if (isSpecial) {
-            specialCount++;
-        } else if (displayMark === "INC") {
-            // Already handled in the IF above
-        } else if (markValue < passMark) {
-            suppCount++; 
-            totalMarks += markValue; 
-            unitCount++;
-        } else { totalMarks += markValue; unitCount++; }
-      } else {
-        incCount++;
-        rowData.push("INC"); 
-      }
-    });  
-
-    // Recommendation Logic (ENG RULES)
-    const mean = unitCount > 0 ? totalMarks / unitCount : 0;
-    const failRate = (suppCount + incCount) / offeredUnits.length;
-
-    let recommText = "";
-    if (resolvedStatus.isLocked) {
-      recommText = resolvedStatus.status;
-    } else if (failRate >= 0.5 || mean < 40) {
-      recommText = "REPEAT YEAR";
-    } else if (failRate > 0.33) {
-      recommText = "STAY OUT (RETAKE)";
-    } else {
+    if ( isSpecialCase && !["REPEAT YEAR", "STAYOUT", "DEREGISTERED"].includes(audit.status)) {
       const parts = [];
-      if (suppCount > 0) parts.push(`SUPP ${suppCount}`);
-      if (specialCount > 0) parts.push(`SPEC ${specialCount}`);
-      if (incCount > 0) parts.push(`INC ${incCount}`);
-      recommText = parts.length > 0 ? parts.join("; ") : "PASS";
+      if (audit.failedList.length > 0) parts.push(`SUPP ${audit.failedList.length}`);
+      if (audit.specialList.length > 0) parts.push(`SPEC ${audit.specialList.length}`);
+      if (audit.incompleteList.length > 0) parts.push(`INC ${audit.incompleteList.length}`);
+      recomm = parts.length > 0 ? parts.join("; ") : audit.status;
     }
 
-    // Update Overall Stats
-    if (recommText.includes("PASS")) statsSummary.PASS++;
-    else if (recommText.includes("SUPP")) statsSummary.SUPPLEMENTARY++;
-    else if (recommText.includes("SPEC")) statsSummary.SPECIAL++;
-    else if (recommText.includes("REPEAT")) statsSummary["REPEAT YEAR"]++;
-    else if (recommText.includes("STAY OUT")) statsSummary["STAY OUT"]++;
-    else if (recommText.includes("INC")) statsSummary.INCOMPLETE++;
-    else if (recommText.includes("DEREG")) statsSummary.DEREGISTERED++;
-      
+    const studentMattersList: string[] = [];
+
+    if ( resolvedStatus.isLocked && resolvedStatus.reason && !resolvedStatus.reason.includes("No reason provided")) {
+      const cleanReason = resolvedStatus.reason.split(":").pop()?.trim() || resolvedStatus.reason;
+      if (cleanReason.toLowerCase() !== "reason pending") studentMattersList.push(cleanReason);
+    }
+
+    // 2. Special Exam Grounds (From the engine)
+    audit.specialList.forEach((spec: any) => {
+      if (spec.grounds) {
+        const cleanSpec = spec.grounds.split(":").pop()?.trim() || spec.grounds;
+        // Only push if it's a real reason, not just the word "Special"
+        if (!["special", "reason pending"].includes(cleanSpec.toLowerCase())) {
+          studentMattersList.push(cleanSpec);
+        }
+      }
+    });
+
+    // 3. Final cleanup and population
     const finalMatters = Array.from(new Set(studentMattersList)).join(", ");
 
-    rowData.push(unitCount, totalMarks, parseFloat(mean.toFixed(2)), recommText, finalMatters);
+    // Totals and Recommendations from Engine
+    const totalMarks =
+      audit.passedList.reduce((a, b) => a + b.mark, 0) +
+      (audit.failedList as any[]).reduce((a, b) => a + (b.mark || 0), 0);
+
+    rowData.push(
+      audit.summary.totalExpected,
+      totalMarks,
+      parseFloat(audit.weightedMean),
+      recomm,
+      finalMatters,
+    );
+
     const row = sheet.getRow(rIdx);
     row.values = rowData;
 
-    // --- STYLING LOGIC ---
+    // STYLING
     row.eachCell((cell, colNum) => {
       cell.border = thinBorder;
       cell.alignment = { horizontal: "center", vertical: "middle" };
-      // new addition
       cell.font = { size: 8, name: fontName };
 
-      if (colNum === 2 || colNum === 3) cell.alignment = { horizontal: "left", vertical: "middle" };
-      
+      // Highlight REINSTATED names in Blue
+      // if (colNum === 3 && (hasReturnHistory || repeatCount > 0)) cell.font = { color: { argb: "FF0000FF" }, bold: true, size: 8, name: fontName };
 
-      // Highlight Logic for Unit Columns (5 onwards)
-      if (colNum >= 5 && colNum < tuColIdx) {
-        const cellValue = cell.value?.toString() || "";
-        
-        // --- FIX: Logic for Academic Leave Highlight ---
-        if (resolvedStatus.isLocked) {
-          // 1. LOCKED (Leave/Defer): Red background, No text
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" } };
-       } else if (cellValue === "INC" || cellValue.includes("C")) {
-          // 2. INC or SPECIAL-C: Yellow background
+      if (colNum === totalCols - 1) {
+        cell.protection = { locked: false }; // Keep editable
+        const matterText = cell.value?.toString().toUpperCase() || "";
+        // Highlight "FINANCIAL" matters in Yellow
+        if (matterText.includes("ACADEMIC LEAVE") || matterText.includes("Academic Leave")) {
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
-          cell.font = { color: { argb: "FF000000" }, size: 8, name: fontName }; // Black text for readability on yellow
-       } else if (typeof cell.value === 'number' && cell.value < passMark) {
-          // 3. ORDINARY FAIL: Red background, Red text
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" } };
-          cell.font = { color: { argb: "FF9C0006" }, bold: true, size: 8, name: fontName };
-       }
+        }
       }
 
-      // Make Student Matters Column Unlocked (Editable)
-      if (colNum === totalCols) cell.protection = { locked: false };      
+      if (colNum === totalCols) {
+        cell.protection = { locked: false }; // Keep editable
+        cell.alignment = { horizontal: "left", vertical: "middle" };
+
+        const matterText = cell.value?.toString().toUpperCase() || "";
+        // Highlight "FINANCIAL" matters in Yellow
+        if ( matterText.includes("FINANCIAL") || matterText.includes("Financial")) {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+          cell.font = { bold: true, size: 8, name: fontName };
+        }
+      }
+
+      if (colNum === 2 || colNum === 3) cell.alignment = { horizontal: "left", vertical: "middle" };
+
+      if (colNum >= 5 && colNum < tuColIdx) {
+        const val = cell.value?.toString() || "";
+        if (resolvedStatus.isLocked) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" } };
+        else if (val === "INC" || val.includes("C")) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+        else if (typeof cell.value === "number" && cell.value < passMark) {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" } };
+          cell.font = { color: { argb: "FF9C0006" }, bold: true, size: 8, name: fontName };
+        }
+      }
     });
-  });
-  
+    row.getCell(totalCols).protection = { locked: false };
+    currentIndex++;
+  }
+
   const lastDataRow = 10 + students.length;
 
  // 4. UNIT STATISTICS 
@@ -235,7 +230,6 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
     
     // Set a smaller row height for the stats section
     r.height = 15; 
-
     const labelCell = r.getCell(3);
     labelCell.value = label;
     // Reduced font size to 7 and simplified labels to save horizontal space

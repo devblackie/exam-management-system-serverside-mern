@@ -27,12 +27,7 @@ export interface StudentStatusResult {
   variant: "success" | "warning" | "error" | "info";
   details: string;
   weightedMean: string;
-  summary: {
-    totalExpected: number;
-    passed: number;
-    failed: number;
-    missing: number;
-  };
+  summary: { totalExpected: number; passed: number; failed: number; missing: number; isOnLeave?: boolean; };
   passedList: { code: string; mark: number }[];
   failedList: { displayName: string; attempt: number }[];
   specialList: { displayName: string; grounds: string }[];
@@ -41,9 +36,14 @@ export interface StudentStatusResult {
   leaveDetails?: string;
 }
 
-export const calculateStudentStatus = async ( studentId: any, programId: any, academicYearName: string, yearOfStudy: number = 1): Promise<StudentStatusResult> => {
+export const calculateStudentStatus = async (
+  studentId: any,
+  programId: any,
+  academicYearName: string,
+  yearOfStudy: number = 1,
+): Promise<StudentStatusResult> => {
   const settings = await InstitutionSettings.findOne().lean();
-  if (!settings) throw new Error("Institution settings not found. Please configure grading scales.");
+  if (!settings) throw new Error( "Institution settings not found. Please configure grading scales." );
   const passMark = settings?.passMark || 40;
 
   const student = await Student.findById(studentId).lean();
@@ -56,7 +56,7 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
       variant: "info",
       details: `Student is on ${resolved.status.toLowerCase()}.`,
       weightedMean: "0.00",
-      summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
+      summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0, isOnLeave: true },
       passedList: [],
       failedList: [],
       specialList: [],
@@ -66,48 +66,15 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
     };
   }
 
-  const curriculum = (await ProgramUnit.find({
-    program: programId,
-    requiredYear: yearOfStudy,
-  })
-    .populate("unit")
-    .lean()) as any[];
-  const grades = (await FinalGrade.find({ student: studentId })
-    .populate({ path: "programUnit", populate: { path: "unit" } })
-    .lean()) as any[];
+  const curriculum = (await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy })
+    .populate("unit").lean()) as any[];
+  // const grades = (await FinalGrade.find({ student: studentId }).populate({ path: "programUnit", populate: { path: "unit" } }).lean()) as any[];
 
   const marks = await Mark.find({ student: studentId }).lean();
   const marksMap = new Map();
   marks.forEach((m) => marksMap.set(m.programUnit.toString(), m));
 
   const unitResults = new Map();
-  grades.sort(
-    (a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime(),
-  );
-
-  grades.forEach((g) => {
-    if (!g.programUnit || !g.programUnit.unit) return;
-    const unitCode = g.programUnit?.unit?.code?.toUpperCase();
-
-    // FIX: Define programUnitId correctly
-    const programUnitId = g.programUnit._id.toString();
-
-    if (!unitCode) return;
-    const numericMark = g.agreedMark ?? g.totalMark ?? 0;
-
-    // Check if this unit is marked as special in the raw marks table
-    const rawMarkRecord = marksMap.get(programUnitId);
-    const isSpecial =
-      rawMarkRecord?.isSpecial || g.isSpecial || g.status === "SPECIAL";
-
-    unitResults.set(unitCode, {
-      mark: Number(numericMark),
-      status: g.status,
-      attempt: parseInt(g.attempt) || g.attemptNumber || 1,
-      isSpecial: isSpecial,
-      remarks: g.remarks || rawMarkRecord?.remarks || "",
-    });
-  });
 
   const lists = {
     passed: [] as { code: string; mark: number }[],
@@ -118,128 +85,116 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
   };
 
   let totalFirstAttemptSum = 0;
+  let unitsContributingToMean = 0;
 
   curriculum.forEach((pUnit) => {
     const code = pUnit.unit?.code?.toUpperCase();
     const displayName = `${code}: ${pUnit.unit?.name}`;
-    const record = unitResults.get(code);
     const rawMarkRecord = marksMap.get(pUnit._id.toString());
 
-    if (!record) {
-      if (rawMarkRecord) {
-        // Scenario 1: CAT exists, Exam is 0 or missing
-        if (rawMarkRecord.caTotal30 > 0 && !rawMarkRecord.examTotal70) {
-          lists.incomplete.push(`${displayName} (Missing Exam)`);
-        }
-        // Scenario 2: Exam exists, CAT is 0 or missing
-        else if (rawMarkRecord.examTotal70 > 0 && !rawMarkRecord.caTotal30) {
-          lists.incomplete.push(`${displayName} (Missing CAT)`);
-        } else {
-          lists.missing.push(displayName);
-        }
-      } else {
-        lists.missing.push(displayName);
+    if (!rawMarkRecord) {
+      lists.missing.push(displayName);
+      return;
+    }
+
+    const isSpecial = rawMarkRecord.isSpecial ||  rawMarkRecord.attempt === "special" || rawMarkRecord.remarks?.toLowerCase().includes("special");
+    const hasCAT = (rawMarkRecord.caTotal30 || 0) > 0;
+    const hasExam = (rawMarkRecord.examTotal70 || 0) > 0;
+    const markValue = rawMarkRecord.agreedMark || 0;
+
+    // Case B: Special Exams
+    if (isSpecial) lists.special.push({ displayName, grounds: rawMarkRecord.remarks || "Special" });
+    // Case C: Absolute Zero (No CAT AND No Exam) -> ENG 23c
+    // else if (!hasCAT && !hasExam && markValue === 0) lists.missing.push(`${displayName} (Absent)`);
+    else if (!hasCAT && !hasExam) lists.missing.push(`${displayName} (Absent)`);
+    // Case D: Partial Data -> ENG 15a
+    else if (!hasCAT && hasExam) lists.incomplete.push(`${displayName} (No CAT)`);
+    else if (!hasExam && hasCAT) lists.missing.push(`${displayName} (Missing Exam)`);
+    // Case E: Numerical Result (Passed or Failed)
+    else {
+      if (markValue >= passMark) lists.passed.push({ code, mark: markValue });
+      else {
+        lists.failed.push({ displayName, attempt: 1 });
       }
-      // lists.missing.push(displayName);
-    } else if (record.isSpecial) {
-      lists.special.push({
-        displayName,
-        grounds: record.remarks || "Special Grounds",
-      });
-    } else if (record.mark === 0 || record.status === "INCOMPLETE") {
-      lists.incomplete.push(displayName);
-    } else if (record.mark >= passMark) {
-      if (record.attempt === 1) totalFirstAttemptSum += record.mark;
-      lists.passed.push({ code, mark: record.mark });
-    } else {
-      if (record.attempt === 1) totalFirstAttemptSum += record.mark;
-      lists.failed.push({ displayName, attempt: record.attempt });
+      // ENG 16c: Mean is based on first attempt marks
+      totalFirstAttemptSum += markValue;
+      unitsContributingToMean++;
     }
   });
 
   const totalUnits = curriculum.length;
   const failCount = lists.failed.length;
-  const meanMark = totalUnits > 0 ? totalFirstAttemptSum / totalUnits : 0;
+  const missingCount = lists.missing.length;
+  const specialCount = lists.special.length;
+  const incCount = lists.incomplete.length;
+  const meanMark = unitsContributingToMean > 0 ? totalFirstAttemptSum / totalUnits : 0; // Divided by total prescribed units per ENG 16c
 
-  let status = "IN GOOD STANDING";
+  const attemptedUnitsCount = totalUnits - (specialCount + missingCount + incCount);
+  const performanceMean = attemptedUnitsCount > 0 ? totalFirstAttemptSum / attemptedUnitsCount : 0;
+  
+  // The official Mean for ENG 16 (where missing = 0)
+  const officialMean = totalFirstAttemptSum / totalUnits;
+
+  let status = "PASS";
   let variant: "success" | "warning" | "error" | "info" = "success";
   let details = "Proceed to next year.";
 
-  if (lists.missing.length >= 6) {
-    status = "DEREGISTERED";
-    variant = "error";
-    details = "Absent from 6+ examinations (ENG 23c).";
-  } else if (failCount >= totalUnits / 2 || meanMark < 40) {
-    status = "REPEAT YEAR";
-    variant = "error";
-    details = "Failed >= 50% units or Mean < 40% (ENG 16).";
-  } else if (failCount > totalUnits / 3) {
-    status = "STAYOUT";
-    variant = "warning";
-    details = "Failed > 1/3 of units. Retake units next year (ENG 15h).";
-  } else if (failCount > 0) {
-    status = "SUPPLEMENTARY";
-    variant = "warning";
-    details = "Eligible for supplementaries (ENG 13a).";
-  } else if (lists.special.length > 0) {
-    status = "SPECIALS PENDING";
-    variant = "info";
-    details = "Awaiting special examinations.";
+  // 1. DEREGISTERED (ENG 23c) - Highest Priority
+  if (missingCount >= 6) { status = "DEREGISTERED"; variant = "error"; details = `Absent from 6+ (${missingCount}) examinations (ENG 23c).`; }
+  // 2. SPECIALS PENDING - Pre-empts Failures
+  // If a student has ANY special, we don't sentence them to Repeat/Stayout yet
+  // UNLESS the number of units they ALREADY sat and failed is >= 50%
+  else if (specialCount > 0 && failCount < totalUnits / 2) {
+    const parts = [];
+    if (failCount > 0) parts.push(`SUPP ${failCount}`); parts.push(`SPEC ${specialCount}`); if (incCount > 0) parts.push(`INC ${incCount}`);
+    if (missingCount > 0) parts.push(`INC ${missingCount}`);
+
+    status = parts.join("; "); variant = "info"; details = `Awaiting specials. Current Mean in sat units: ${performanceMean.toFixed(2)}`;
   }
+  // 3. REPEAT YEAR (ENG 16)
+  // else if (failCount >= totalUnits / 2 || meanMark < 40) { status = "REPEAT YEAR"; variant = "error"; details = `Failed >= 50% (${failCount}/${totalUnits}) units or Mean (${meanMark.toFixed(2)}) < 40% (ENG 16).`; }
+  else if (failCount >= totalUnits / 2 || officialMean < 40) { status = "REPEAT YEAR"; variant = "error"; details = `Failed >= 50% (${failCount}/${totalUnits}) units or Mean (${officialMean.toFixed(2)}) < 40% (ENG 16).`; }
+  // 4. STAYOUT (ENG 15h)
+  else if (failCount > totalUnits / 3) { status = "STAYOUT"; variant = "warning"; details = `Failed > 1/3 of units (${failCount}/${totalUnits}). Retake failed units next year (ENG 15h).`;}
+  // 5. SUPPLEMENTARY / INCOMPLETE
+  else if (failCount > 0 || incCount > 0 || missingCount > 0) {
+    const parts = [];
+    if (failCount > 0) parts.push(`SUPP ${failCount}`);
+    if (incCount > 0) parts.push(`INC ${incCount}`);
+    if (missingCount > 0) parts.push(`INC ${missingCount}`);
+    status = parts.join("; ");
+    variant = "warning";
+    details = "Eligible for supplementary exams or pending incomplete marks.";
+  }
+  
 
   return {
-    status,
-    variant,
-    details,
+    status, variant, details,
     weightedMean: meanMark.toFixed(2),
-    summary: {
-      totalExpected: totalUnits,
-      passed: lists.passed.length,
-      failed: failCount,
-      missing: lists.missing.length,
-    },
+    summary: { totalExpected: totalUnits, passed: lists.passed.length, failed: failCount, missing: lists.missing.length },
     passedList: lists.passed,
-    failedList: lists.failed,
-    specialList: lists.special,
-    missingList: lists.missing,
-    incompleteList: lists.incomplete,
+    failedList: lists.failed, specialList: lists.special, missingList: lists.missing, incompleteList: lists.incomplete,
   };
-};
+};;;
 
-export const previewPromotion = async (
-  programId: string,
-  yearToPromote: number,
-  academicYearName: string,
-) => {
+export const previewPromotion = async ( programId: string, yearToPromote: number, academicYearName: string ) => {
   const nextYear = yearToPromote + 1;
-  const allStudents = await Student.find({
-    program: programId,
-    currentYearOfStudy: yearToPromote,
-  }).lean();
+  const allStudents = await Student.find({ program: programId, currentYearOfStudy: yearToPromote }).lean();
 
   const eligible: any[] = [];
   const blocked: any[] = [];
 
   for (const student of allStudents) {
     const isAlreadyPromoted = student.currentYearOfStudy === nextYear;
-    const statusResult = await calculateStudentStatus(
-      student._id,
-      programId,
-      academicYearName,
-      yearToPromote,
-    );
+    const statusResult = await calculateStudentStatus( student._id, programId, academicYearName, yearToPromote );
 
     const report = {
-      id: student._id,
-      regNo: student.regNo,
-      name: student.name,
+      id: student._id, regNo: student.regNo, name: student.name,
       status: isAlreadyPromoted ? "ALREADY PROMOTED" : statusResult.status,
-      summary: statusResult.summary,
-      reasons: [] as string[],
-      isAlreadyPromoted,
+      summary: statusResult.summary, reasons: [] as string[], isAlreadyPromoted,
     };
 
-    if (!isAlreadyPromoted && statusResult.status === "IN GOOD STANDING") {
+    if (!isAlreadyPromoted && statusResult.status === "PASS") {
       eligible.push(report);
     } else if (isAlreadyPromoted) {
       eligible.push(report);
@@ -270,49 +225,27 @@ export const previewPromotion = async (
     }
   }
 
-  return {
-    totalProcessed: allStudents.length,
-    eligibleCount: eligible.length,
-    blockedCount: blocked.length,
-    eligible,
-    blocked,
-  };
+  return { totalProcessed: allStudents.length, eligibleCount: eligible.length, blockedCount: blocked.length, eligible, blocked };
 };
 
 export const promoteStudent = async (studentId: string) => {
   const student = await Student.findById(studentId).populate("program");
   if (!student) throw new Error("Student not found");
 
-  if (student.status !== "active") {
-    return {
-      success: false,
-      message: `Promotion blocked: Student status is ${student.status}`,
-    };
-  }
+  if (student.status !== "active") return { success: false, message: `Promotion blocked: Student status is ${student.status}`};
 
   const auditResult = await performAcademicAudit(studentId);
-  if (auditResult.discontinued) {
-    return { success: false, message: `Discontinued: ${auditResult.reason}` };
-  }
-
+  if (auditResult.discontinued) return { success: false, message: `Discontinued: ${auditResult.reason}` };
+  
   const program = student.program as any;
   const duration = program.durationYears || 4;
   const actualCurrentYear = student.currentYearOfStudy || 1;
 
-  const statusResult = await calculateStudentStatus(
-    student._id,
-    student.program,
-    "N/A",
-    actualCurrentYear,
-  );
+  const statusResult = await calculateStudentStatus( student._id, student.program, "N/A", actualCurrentYear );
 
-  if (statusResult?.status === "IN GOOD STANDING") {
+  if (statusResult?.status === "PASS") {
     const rawMean = parseFloat(statusResult.weightedMean);
-    const yearWeight = getYearWeight(
-      program,
-      student.entryType || "Direct",
-      actualCurrentYear,
-    );
+    const yearWeight = getYearWeight( program, student.entryType || "Direct", actualCurrentYear );
     const weightedContribution = rawMean * yearWeight;
 
     const historyRecord = {
@@ -326,50 +259,28 @@ export const promoteStudent = async (studentId: string) => {
 
     if (actualCurrentYear === duration) {
       const fullHistory = [...(student.academicHistory || []), historyRecord];
-      const finalWAA = fullHistory.reduce(
-        (acc, curr) => acc + (curr.weightedContribution || 0),
-        0,
-      );
+      const finalWAA = fullHistory.reduce((acc, curr) => acc + (curr.weightedContribution || 0), 0 );
 
       let classification = "PASS";
       if (finalWAA >= 70) classification = "FIRST CLASS HONOURS";
-      else if (finalWAA >= 60)
-        classification = "SECOND CLASS HONOURS (UPPER DIVISION)";
-      else if (finalWAA >= 50)
-        classification = "SECOND CLASS HONOURS (LOWER DIVISION)";
+      else if (finalWAA >= 60) classification = "SECOND CLASS HONOURS (UPPER DIVISION)";
+      else if (finalWAA >= 50) classification = "SECOND CLASS HONOURS (LOWER DIVISION)";
 
       await Student.findByIdAndUpdate(studentId, {
-        $set: {
-          status: "graduand",
-          finalWeightedAverage: finalWAA.toFixed(2),
-          classification: classification,
-          graduationYear: new Date().getFullYear(),
+        $set: { status: "graduand", finalWeightedAverage: finalWAA.toFixed(2),
+          classification: classification, graduationYear: new Date().getFullYear(),
         },
         $push: { academicHistory: historyRecord },
       });
-      return {
-        success: true,
-        message: `Student completed final year. Classified as ${classification}`,
-        isGraduation: true,
-      };
+      return { success: true, message: `Student completed final year. Classified as ${classification}`, isGraduation: true };
     }
 
     const nextYear = actualCurrentYear + 1;
     await Student.findByIdAndUpdate(studentId, {
       $set: { currentYearOfStudy: nextYear, currentSemester: 1 },
-      $push: {
-        promotionHistory: {
-          from: actualCurrentYear,
-          to: nextYear,
-          date: new Date(),
-        },
-        academicHistory: historyRecord,
-      },
+      $push: { promotionHistory: { from: actualCurrentYear, to: nextYear, date: new Date() }, academicHistory: historyRecord },
     });
-    return {
-      success: true,
-      message: `Successfully promoted to Year ${nextYear}`,
-    };
+    return { success: true, message: `Successfully promoted to Year ${nextYear}` };
   }
 
   let blockMessage = `Promotion Blocked: `;
@@ -379,37 +290,18 @@ export const promoteStudent = async (studentId: string) => {
   } else if (statusResult?.status === "REPEAT YEAR") {
     blockMessage +=
       "Student is required to repeat the year based on academic performance.";
-  } else {
-    blockMessage += `Current status is '${statusResult?.status}'.`;
-  }
+  } else { blockMessage += `Current status is '${statusResult?.status}'.`; }
   return { success: false, message: blockMessage, details: statusResult };
 };
 
-export const bulkPromoteClass = async (
-  programId: string,
-  yearToPromote: number,
-  academicYearName: string,
-) => {
+export const bulkPromoteClass = async ( programId: string, yearToPromote: number, academicYearName: string ) => {
   const nextYear = yearToPromote + 1;
-  const students = await Student.find({
-    program: programId,
-    currentYearOfStudy: { $in: [yearToPromote, nextYear] },
-    status: "active",
-  });
-  const results = {
-    promoted: 0,
-    failed: 0,
-    alreadyPromoted: 0,
-    errors: [] as string[],
-  };
+  const students = await Student.find({ program: programId, currentYearOfStudy: { $in: [yearToPromote, nextYear] }, status: "active"});
+  const results = { promoted: 0, failed: 0, alreadyPromoted: 0, errors: [] as string[]};
   for (const student of students) {
     try {
       const studentId = (student._id as any).toString();
-      if (student.currentYearOfStudy >= nextYear) {
-        results.alreadyPromoted++;
-        results.promoted++;
-        continue;
-      }
+      if (student.currentYearOfStudy >= nextYear) { results.alreadyPromoted++; results.promoted++; continue; }
       const res = await promoteStudent(studentId);
       if (res.success) results.promoted++;
       else results.failed++;
