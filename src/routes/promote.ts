@@ -103,15 +103,15 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       await addDocIfNotEmpty(wordData.eligible, getFileName("PASS_LIST"), generateEligibleSummaryDoc);
 
       sendProgress(50, "Checking Supplementary List...");
-      const suppList = wordData.blocked.filter(s => s.status === "SUPPLEMENTARY");
+      const suppList = wordData.blocked.filter(s => s.status.includes("SUPP"));
       await addDocIfNotEmpty(suppList, getFileName("Supplementary_List"), generateSupplementaryExamsDoc);
 
       sendProgress(60, "Checking Special Exams...");
-      const finSpecials = wordData.blocked.filter(s => s.reasons?.some((r: String) => r.toLowerCase().includes("special") && r.toLowerCase().includes("financial")));
-      await addDocIfNotEmpty(finSpecials, getFileName("Special_Financial"), generateSpecialExamsDoc, "Financial");
-
-      const compSpecials = wordData.blocked.filter(s => s.reasons?.some((r: String) => r.toLowerCase().includes("special") && r.toLowerCase().includes("compassionate")));
-      await addDocIfNotEmpty(compSpecials, getFileName("SpecialExams_Compassionate"), generateSpecialExamsDoc, "Compassionate");
+      const finSpecials = wordData.blocked.filter(s => s.status.includes("SPEC") && s.remarks?.toLowerCase().includes("financial"));
+      await addDocIfNotEmpty(finSpecials, getFileName("Special_Exams_Financial"), generateSpecialExamsDoc, "Financial");
+      
+      const compSpecials = wordData.blocked.filter(s => s.status.includes("SPEC") && (s.remarks?.toLowerCase().includes("compassionate") || s.remarks?.toLowerCase().includes("medical")));
+      await addDocIfNotEmpty(compSpecials, getFileName("Special_Exams_Compassionate"), generateSpecialExamsDoc, "Compassionate");
 
       sendProgress(70, "Checking Stayout & Repeat Year...");
       const stayoutList = wordData.blocked.filter(s => s.status === "STAYOUT");
@@ -122,15 +122,15 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
 
       sendProgress(75, "Checking Academic Exceptions...");
       // 1. INCOMPLETE LIST
-      const incompleteList = wordData.blocked.filter(s => s.status === "INCOMPLETE");
+      const incompleteList = wordData.blocked.filter(s => s.status.includes("INC") && !s.status.includes("SPEC"));
       await addDocIfNotEmpty(incompleteList, getFileName("Incomplete_Results_List"), generateIncompleteListDoc);
 
       // 2. ACADEMIC LEAVE - Financial
-      const finLeave = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "DEFERMENT" && s.remarks?.toLowerCase().includes("financial"));
+      const finLeave = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "ON LEAVE" || s.status === "DEFERMENT" && s.academicLeavePeriod?.type === "financial" || s.remarks?.toLowerCase().includes("financial"));
       await addDocIfNotEmpty(finLeave, getFileName("Academic_Leave_Financial"), generateAcademicLeaveDoc, "Financial", "ACADEMIC LEAVE");
 
-      // 3. ACADEMIC LEAVE - Compassionate
-      const compLeave = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "DEFERMENT" && s.remarks?.toLowerCase().includes("compassionate"));
+      // 3. ACADEMIC LEAVE - Compassionate      
+      const compLeave = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "ON LEAVE" || s.status === "DEFERMENT" && s.academicLeavePeriod?.type === "compassionate" || s.remarks?.toLowerCase().includes("compassionate"));
       await addDocIfNotEmpty(compLeave, getFileName("Academic_Leave_Compassionate"), generateAcademicLeaveDoc, "Compassionate", "ACADEMIC LEAVE");
 
       sendProgress(80, "Checking Discontinuations & Deregistrations...");

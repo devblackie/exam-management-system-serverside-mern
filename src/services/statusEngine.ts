@@ -192,6 +192,7 @@ export const previewPromotion = async ( programId: string, yearToPromote: number
       id: student._id, regNo: student.regNo, name: student.name,
       status: isAlreadyPromoted ? "ALREADY PROMOTED" : statusResult.status,
       summary: statusResult.summary, reasons: [] as string[], isAlreadyPromoted,
+      remarks: student.remarks, academicLeavePeriod: student.academicLeavePeriod, details: statusResult.details
     };
 
     if (!isAlreadyPromoted && statusResult.status === "PASS") {
@@ -199,14 +200,22 @@ export const previewPromotion = async ( programId: string, yearToPromote: number
     } else if (isAlreadyPromoted) {
       eligible.push(report);
     } else {
-      if (statusResult.leaveDetails)
-        report.reasons.push(
-          `${statusResult.status}: ${statusResult.leaveDetails}`,
-        );
-      if (statusResult.specialList.length)
+      if (statusResult.leaveDetails) report.reasons.push(`${statusResult.status}: ${statusResult.leaveDetails}`);
+      
+      // if (statusResult.specialList.length)
+      //   report.reasons.push(
+      //     ...statusResult.specialList.map((s) => `${s.displayName} (SPECIAL)`),
+      //   );
+
+      if (statusResult.specialList.length > 0) {
+        const grounds = statusResult.specialList
+          .map((s) => s.grounds)
+          .join(", ");
+        if (!report.remarks) report.remarks = grounds;
         report.reasons.push(
           ...statusResult.specialList.map((s) => `${s.displayName} (SPECIAL)`),
         );
+      }
       if (statusResult.incompleteList.length)
         report.reasons.push(
           ...statusResult.incompleteList.map((u) => `${u} (INCOMPLETE)`),
@@ -288,7 +297,7 @@ export const promoteStudent = async (studentId: string) => {
     blockMessage +=
       "Student has pending Special Examinations. These must be sat and graded before promotion.";
   } else if (statusResult?.status === "REPEAT YEAR") {
-    blockMessage +=
+    blockMessage += 
       "Student is required to repeat the year based on academic performance.";
   } else { blockMessage += `Current status is '${statusResult?.status}'.`; }
   return { success: false, message: blockMessage, details: statusResult };
