@@ -123,8 +123,7 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
     });
 
     // Formatting the Specific Recommendation Column
-    let recomm = audit.status;
-    
+    let recomm = audit.status;    
     const isSpecialCase = audit.specialList.length > 0 || audit.failedList.length > 0 || audit.incompleteList.length > 0;
 
     if ( isSpecialCase && !["REPEAT YEAR", "STAYOUT", "DEREGISTERED"].includes(audit.status)) {
@@ -135,35 +134,27 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
       recomm = parts.length > 0 ? parts.join("; ") : audit.status;
     }
 
-    // const studentMattersList: string[] = [];
-
-    // if ( resolvedStatus.isLocked && resolvedStatus.reason && !resolvedStatus.reason.includes("No reason provided")) {
-    //   const cleanReason = resolvedStatus.reason.split(":").pop()?.trim() || resolvedStatus.reason;
-    //   if (cleanReason.toLowerCase() !== "reason pending") studentMattersList.push(cleanReason);
-    // }
-
-    // // 2. Special Exam Grounds (From the engine)
-    // audit.specialList.forEach((spec: any) => {
-    //   if (spec.grounds) {
-    //     const cleanSpec = spec.grounds.split(":").pop()?.trim() || spec.grounds;
-    //     // Only push if it's a real reason, not just the word "Special"
-    //     if (!["special", "reason pending"].includes(cleanSpec.toLowerCase())) {
-    //       studentMattersList.push(cleanSpec);
-    //     }
-    //   }
-    // });
-
-    // // 3. Final cleanup and population
-    // const finalMatters = Array.from(new Set(studentMattersList)).join(", ");
-
-    // ----------
     const studentMattersList: string[] = [];
 
     // 1. Check for Academic Leave Grounds
-    if (student.status === "on_leave" || student.status === "deferred") {
-      const leaveType = student.academicLeavePeriod?.type || "";
-      if (leaveType) studentMattersList.push(leaveType.toUpperCase());
-    }
+    if (audit.summary.isOnLeave || ["ACADEMIC LEAVE", "DEFERMENT", "ON LEAVE"].includes(audit.status)) {
+      // Priority 1: The structured leave period type
+      const leaveType = student.academicLeavePeriod?.type;
+      // Priority 2: The remarks field
+      const remarks = student.remarks?.toLowerCase() || "";
+      
+      if (leaveType) {
+          studentMattersList.push(leaveType.toUpperCase());
+      } else if (remarks.includes("financial")) {
+          studentMattersList.push("FINANCIAL");
+      } else if (remarks.includes("compassionate") || remarks.includes("medical")) {
+          studentMattersList.push("COMPASSIONATE");
+      } else if (audit.leaveDetails) {
+          // Fallback to the reason string from resolveStudentStatus
+          const cleanReason = audit.leaveDetails.split(":").pop()?.trim().toUpperCase();
+          if (cleanReason && !cleanReason.includes("PENDING")) studentMattersList.push(cleanReason);
+      }
+  }
 
     // 2. Check for Special Grounds (from engine/marks)
     audit.specialList.forEach((spec: any) => {
@@ -176,26 +167,18 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
       }
     });
 
-    // // 3. Status Resolver Fallback
-    // if (studentMattersList.length === 0 && resolvedStatus.reason && !resolvedStatus.reason.includes("Pending")) {
-    //     studentMattersList.push(resolvedStatus.reason.split(":").pop()?.trim().toUpperCase());
-    // }
-
     const finalMatters = Array.from(new Set(studentMattersList)).join(", ");
-    // -----------
 
     // Totals and Recommendations from Engine
-    const totalMarks =
-      audit.passedList.reduce((a, b) => a + b.mark, 0) +
-      (audit.failedList as any[]).reduce((a, b) => a + (b.mark || 0), 0);
+    const totalMarks = audit.passedList.reduce((a, b) => a + b.mark, 0) + (audit.failedList as any[]).reduce((a, b) => a + (b.mark || 0), 0);
 
-    rowData.push(
-      audit.summary.totalExpected,
-      totalMarks,
-      parseFloat(audit.weightedMean),
-      recomm,
-      finalMatters,
-    );
+    const isBlockedStatus = audit.summary.isOnLeave || ["ACADEMIC LEAVE", "DEFERMENT", "DEREGISTERED"].includes(audit.status);
+
+    // Prepare the display values
+    const displayTotal = isBlockedStatus ? "-" : totalMarks;
+    const displayMean = isBlockedStatus ? "-" : parseFloat(audit.weightedMean).toFixed(2);
+
+    rowData.push( audit.summary.totalExpected, displayTotal, displayMean, recomm, finalMatters );
 
     const row = sheet.getRow(rIdx);
     row.values = rowData;

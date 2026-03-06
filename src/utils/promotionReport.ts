@@ -40,7 +40,6 @@ const formatStudentName = (fullName: string): string => {
 
 export const generatePromotionWordDoc = async ( data: PromotionData ): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, eligible, blocked, logoBuffer, offeredUnits = [] } = data;
-
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
 
   const stats: Record<string, number> = {
@@ -95,16 +94,19 @@ function createSummaryTable(stats: Record<string, number>) {
   // Filter out 0 values to make the table dynamic
   const activeRows = Object.entries(stats).filter(([_, val]) => val > 0);
   const totalCount = Object.values(stats).reduce((a, b) => a + b, 0);
+  const cellMargin = { top: 50, bottom: 50, left: 100, right: 100 };
 
   const rows = [
     ...activeRows.map(([label, val]) => new TableRow({
       children: [
         new TableCell({ 
+          margins: cellMargin,
           width: { size: 70, type: WidthType.PERCENTAGE },
           borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
           children: [new Paragraph({ children: [new TextRun({ text: label.toUpperCase(), size: 20 })] })] 
         }),
         new TableCell({ 
+          margins: cellMargin,
           width: { size: 30, type: WidthType.PERCENTAGE },
           borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
           children: [new Paragraph({ children: [new TextRun({ text: val.toString(), size: 20 })] })] 
@@ -115,10 +117,12 @@ function createSummaryTable(stats: Record<string, number>) {
     new TableRow({
       children: [
         new TableCell({ 
+          margins: cellMargin,
           borders: { top: { style: BorderStyle.SINGLE, size: 1 }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
           children: [new Paragraph({ children: [new TextRun({ text: "TOTAL", bold: true, size: 20 })] })] 
         }),
         new TableCell({ 
+          margins: cellMargin,
           borders: { top: { style: BorderStyle.SINGLE, size: 1 }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
           children: [new Paragraph({ children: [new TextRun({ text: totalCount.toString(), bold: true, size: 20 })] })] 
         }),
@@ -139,7 +143,7 @@ function createOfferedUnitsTable(units: { code: string; name: string }[]) {
 
   const headerCell = (text: string) => new TableCell({
     margins: cellMargin,
-    children: [new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: [new TextRun({ text, bold: true, size: 22 })] })]
+    children: [new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: [new TextRun({ text, bold: true, size: 20 })] })]
   });
 
   const headerRow = new TableRow({
@@ -158,12 +162,12 @@ function createOfferedUnitsTable(units: { code: string; name: string }[]) {
       children: [
         // Left Side
         new TableCell({ margins: cellMargin, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: (i + 1).toString(), size: 21 })] })] }),
-        new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: left.code, size: 21 })] })] }),
-        new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: left.name, size: 21 })] })] }),
+        new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: left.code, size: 20 })] })] }),
+        new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: left.name, size: 20 })] })] }),
         // Right Side
-        new TableCell({ margins: cellMargin, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: right ? (midPoint + i + 1).toString() : "", size: 21 })] })] }),
-        new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: right?.code || "", size: 21 })] })] }),
-        new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: right?.name || "", size: 21 })] })] }),
+        new TableCell({ margins: cellMargin, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: right ? (midPoint + i + 1).toString() : "", size: 20 })] })] }),
+        new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: right?.code || "", size: 20 })] })] }),
+        new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: right?.name || "", size: 20 })] })] }),
       ]
     }));
   }
@@ -174,15 +178,11 @@ function createOfferedUnitsTable(units: { code: string; name: string }[]) {
   });
 }
 
-export const generateEligibleSummaryDoc = async (
-  data: any,
-): Promise<Buffer> => {
+export const generateEligibleSummaryDoc = async ( data: any ): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, eligible, logoBuffer } = data;
-  
   const candidateCountWords = numberToWords(eligible.length);
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
   const nextYearOrdinal = getOrdinalYear(yearOfStudy + 1);
-
   const cellMargin = { top: 0, bottom: 0, left: 100, right: 100 };
 
   const doc = new Document({
@@ -191,12 +191,7 @@ export const generateEligibleSummaryDoc = async (
         properties: {},
         children: [
           // 1. LOGO
-          ...(logoBuffer.length > 0 ? [
-                new Paragraph({
-                  alignment: AlignmentType.CENTER,
-                  children: [ new ImageRun({ data: logoBuffer, transformation: { width: 120, height: 70 }, type: "png", }),],
-                }),
-              ] : []),
+          ...(logoBuffer.length > 0 ? [ new Paragraph({ alignment: AlignmentType.CENTER, children: [ new ImageRun({ data: logoBuffer, transformation: { width: 120, height: 70 }, type: "png", })]})] : []),
 
           // 2. Headers
           new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [ new TextRun({ text: config.instName.toUpperCase(), bold: true, size: 23 })] }),
@@ -230,8 +225,6 @@ export const generateEligibleSummaryDoc = async (
 
           // 5. THE PASS LIST TABLE
           createPassTable(eligible, cellMargin),
-
-          // 6. SIGNATORIES (Aligned with the image layout)
           ...createDocFooter(),         
         ],
       },
@@ -251,9 +244,7 @@ function createPassTable(students: any[], cellMargin: any) {
         new TableCell({
           width: { size: col.width, type: WidthType.PERCENTAGE },
           margins: cellMargin,
-          children: [
-            new Paragraph({ spacing: { before: 0, after: 0 }, children: [new TextRun({ text: col.text, bold: true, size: 18 })] }),
-          ],
+          children: [ new Paragraph({ spacing: { before: 0, after: 0 }, children: [new TextRun({ text: col.text, bold: true, size: 18 })] })],
         }),
     ),
   });
@@ -276,7 +267,6 @@ function createPassTable(students: any[], cellMargin: any) {
     rows: [headerRow, ...dataRows],
   });
 }
-
 
 export const generateSpecialExamsDoc = async (
   data: PromotionData, 
@@ -327,10 +317,7 @@ export const generateSpecialExamsDoc = async (
 
 export const generateSupplementaryExamsDoc = async (data: PromotionData): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
-
-  // 1. Filter the blocked list for students who have a "SUPP" status
   const suppCandidates = blocked.filter(s => s.status.includes("SUPP"));
-  
   const count = suppCandidates.length;
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
   const candidateCountWords = numberToWords(suppCandidates.length);
@@ -345,21 +332,20 @@ export const generateSupplementaryExamsDoc = async (data: PromotionData): Promis
           new Paragraph({
             alignment: AlignmentType.JUSTIFIED,
             spacing: { before: 400, after: 300 },
-                      children: [
-                        new TextRun({ text: `The following `, size: 22 }),
-                        new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22  }),
-                        new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22   }),
-                        new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
-                        new TextRun({ text: `Academic Year, `, size: 22 }),
-                        new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22  }),
-                        new TextRun({ text: `Examinations for the `, size: 22 }),
-                        new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
-                        new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they sit for the supplementary exams when next offered. `, size: 22 }),
-                      ],
+            children: [
+              new TextRun({ text: `The following `, size: 22 }),
+              new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22  }),
+              new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22   }),
+              new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+              new TextRun({ text: `Academic Year, `, size: 22 }),
+              new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22  }),
+              new TextRun({ text: `Examinations for the `, size: 22 }),
+              new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
+              new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they sit for the supplementary exams when next offered. `, size: 22 }),
+            ],
           }),
 
           createStandardUnitDetailTable(suppCandidates, cellMargin, "FAIL"),
-
           ...createDocFooter(),
         ],
       },
@@ -373,12 +359,10 @@ export const generateSupplementaryExamsDoc = async (data: PromotionData): Promis
 export const generateIncompleteListDoc = async (data: PromotionData): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
   const incompleteList = blocked.filter(s => s.status.includes("INC") && !s.status.includes("SPEC"));
-
   const count = incompleteList.length;
   const candidateCountWords = numberToWords(count);
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
   const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
-
   
   const doc = new Document({
     sections: [{
@@ -387,13 +371,13 @@ export const generateIncompleteListDoc = async (data: PromotionData): Promise<Bu
         new Paragraph({
           alignment: AlignmentType.JUSTIFIED,
           spacing: { before: 400, after: 300 },
-                    children: [
-                        new TextRun({ text: `The following `, size: 22 }),
-                        new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22 }),
-                        new TextRun({ text: `candidate(s) have incomplete results in the unit(s) indicated against their names during the `, size: 22 }),
-                        new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
-                        new TextRun({ text: `Academic Year. These results are pending due to missing CATs or Examination marks.`, size: 22 }),
-                      ],
+          children: [
+            new TextRun({ text: `The following `, size: 22 }),
+            new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22 }),
+            new TextRun({ text: `candidate(s) have incomplete results in the unit(s) indicated against their names during the `, size: 22 }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year. These results are pending due to missing CATs or Examination marks.`, size: 22 }),
+          ],
         }),
         createStandardUnitDetailTable(incompleteList, cellMargin,"INCOMPLETE"),
         ...createDocFooter(),
@@ -463,7 +447,7 @@ export const generateStayoutExamsDoc = async ( data: PromotionData ): Promise<Bu
               new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they Stay Out according to `, size: 22 }),         
               new TextRun({
                 text: `ENG Rule 15 (h) “A candidate who fails more than a third and less than a half of the prescribed units in any year of study shall be required to retake examinations only in the failed units during the ordinary examination period when examinations for the individual units are offered. Such a candidate will not be allowed to retake examinations during the supplementary period immediately following the ordinary examinations period in which he/she failed the units”.`,
-                size: 22, bold: true, italics: true,
+                size: 20, bold: true, italics: true,
               }),
             ],
           }),
@@ -506,7 +490,7 @@ export const generateRepeatYearDoc = async (data: PromotionData): Promise<Buffer
             new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they Repeat according to `, size: 22 }),         
             new TextRun({
               text: `ENG Rule 16 (c) “A candidate, who attains an average mark of less than 40% in any year of study based on the marks obtained on the 1st attempt for each unit, shall be required to repeat the entire year. Such a candidate will enrol for all the units and sit for all CATs and assignment and the exams will be marked out of 100%. `,
-              size: 22, bold: true, italics: true,
+              size: 20, bold: true, italics: true,
             }),
           ],
         }),
@@ -526,9 +510,7 @@ export const generateRepeatYearDoc = async (data: PromotionData): Promise<Buffer
 // ---- Academic Leave and Deferment Block -----
 
 export const generateAcademicLeaveDoc = async (
-  data: PromotionData,
-  groundType: "Financial" | "Compassionate" | string,
-  type: "ACADEMIC LEAVE" | "DEFERMENT" | string,
+  data: PromotionData, groundType: "Financial" | "Compassionate" | string, type: "ACADEMIC LEAVE" | "DEFERMENT" | string,
 ): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
 
@@ -539,34 +521,21 @@ export const generateAcademicLeaveDoc = async (
   // 2. Filtering Logic
   const list = (blocked || []).filter((s) => {
     const statusStr = (s.status || "").toUpperCase();
-    const isTargetStatus =
-      statusStr.includes(safeType) || statusStr === "ON LEAVE";
+    const isTargetStatus = statusStr.includes(safeType) || statusStr === "ON LEAVE";
 
     const targetGroundLower = safeGround.toLowerCase();
     const leaveTypeLower = (s.academicLeavePeriod?.type || "").toLowerCase();
     const remarksLower = (s.remarks || "").toLowerCase();
 
-    return (
-      isTargetStatus &&
-      (leaveTypeLower === targetGroundLower ||
-        remarksLower.includes(targetGroundLower))
-    );
+    return ( isTargetStatus && (leaveTypeLower === targetGroundLower || remarksLower.includes(targetGroundLower)));
   });
 
   // 3. Formatted List for Table
   const formattedList = list.map((s) => ({
     regNo: s.regNo || "N/A",
     name: s.name || "N/A",
-    effectiveDate: s.academicLeavePeriod?.startDate
-      ? new Date(s.academicLeavePeriod.startDate).toLocaleDateString("en-GB", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        })
-      : "N/A",
-    remarks: s.remarks?.includes(":")
-      ? s.remarks.split(":")[1].trim()
-      : s.remarks || "Approved",
+    effectiveDate: s.academicLeavePeriod?.startDate ? new Date(s.academicLeavePeriod.startDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "N/A",
+    remarks: s.remarks?.includes(":") ? s.remarks.split(":")[1].trim() : s.remarks || "Approved",
   }));
 
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
@@ -577,34 +546,18 @@ export const generateAcademicLeaveDoc = async (
       {
         children: [
           // Using the safe uppercase variables created above
-          ...createDocHeader(
-            logoBuffer,
-            programName,
-            academicYear,
-            currentYearOrdinal,
-            `${safeType} (${safeGround} GROUNDS)`,
-          ),
+          ...createDocHeader( logoBuffer, programName, academicYear, currentYearOrdinal, `${safeType} (${safeGround} GROUNDS)` ),
           new Paragraph({
             alignment: AlignmentType.JUSTIFIED,
             spacing: { before: 400, after: 300 },
             children: [
-              new TextRun({
-                text: `The following candidate(s) have been officially granted `,
-                size: 22,
-              }),
+              new TextRun({ text: `The following candidate(s) have been officially granted `, size: 22 }),
               new TextRun({ text: `${safeType} `, bold: true, size: 22 }),
               new TextRun({ text: `on `, size: 22 }),
-              new TextRun({
-                text: `${safeGround.toLowerCase()} grounds `,
-                bold: true,
-                size: 22,
-              }),
+              new TextRun({ text: `${safeGround.toLowerCase()} grounds `, bold: true, size: 22 }),
               new TextRun({ text: `for the `, size: 22 }),
               new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
-              new TextRun({
-                text: `Academic Year. They are expected to resume studies at the beginning of the next academic cycle.`,
-                size: 22,
-              }),
+              new TextRun({ text: `Academic Year. They are expected to resume studies at the beginning of the next academic cycle.`, size: 22 }),
             ],
           }),
 
@@ -623,77 +576,25 @@ function createAdministrativeTable(students: any[], cellMargin: any) {
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     borders: {
-      top: { style: BorderStyle.NONE },
-      bottom: { style: BorderStyle.NONE },
-      left: { style: BorderStyle.NONE },
-      right: { style: BorderStyle.NONE },
-      insideHorizontal: { style: BorderStyle.NONE },
-      insideVertical: { style: BorderStyle.NONE },
+      top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE },
+      right: { style: BorderStyle.NONE }, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
     },
     rows: [
       new TableRow({
         children: ["S/No", "Reg No.", "Name", "Effective Date", "Remarks"].map(
           (h) =>
-            new TableCell({
-              margins: cellMargin,
-              children: [
-                new Paragraph({
-                  children: [new TextRun({ text: h, bold: true, size: 18 })],
-                }),
-              ],
-            }),
+            new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [new TextRun({ text: h, bold: true, size: 18 })] }) ]}),
         ),
       }),
       ...students.map(
         (s, i) =>
           new TableRow({
             children: [
-              new TableCell({
-                margins: cellMargin,
-                children: [
-                  new Paragraph({
-                    children: [
-                      new TextRun({ text: (i + 1).toString(), size: 18 }),
-                    ],
-                  }),
-                ],
-              }),
-              new TableCell({
-                margins: cellMargin,
-                children: [
-                  new Paragraph({
-                    children: [new TextRun({ text: s.regNo, size: 18 })],
-                  }),
-                ],
-              }),
-              new TableCell({
-                margins: cellMargin,
-                children: [
-                  new Paragraph({
-                    children: [new TextRun({ text: s.name, size: 18 })],
-                  }),
-                ],
-              }),
-              new TableCell({
-                margins: cellMargin,
-                children: [
-                  new Paragraph({
-                    children: [
-                      new TextRun({ text: s.effectiveDate || "N/A", size: 18 }),
-                    ],
-                  }),
-                ],
-              }),
-              new TableCell({
-                margins: cellMargin,
-                children: [
-                  new Paragraph({
-                    children: [
-                      new TextRun({ text: s.remarks || "Approved", size: 18 }),
-                    ],
-                  }),
-                ],
-              }),
+              new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [ new TextRun({ text: (i + 1).toString(), size: 18 }) ] }) ] }),
+              new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [new TextRun({ text: s.regNo, size: 18 })] }) ]}),
+              new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [new TextRun({ text: s.name, size: 18 })] }) ]}),
+              new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [ new TextRun({ text: s.effectiveDate || "N/A", size: 18 })]}) ]}),
+              new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [ new TextRun({ text: s.remarks || "Approved", size: 18 })]}) ]}),
             ],
           }),
       ),
@@ -706,10 +607,7 @@ function createAdministrativeTable(students: any[], cellMargin: any) {
 
 export const generateCarryForwardDoc = async (data: PromotionData): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, eligible, logoBuffer } = data;
-
-  // Filter for students who are promoted but have carry-over units in their reasons
   const carryForwardList = eligible.filter((s) => s.reasons?.length > 0 && s.status !== "ALREADY PROMOTED"  );
-
   const count = carryForwardList.length;
   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
   const nextYearOrdinal = getOrdinalYear(yearOfStudy + 1);
@@ -725,26 +623,14 @@ export const generateCarryForwardDoc = async (data: PromotionData): Promise<Buff
           children: [
             new TextRun({ text: `The following `, size: 22 }),
             new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
-            new TextRun({ 
-              text: `candidate(s) satisfied the Board of Examiners in at least two-thirds of the units. In accordance with `, 
-              size: 22 
-            }),
+            new TextRun({ text: `candidate(s) satisfied the Board of Examiners in at least two-thirds of the units. In accordance with `, size: 22 }),
             new TextRun({ text: `ENG Rule 13 (e)`, bold: true, size: 22 }),
-            new TextRun({ 
-              text: `, they are allowed to proceed to `, 
-              size: 22 
-            }),
+            new TextRun({ text: `, they are allowed to proceed to `, size: 22 }),
             new TextRun({ text: `${nextYearOrdinal} Year `, bold: true, size: 22 }),
-            new TextRun({ 
-              text: `but MUST carry forward the failed units indicated against their names to be taken when next offered.`, 
-              size: 22 
-            }),
+            new TextRun({ text: `but MUST carry forward the failed units indicated against their names to be taken when next offered.`, size: 22 }),
           ],
         }),
 
-        // HERE IS WHERE YOU USE THE TABLE FUNCTION
-        // createCarryForwardTable(carryForwardList, { top: 100, bottom: 100, left: 100, right: 100 }),
-        // Inside generateCarryForwardDoc...
         createStandardUnitDetailTable(carryForwardList, cellMargin),
         ...createDocFooter(),
       ],
@@ -785,12 +671,11 @@ export const generateDiscontinuationDoc = async (data: PromotionData): Promise<B
             new TextRun({ text: `according to `, size: 22 }),         
             new TextRun({
               text: `ENG Rule 23 (c) “A candidate who fails third but less than half units of a year of study after the first attempt and subsequently fails the same units after retaking the examinations shall be discontinued.”  `,
-              size: 22, bold: true, italics: true,
+              size: 20, bold: true, italics: true,
             }),
           ],
         }),
         createStandardUnitDetailTable(list, cellMargin),
-
         ...createDocFooter(),
       ]
     }]
@@ -832,7 +717,7 @@ export const generateDeregistrationDoc = async (data: PromotionData): Promise<Bu
             new TextRun({ text: `according to `, size: 22 }),         
             new TextRun({
               text: `ENG 23 (e) “A candidate who absents himself/herself from all the Special Examinations which he/she was required to sit, or fails to undertake all extra assignments for continuous assessment without good cause, shall be assumed to have deserted the degree course, and shall be deregistered forthwith.  `,
-              size: 22, bold: true, italics: true,
+              size: 20, bold: true, italics: true,
             }),
           ],
         }),
@@ -846,7 +731,6 @@ export const generateDeregistrationDoc = async (data: PromotionData): Promise<Bu
 };
 
 // ---- Deregistration Block end ----
-
 
 function createStandardUnitDetailTable(students: any[], cellMargin: any, filterKeyword?: string) {
   const headerRow = new TableRow({
@@ -964,8 +848,7 @@ function createAwardTable(students: any[]) {
               new TableCell({ children: [new Paragraph({ text: (i + 1).toString() })] }),
               new TableCell({ children: [new Paragraph({ text: s.regNo })] }),
               new TableCell({ children: [new Paragraph({ text: s.name })] }),
-              new TableCell({
-                children: [new Paragraph({ text: s.classification || "PASS" })],
+              new TableCell({ children: [new Paragraph({ text: s.classification || "PASS" })],
               }),
             ],
           }),
@@ -989,13 +872,7 @@ export const generateSimpleNameListDoc = async (data: PromotionData): Promise<Bu
         new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
           rows: [
-           
-            new TableRow({
-              children: ["S/No", "Reg No.", "Full Name"].map(
-                (h) =>
-                  new TableCell({ children: [ new Paragraph({ children: [new TextRun({ text: h, bold: true })] }) ] }),
-              ),
-            }),
+            new TableRow({ children: ["S/No", "Reg No.", "Full Name"].map((h) => new TableCell({ children: [ new Paragraph({ children: [new TextRun({ text: h, bold: true })] }) ] }))}),
             ...eligible.map((s, i) => new TableRow({
               children: [
                 new TableCell({ children: [new Paragraph({ text: (i + 1).toString() })] }),
@@ -1819,14 +1696,9 @@ export const generateStudentTranscript = async (
           // 6. GRADING KEY (Formal Table Structure)
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
-
             borders: {
-              top: { style: BorderStyle.NONE },
-              bottom: { style: BorderStyle.NONE },
-              left: { style: BorderStyle.NONE },
-              right: { style: BorderStyle.NONE },
-              insideHorizontal: { style: BorderStyle.NONE },
-              insideVertical: { style: BorderStyle.NONE },
+              top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE },
+              right: { style: BorderStyle.NONE }, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
             },
             rows: [
               new TableRow({
@@ -1838,97 +1710,30 @@ export const generateStudentTranscript = async (
                       new Table({
                         width: { size: 100, type: WidthType.PERCENTAGE },
                         borders: {
-                          top: { style: BorderStyle.SINGLE, size: 1 },
-                          bottom: { style: BorderStyle.SINGLE, size: 1 },
-                          left: { style: BorderStyle.SINGLE, size: 1 },
-                          right: { style: BorderStyle.SINGLE, size: 1 },
-                          insideVertical: {
-                            style: BorderStyle.SINGLE,
-                            size: 1,
-                          },
-                          insideHorizontal: { style: BorderStyle.NONE },
+                          top: { style: BorderStyle.SINGLE, size: 1 }, bottom: { style: BorderStyle.SINGLE, size: 1 }, left: { style: BorderStyle.SINGLE, size: 1 },
+                          right: { style: BorderStyle.SINGLE, size: 1 }, insideVertical: { style: BorderStyle.SINGLE, size: 1 }, insideHorizontal: { style: BorderStyle.NONE },
                         },
                         rows: [
                           // Header Row
                           new TableRow({
                             tableHeader: true,
-                            children: [
-                              ["GRADE", 20],
-                              ["RANGE", 30],
-                              ["DESCRIPTION", 50],
-                            ].map(
+                            children: [["GRADE", 20], ["RANGE", 30], ["DESCRIPTION", 50]].map(
                               ([text, width]) =>
                                 new TableCell({
-                                  width: {
-                                    size: width as number,
-                                    type: WidthType.PERCENTAGE,
-                                  },
+                                  width: { size: width as number, type: WidthType.PERCENTAGE },
                                   shading: { fill: "F2F2F2" },
-                                  children: [
-                                    new Paragraph({
-                                      alignment: AlignmentType.CENTER,
-                                      children: [
-                                        new TextRun({
-                                          text: text as string,
-                                          bold: true,
-                                          size: 16,
-                                        }),
-                                      ],
-                                    }),
-                                  ],
+                                  children: [ new Paragraph({ alignment: AlignmentType.CENTER, children: [ new TextRun({ text: text as string, bold: true, size: 16 })] })],
                                 }),
                             ),
                           }),
                           // Data Rows
-                          ...[
-                            { g: "A", r: "70 - 100%", d: "EXCELLENT" },
-                            { g: "B", r: "60 - 69%", d: "GOOD" },
-                            { g: "C", r: "50 - 59%", d: "SATISFACTORY" },
-                            { g: "D", r: "40 - 49%", d: "PASS" },
-                            { g: "E", r: "0 - 39%", d: "FAIL" },
-                          ].map(
+                          ...[{ g: "A", r: "70 - 100%", d: "EXCELLENT" }, { g: "B", r: "60 - 69%", d: "GOOD" }, { g: "C", r: "50 - 59%", d: "SATISFACTORY" }, { g: "D", r: "40 - 49%", d: "PASS" }, { g: "E", r: "0 - 39%", d: "FAIL" }].map(
                             (item) =>
                               new TableRow({
                                 children: [
-                                  new TableCell({
-                                    children: [
-                                      new Paragraph({
-                                        alignment: AlignmentType.CENTER,
-                                        children: [
-                                          new TextRun({
-                                            text: item.g,
-                                            size: 16,
-                                          }),
-                                        ],
-                                      }),
-                                    ],
-                                  }),
-                                  new TableCell({
-                                    children: [
-                                      new Paragraph({
-                                        alignment: AlignmentType.CENTER,
-                                        children: [
-                                          new TextRun({
-                                            text: item.r,
-                                            size: 16,
-                                          }),
-                                        ],
-                                      }),
-                                    ],
-                                  }),
-                                  new TableCell({
-                                    children: [
-                                      new Paragraph({
-                                        alignment: AlignmentType.CENTER,
-                                        children: [
-                                          new TextRun({
-                                            text: item.d,
-                                            size: 16,
-                                          }),
-                                        ],
-                                      }),
-                                    ],
-                                  }),
+                                  new TableCell({ children: [ new Paragraph({ alignment: AlignmentType.CENTER, children: [ new TextRun({ text: item.g, size: 16 })]}) ] }),
+                                  new TableCell({ children: [ new Paragraph({ alignment: AlignmentType.CENTER, children: [  new TextRun({ text: item.r, size: 16 }) ]}) ]}),
+                                  new TableCell({ children: [ new Paragraph({ alignment: AlignmentType.CENTER, children: [ new TextRun({ text: item.d, size: 16 })] }) ] }),
                                 ],
                               }),
                           ),
@@ -1939,24 +1744,10 @@ export const generateStudentTranscript = async (
                   // RIGHT CELL: Registration Number
                   new TableCell({
                     width: { size: 30, type: WidthType.PERCENTAGE },
-                    verticalAlign: VerticalAlign.BOTTOM, // Keeps it aligned with bottom of grading key
+                    verticalAlign: VerticalAlign.BOTTOM, 
                     children: [
-                      new Paragraph({
-                        alignment: AlignmentType.RIGHT,
-                        children: [
-                          new TextRun({ text: "NB: ", bold: true, size: 20 }),
-                        ],
-                      }),
-                      new Paragraph({
-                        alignment: AlignmentType.RIGHT,
-                        children: [
-                          new TextRun({
-                            text: "1 unit consists of 35 lecture hours or equivalent (3 Practical hours of two tutorial hours are equivalent to 0ne lecture hour ) ",
-                            bold: false,
-                            size: 16,
-                          }),
-                        ],
-                      }),
+                      new Paragraph({ alignment: AlignmentType.RIGHT, children: [ new TextRun({ text: "NB: ", bold: true, size: 20 }) ]}),
+                      new Paragraph({ alignment: AlignmentType.RIGHT, children: [ new TextRun({ text: "1 unit consists of 35 lecture hours or equivalent (3 Practical hours of two tutorial hours are equivalent to 0ne lecture hour ) ", bold: false, size: 16 }) ]}),
                     ],
                   }),
                 ],
@@ -1968,88 +1759,31 @@ export const generateStudentTranscript = async (
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
             borders: {
-              // top: { style: BorderStyle.NONE },
-              top: { style: BorderStyle.NONE },
-              bottom: { style: BorderStyle.NONE },
-              left: { style: BorderStyle.NONE },
-              right: { style: BorderStyle.NONE },
-              insideHorizontal: { style: BorderStyle.NONE },
-              insideVertical: { style: BorderStyle.NONE },
+              top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE },
+              right: { style: BorderStyle.NONE }, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
             },
             rows: [
               new TableRow({
                 children: [
                   new TableCell({
                     children: [
-                      new Paragraph({
-                        spacing: { before: 800 },
-                        children: [
-                          new TextRun({
-                            text: "SIGNED: __________________________________________",
-                            bold: true,
-                          }),
-                        ],
-                      }),
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: `DEAN, ${config.schoolName.toUpperCase()}`,
-                            bold: true,
-                            size: 18,
-                          }),
-                        ],
-                      }),
+                      new Paragraph({ spacing: { before: 800 }, children: [ new TextRun({ text: "SIGNED: __________________________________________", bold: true }) ]}),
+                      new Paragraph({ children: [ new TextRun({ text: `DEAN, ${config.schoolName.toUpperCase()}`, bold: true, size: 18 }) ]}),
                     ],
                   }),
                   new TableCell({
                     children: [
-                      new Paragraph({
-                        spacing: { before: 800 },
-                        children: [
-                          new TextRun({
-                            text: "SIGNED: __________________________________________",
-                            bold: true,
-                          }),
-                        ],
-                      }),
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: `REGISTRAR, ${config.registrar.toUpperCase()}`,
-                            bold: true,
-                            size: 18,
-                          }),
-                        ],
-                      }),
-                    ],
+                      new Paragraph({ spacing: { before: 800 }, children: [ new TextRun({ text: "SIGNED: __________________________________________", bold: true }) ]}),
+                      new Paragraph({ children: [ new TextRun({ text: `REGISTRAR, ${config.registrar.toUpperCase()}`, bold: true, size: 18 }) ] }),
+                    ]
                   }),
                 ],
               }),
             ],
           }),
 
-          new Paragraph({
-            spacing: { before: 100 },
-            children: [
-              new TextRun({
-                text: `DATE OF ISSUE: ${new Date().toLocaleDateString()}`,
-                size: 14,
-                italics: true,
-              }),
-            ],
-          }),
-
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            spacing: { before: 400 },
-            children: [
-              new TextRun({
-                text: "--- This result slip is issued without any erasures or alterations ---",
-                italics: true,
-                size: 14,
-              }),
-            ],
-          }),
+          new Paragraph({ spacing: { before: 100 }, children: [ new TextRun({ text: `DATE OF ISSUE: ${new Date().toLocaleDateString()}`, size: 14, italics: true }) ]}),
+          new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 400 }, children: [ new TextRun({ text: "--- This result slip is issued without any erasures or alterations ---", italics: true, size: 14 }) ]}),
         ],
       },
     ],

@@ -36,52 +36,32 @@ export interface StudentStatusResult {
   leaveDetails?: string;
 }
 
-export const calculateStudentStatus = async (
-  studentId: any,
-  programId: any,
-  academicYearName: string,
-  yearOfStudy: number = 1,
-): Promise<StudentStatusResult> => {
+export const calculateStudentStatus = async ( studentId: any, programId: any, academicYearName: string, yearOfStudy: number = 1 ): Promise<StudentStatusResult> => {
   const settings = await InstitutionSettings.findOne().lean();
   if (!settings) throw new Error( "Institution settings not found. Please configure grading scales." );
   const passMark = settings?.passMark || 40;
-
   const student = await Student.findById(studentId).lean();
   if (!student) throw new Error("Student not found");
-
   const resolved = resolveStudentStatus(student);
   if (resolved.isLocked) {
     return {
-      status: resolved.status, // "ACADEMIC LEAVE", etc.
-      variant: "info",
-      details: `Student is on ${resolved.status.toLowerCase()}.`,
-      weightedMean: "0.00",
-      summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0, isOnLeave: true },
-      passedList: [],
-      failedList: [],
-      specialList: [],
-      missingList: [],
-      incompleteList: [],
-      leaveDetails: resolved.reason,
+      status: resolved.status, variant: "info", details: `Student is on ${resolved.status.toLowerCase()}.`,
+      weightedMean: "0.00", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0, isOnLeave: true },
+      passedList: [], failedList: [], specialList: [], missingList: [], incompleteList: [], leaveDetails: resolved.reason,
     };
   }
 
-  const curriculum = (await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy })
-    .populate("unit").lean()) as any[];
-  // const grades = (await FinalGrade.find({ student: studentId }).populate({ path: "programUnit", populate: { path: "unit" } }).lean()) as any[];
-
+  const curriculum = (await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy }).populate("unit").lean()) as any[];
   const marks = await Mark.find({ student: studentId }).lean();
   const marksMap = new Map();
   marks.forEach((m) => marksMap.set(m.programUnit.toString(), m));
-
   const unitResults = new Map();
 
   const lists = {
     passed: [] as { code: string; mark: number }[],
     failed: [] as { displayName: string; attempt: number }[],
     special: [] as { displayName: string; grounds: string }[],
-    missing: [] as string[],
-    incomplete: [] as string[],
+    missing: [] as string[], incomplete: [] as string[],
   };
 
   let totalFirstAttemptSum = 0;
@@ -92,10 +72,7 @@ export const calculateStudentStatus = async (
     const displayName = `${code}: ${pUnit.unit?.name}`;
     const rawMarkRecord = marksMap.get(pUnit._id.toString());
 
-    if (!rawMarkRecord) {
-      lists.missing.push(displayName);
-      return;
-    }
+    if (!rawMarkRecord) { lists.missing.push(displayName); return; }
 
     const isSpecial = rawMarkRecord.isSpecial ||  rawMarkRecord.attempt === "special" || rawMarkRecord.remarks?.toLowerCase().includes("special");
     const hasCAT = (rawMarkRecord.caTotal30 || 0) > 0;
@@ -105,7 +82,6 @@ export const calculateStudentStatus = async (
     // Case B: Special Exams
     if (isSpecial) lists.special.push({ displayName, grounds: rawMarkRecord.remarks || "Special" });
     // Case C: Absolute Zero (No CAT AND No Exam) -> ENG 23c
-    // else if (!hasCAT && !hasExam && markValue === 0) lists.missing.push(`${displayName} (Absent)`);
     else if (!hasCAT && !hasExam) lists.missing.push(`${displayName} (Absent)`);
     // Case D: Partial Data -> ENG 15a
     else if (!hasCAT && hasExam) lists.incomplete.push(`${displayName} (No CAT)`);
@@ -113,9 +89,7 @@ export const calculateStudentStatus = async (
     // Case E: Numerical Result (Passed or Failed)
     else {
       if (markValue >= passMark) lists.passed.push({ code, mark: markValue });
-      else {
-        lists.failed.push({ displayName, attempt: 1 });
-      }
+      else { lists.failed.push({ displayName, attempt: 1 }); }
       // ENG 16c: Mean is based on first attempt marks
       totalFirstAttemptSum += markValue;
       unitsContributingToMean++;
@@ -175,7 +149,7 @@ export const calculateStudentStatus = async (
     passedList: lists.passed,
     failedList: lists.failed, specialList: lists.special, missingList: lists.missing, incompleteList: lists.incomplete,
   };
-};;;
+};
 
 export const previewPromotion = async ( programId: string, yearToPromote: number, academicYearName: string ) => {
   const nextYear = yearToPromote + 1;
@@ -202,11 +176,7 @@ export const previewPromotion = async ( programId: string, yearToPromote: number
     } else {
       if (statusResult.leaveDetails) report.reasons.push(`${statusResult.status}: ${statusResult.leaveDetails}`);
       
-      // if (statusResult.specialList.length)
-      //   report.reasons.push(
-      //     ...statusResult.specialList.map((s) => `${s.displayName} (SPECIAL)`),
-      //   );
-
+    
       if (statusResult.specialList.length > 0) {
         const grounds = statusResult.specialList
           .map((s) => s.grounds)
