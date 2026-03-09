@@ -713,7 +713,7 @@ export const generateDeregistrationDoc = async (data: PromotionData): Promise<Bu
             new TextRun({ text: `Examinations for the `, size: 22 }),
             new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
             new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they be `, size: 22 }),         
-            new TextRun({ text: `Deregistered  `, bold:true,  size: 22 }),         
+            new TextRun({ text: `Deregistered `, bold:true,  size: 22 }),         
             new TextRun({ text: `according to `, size: 22 }),         
             new TextRun({
               text: `ENG 23 (e) “A candidate who absents himself/herself from all the Special Examinations which he/she was required to sit, or fails to undertake all extra assignments for continuous assessment without good cause, shall be assumed to have deserted the degree course, and shall be deregistered forthwith.  `,

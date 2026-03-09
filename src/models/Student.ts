@@ -20,7 +20,8 @@ export interface IStudent extends Document {
   unitAttemptRegistry: { unitId: mongoose.Types.ObjectId; attempts: { attemptNumber: number; mark: number; passed: boolean; type: string; }[]; }[];
 
   // ENG 25.b: Store snapshots of each year for final classification
-  academicHistory: { yearOfStudy: number; annualMeanMark: number; weightedContribution: number; failedUnitsCount: number; isRepeatYear?: boolean; }[];
+  academicHistory: { academicYear: string; yearOfStudy: number; annualMeanMark: number; weightedContribution: number; failedUnitsCount: number; isRepeatYear?: boolean; date?: Date; }[];
+  statusEvents: { fromStatus: string; toStatus: string; date: Date; academicYear: string; reason: string; }[];
 }
 
 const schema = new Schema<IStudent>({
@@ -37,7 +38,8 @@ const schema = new Schema<IStudent>({
   academicLeavePeriod: { startDate: Date, endDate: Date, reason: String, type: { type: String, enum: ["compassionate", "financial", "other"] }},
   totalTimeOutYears: { type: Number, default: 0 },
   unitAttemptRegistry: [{ unitId: { type: Schema.Types.ObjectId, ref: "Unit" }, attempts: [{ attemptNumber: Number, mark: Number, passed: Boolean, type: String }]}],
-  academicHistory: [{ yearOfStudy: Number, annualMeanMark: Number, weightedContribution: Number, failedUnitsCount: Number, isRepeatYear: Boolean }]
+  academicHistory: [{ academicYear: String, yearOfStudy: Number, annualMeanMark: Number, weightedContribution: Number, failedUnitsCount: Number, isRepeatYear: Boolean, date: Date }],
+  statusEvents: [{ fromStatus: String, toStatus: String, date: { type: Date, default: Date.now }, academicYear: String, reason: String }],
 }, { timestamps: true });
 
 schema.index({ institution: 1, regNo: 1 }, { unique: true });

@@ -27,5 +27,6 @@ const schema = new Schema<IProgramUnit>(
 // Index: A Unit should be defined once per Program/Year/Semester
 schema.index({ program: 1, unit: 1, academicYear: 1 }, { unique: true });
 schema.index({ program: 1, requiredYear: 1, requiredSemester: 1 });
+schema.index({ program: 1, requiredYear: 1, requiredSemester: 1, institution: 1 });
 
 export default mongoose.model<IProgramUnit>("ProgramUnit", schema);

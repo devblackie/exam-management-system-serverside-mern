@@ -1,3 +1,4 @@
+// serverside/src/services/academicLeave.ts
 import Student from "../models/Student";
 import { differenceInYears, format, } from "date-fns";
 
@@ -19,6 +20,8 @@ export const grantAcademicLeave = async (
   }
 
   const dateRange = `${format(startDate, "MMM yyyy")} - ${format(endDate, "MMM yyyy")}`;
+  // We determine the current academic year string for the ledger
+  const currentAY = student.academicHistory?.slice(-1)[0]?.academicYear || "Current";
 
   // Update student status and track time
   return await Student.findByIdAndUpdate(studentId, {
@@ -29,6 +32,13 @@ export const grantAcademicLeave = async (
         totalTimeOutYears: (student.totalTimeOutYears || 0) + yearsRequested,
       },
       $push: {
+        statusEvents: {
+          fromStatus: student.status,
+          toStatus: "on_leave",
+          date: new Date(),
+          academicYear: currentAY,
+          reason: `${leaveType.toUpperCase()}: ${reason}`
+        },
         promotionHistory: {
           from: student.currentYearOfStudy,
           to: student.currentYearOfStudy, // Stay in same year
@@ -60,6 +70,13 @@ export const deferAdmission = async (studentId: string, academicYearsToDefer: 1 
         academicLeavePeriod: { startDate: new Date(), endDate: endDate, reason: "Admission Deferral", type: "other" },
       },
       $push: {
+        statusEvents: {
+          fromStatus: "new_admission",
+          toStatus: "deferred",
+          date: new Date(),
+          academicYear: "Admission Year",
+          reason: `Deferred admission for ${academicYearsToDefer} year(s)`
+        },
         promotionHistory: {
           from: 0, // 0 indicates pre-admission/entry
           to: 1,
@@ -79,6 +96,7 @@ export const revertStatusToActive = async (studentId: string) => {
   if (!student) throw new Error("Student not found");
 
   const previousStatus = student.status.toUpperCase();
+  const currentAY = student.academicHistory?.slice(-1)[0]?.academicYear || "Current";
 
   return await Student.findByIdAndUpdate(studentId, {
     $set: { 
@@ -86,6 +104,13 @@ export const revertStatusToActive = async (studentId: string) => {
       remarks: `Status manually reverted to active from ${previousStatus} on ${now.toDateString()}.` 
     },
     $push: {
+      statusEvents: {
+        fromStatus: previousStatus,
+        toStatus: "active",
+        date: now,
+        academicYear: currentAY,
+        reason: "REINSTATEMENT: Student resumed studies."
+      },
       promotionHistory: {
         from: student.currentYearOfStudy,
         to: student.currentYearOfStudy,

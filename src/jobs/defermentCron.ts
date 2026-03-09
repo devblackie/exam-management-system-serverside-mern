@@ -111,57 +111,60 @@
 import cron from "node-cron";
 import Student from "../models/Student";
 
-/**
- * PRODUCTION-READY: Automatic Status Reversion Job
- * Runs daily at 1:00 AM to check for expired leaves and deferments.
- * ENG. 19 & 20 compliance.
- * Reverts 'deferred' or 'on_leave' students to 'active' once endDate is reached.
- */
 export const startStatusReversionJob = () => {
   cron.schedule("0 1 * * *", async () => {
     const now = new Date();
-    console.log(`[Cron] Checking for expired leaves/deferments: ${now.toISOString()}`);
 
     try {
-      // 1. Find all students whose leave/deferment has ended
       const expiredStudents = await Student.find({
         status: { $in: ["deferred", "on_leave"] },
         "academicLeavePeriod.endDate": { $lte: now },
       });
 
-      if (expiredStudents.length === 0) {
-        console.log("[Cron] No expired statuses found today.");
-        return;
-      }
+      if (expiredStudents.length === 0) return;
 
-      // 2. Process each student to preserve Journey Timeline history
       const updatePromises = expiredStudents.map((student) => {
-        const previousStatus = student.status.toUpperCase();
-        
+        const previousStatus = student.status;
+
+        // Use existing history to find the relevant academic year
+        const lastHistoryEntry = student.academicHistory?.slice(-1)[0];
+        const currentAY = lastHistoryEntry?.academicYear || "Current Cycle";
+
         return Student.findByIdAndUpdate(student._id, {
           $set: {
             status: "active",
-            remarks: `Automatically resumed studies after ${previousStatus} on ${now.toDateString()}.`,
+            remarks: `System: Auto-reinstated from ${previousStatus.toUpperCase()} on ${now.toDateString()}.`,
           },
           $push: {
-            promotionHistory: {
-              from: student.currentYearOfStudy,
-              to: student.currentYearOfStudy,
+            // 1. Permanent Ledger for Journey UI (Reinstatement Event)
+            statusEvents: {
+              fromStatus: previousStatus,
+              toStatus: "active",
               date: now,
-              remarks: `SYSTEM: RETURNED FROM ${previousStatus}`
-            }
+              academicYear: currentAY,
+              reason: `SYSTEM AUTO-REINSTATEMENT: End of authorized ${previousStatus.replace("_", " ")} period.`,
+            },
+            // 2. Aligning with your Model's academicHistory (ENG 25.b)
+            // We record that the student returned during this specific Year of Study
+            academicHistory: {
+              academicYear: currentAY,
+              yearOfStudy: student.currentYearOfStudy,
+              annualMeanMark: lastHistoryEntry?.annualMeanMark || 0,
+              weightedContribution: lastHistoryEntry?.weightedContribution || 0,
+              failedUnitsCount: lastHistoryEntry?.failedUnitsCount || 0,
+              date: now, // Critical for sorting the Journey Timeline
+            },
           },
-          $unset: { academicLeavePeriod: 1 } 
+          $unset: { academicLeavePeriod: 1 },
         });
       });
 
       await Promise.all(updatePromises);
-
-      console.log(`[Cron] Successfully reactivated ${expiredStudents.length} student(s) and logged history.`);
+      console.log(
+        `[Cron] Reactivated ${expiredStudents.length} students. Updated academicHistory and statusEvents.`,
+      );
     } catch (error) {
-      console.error("[Cron] Critical error in Status Reversion Job:", error);
+      console.error("[Cron] Error in Status Reversion Job:", error);
     }
   });
-
-  console.log("[Cron] Status Reversion Job with Timeline Integration Scheduled.");
 };

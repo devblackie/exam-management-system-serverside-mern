@@ -13,6 +13,7 @@ import { computeFinalGrade } from "../services/gradeCalculator";
 import { calculateStudentStatus } from "../services/statusEngine";
 import { scopeQuery } from "../lib/multiTenant";
 import { deferAdmission, grantAcademicLeave, revertStatusToActive } from "../services/academicLeave";
+import { getYearWeight } from "../utils/weightingRegistry";
 
 const router = express.Router();
 
@@ -213,129 +214,187 @@ router.get(
   }),
 );
 
-// GET /journey: Fetch complete academic timeline
-// router.get(
-//   "/journey",
-//   requireAuth,
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     const { regNo } = req.query;
-//     if (!regNo) return res.status(400).json({ error: "regNo is required" });
+// Helper to keep code clean
+const formatChallenges = (analysis: any) => ({
+supplementary: analysis.failedList.map((f: any) => f.displayName.split(":")[0]),
+retakes: analysis.status === "REPEAT YEAR" ? analysis.failedList.map((f: any) => f.displayName.split(":")[0]) : [],
+specials: analysis.specialList.map((s: any) => s.displayName.split(":")[0]),
+incomplete: [...analysis.incompleteList, ...analysis.missingList].map(i => i.split(":")[0])
+});
 
-//     const student = await Student.findOne(scopeQuery(req, { regNo: regNo as string })).populate("admissionAcademicYear", "year");
+// GET /journey: Fetch complete academic timeline with Cumulative Tracker
+router.get("/journey", requireAuth, asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { regNo } = req.query;
+  if (!regNo) return res.status(400).json({ error: "regNo is required" });
 
-//     if (!student) return res.status(404).json({ error: "Student not found" });
+  const student = await Student.findOne(scopeQuery(req, { regNo: regNo as string }))
+    .populate("admissionAcademicYear", "year")
+    .populate("program")
+    .lean();
 
-//     // Fetch every grade ever recorded for this student
-//     const allGrades = await FinalGrade.find({ student: student._id, deletedAt: null })
-//       .populate({ path: "programUnit", select: "requiredYear requiredSemester" })
-//       .populate("academicYear", "year")
-//       .lean();
+  if (!student) return res.status(404).json({ error: "Student not found" });
 
-//     // Group grades by Academic Year
-//     const journey = [];
-//     const yearsEncountered = [...new Set(allGrades.map(g => (g.academicYear as any).year))].sort();
+  const journey: any[] = [];
+  const program = student.program as any;
+  const entryType = student.entryType || "Direct";
+  let cumulativeWeightApplied = 0;
+  let weightedSum = 0;
 
-//     for (const yearName of yearsEncountered) {
-//       const yearGrades = allGrades.filter(g => (g.academicYear as any).year === yearName);
-//       const yearOfStudy = (yearGrades[0].programUnit as any).requiredYear;
+  const addWeight = (year: number) => getYearWeight(program, entryType, year);
 
-//       const supplementary = yearGrades.filter(g => g.status === "SUPPLEMENTARY").map(g => (g as any).unit?.code || "Unit");
-//       const retakes = yearGrades.filter(g => g.status === "RETAKE").map(g => (g as any).unit?.code || "Unit");
-//       const specials = yearGrades.filter(g => g.attemptType === "SPECIAL").map(g => (g as any).unit?.code || "Unit");
-
-//       journey.push({
-//         academicYear: yearName,
-//         yearOfStudy,
-//         totalUnits: yearGrades.length,
-//         challenges: { supplementary, retakes, specials },
-//         // Check if student was repeating this specific year
-//         isRepeat: student.status === "repeat" && student.currentYearOfStudy === yearOfStudy
-//       });
-//     }
-
-//     res.json({ admissionYear: (student.admissionAcademicYear as any)?.year, currentStatus: student.status, timeline: journey });
-//   })
-// );
-
-// GET /journey: Fetch complete academic timeline including Leaves & Deferments
-router.get(
-  "/journey",
-  requireAuth,
-  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { regNo } = req.query;
-    if (!regNo) return res.status(400).json({ error: "regNo is required" });
-
-    const student = await Student.findOne(scopeQuery(req, { regNo: regNo as string }))
-      .populate("admissionAcademicYear", "year")
-      .lean();
-
-    if (!student) return res.status(404).json({ error: "Student not found" });
-
-    // 1. Fetch all grades ever recorded
-    const allGrades = await FinalGrade.find({ student: student._id, deletedAt: null })
-      .populate({ path: "programUnit", select: "requiredYear requiredSemester" })
-      .populate("academicYear", "year")
-      .lean();
-
-    const journey = [];
-
-    // 2. Identify Academic Years where student had grades
-    const yearsWithGrades = [...new Set(allGrades.map(g => (g.academicYear as any).year))];
-
-    // 3. Process years with academic activity
-    for (const yearName of yearsWithGrades) {
-      const yearGrades = allGrades.filter(g => (g.academicYear as any).year === yearName);
-      const firstGrade = yearGrades[0];
-      const yearOfStudy = (firstGrade?.programUnit as any)?.requiredYear || 0;
-
-      const supplementary = yearGrades.filter(g => g.status === "SUPPLEMENTARY").map(g => (g as any).unit?.code || "Unit");
-      const retakes = yearGrades.filter(g => g.status === "RETAKE").map(g => (g as any).unit?.code || "Unit");
-      const specials = yearGrades.filter(g => g.attemptType === "SPECIAL").map(g => (g as any).unit?.code || "Unit");
-
-      journey.push({
-        academicYear: yearName,
-        yearOfStudy,
-        totalUnits: yearGrades.length,
-        challenges: { supplementary, retakes, specials },
-        isRepeat: student.status === "repeat" && student.currentYearOfStudy === yearOfStudy,
-        leaveInfo: null // Normal academic year
-      });
-    }
-
-    // 4. CATCH LEAVE/DEFERMENT: Check if the current status is a break
-    // If the student is currently on leave, we add a "Current Milestone" for the leave
-    if (student.status === "on_leave" || student.status === "deferred") {
-      const leaveData = (student as any).academicLeavePeriod;
-      
-      journey.push({
-        academicYear: leaveData ? 
-          `${new Date(leaveData.startDate).getFullYear()}/${new Date(leaveData.endDate).getFullYear()}` : 
-          "Current Period",
-        yearOfStudy: student.currentYearOfStudy,
-        totalUnits: 0,
-        challenges: { supplementary: [], retakes: [], specials: [] },
-        isRepeat: false,
-        leaveInfo: {
-          type: student.status === "deferred" ? "DEFERMENT" : "ACADEMIC LEAVE",
-          reason: leaveData?.reason || student.remarks || "Authorized Break",
-          duration: leaveData ? `${leaveData.type || 'Standard'} Duration` : "Scheduled"
-        }
-      });
-    }
-
-    // 5. Sort journey by Year of Study and then Academic Year string
-    journey.sort((a, b) => {
-      if (a.yearOfStudy !== b.yearOfStudy) return a.yearOfStudy - b.yearOfStudy;
-      return a.academicYear.localeCompare(b.academicYear);
+  // --- PART A: History ---
+  for (const record of student.academicHistory || []) {
+    const analysis = await calculateStudentStatus(student._id, student.program, record.academicYear, record.yearOfStudy);
+    const weight = addWeight(record.yearOfStudy);
+    
+    journey.push({
+      type: "ACADEMIC",
+      academicYear: record.academicYear,
+      yearOfStudy: record.yearOfStudy,
+      status: analysis.status,
+      totalUnits: analysis.summary.totalExpected,
+      weight: Math.round(weight * 100),
+      challenges: formatChallenges(analysis),
+      date: record.date || new Date(0),
     });
 
-    res.json({ 
-      admissionYear: (student.admissionAcademicYear as any)?.year, 
-      currentStatus: student.status.toUpperCase(), 
-      timeline: journey 
+    weightedSum += (parseFloat(analysis.weightedMean) * weight);
+    cumulativeWeightApplied += weight;
+  }
+
+  // --- PART B: Current Year ---
+  if (!student.academicHistory?.some(h => h.yearOfStudy === student.currentYearOfStudy)) {
+    const live = await calculateStudentStatus(student._id, student.program, "CURRENT", student.currentYearOfStudy);
+    const weight = addWeight(student.currentYearOfStudy);
+
+    journey.push({
+      type: "ACADEMIC",
+      academicYear: "2026/2027",
+      yearOfStudy: student.currentYearOfStudy,
+      status: live.status,
+      totalUnits: live.summary.totalExpected,
+      weight: Math.round(weight * 100),
+      challenges: formatChallenges(live),
+      date: new Date(),
+      isCurrent: true,
     });
-  })
-);
+
+    weightedSum += (parseFloat(live.weightedMean) * weight);
+    cumulativeWeightApplied += weight;
+  }
+
+  // --- PART C: Status Events ---
+  student.statusEvents?.forEach(event => {
+    journey.push({ type: "STATUS_CHANGE", academicYear: event.academicYear, toStatus: event.toStatus, reason: event.reason, date: event.date });
+  });
+
+  journey.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  // Calculate Projected Mean (normalized to 100% of weight encountered so far)
+  const projectedMean = cumulativeWeightApplied > 0 ? (weightedSum / cumulativeWeightApplied) : 0;
+
+  res.json({
+    admissionYear: (student.admissionAcademicYear as any)?.year,
+    currentStatus: student.status.toUpperCase(),
+    cumulativeMean: projectedMean.toFixed(2),
+    timeline: journey,
+  });
+}));
+
+// router.get("/journey", requireAuth, asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//   const { regNo } = req.query;
+//   if (!regNo) return res.status(400).json({ error: "regNo is required" });
+
+//   const student = await Student.findOne(
+//     scopeQuery(req, { regNo: regNo as string }),
+//   )
+//     .populate("admissionAcademicYear", "year")
+//     .populate("program")
+//     .lean();
+
+//   if (!student) return res.status(404).json({ error: "Student not found" });
+
+//   const journey: any[] = [];
+//   const program = student.program as any;
+//   const entryType = student.entryType || "Direct";
+
+//   // --- Helper to add Weighting ---
+//   const addWeight = (year: number) => {
+//     // getYearWeight returns 0.15, 0.20 etc. We convert to percentage
+//     return Math.round(getYearWeight(program, entryType, year) * 100);
+//   };
+
+//   // --- PART A: Process Completed Years (The History) ---
+//   const historicalYears = student.academicHistory || [];
+//   for (const record of historicalYears) {
+//     const analysis = await calculateStudentStatus(
+//       student._id,
+//       student.program,
+//       record.academicYear,
+//       record.yearOfStudy,
+//     );
+//     journey.push({
+//       type: "ACADEMIC",
+//       academicYear: record.academicYear,
+//       yearOfStudy: record.yearOfStudy,
+//       status: analysis.status,
+//       totalUnits: analysis.summary.totalExpected,
+//       weight: addWeight(record.yearOfStudy),
+//       challenges: formatChallenges(analysis),
+//       date: record.date || new Date(0),
+//     });
+//   }
+
+//   // --- PART B: Process Current Year (The Live Snapshot) ---
+//   // Check if the current year is already in history to avoid duplicates
+//   const isCurrentYearInHistory = historicalYears.some(
+//     (h) => h.yearOfStudy === student.currentYearOfStudy,
+//   );
+
+//   if (!isCurrentYearInHistory) {
+//     const liveAnalysis = await calculateStudentStatus(
+//       student._id,
+//       student.program,
+//       "CURRENT",
+//       student.currentYearOfStudy,
+//     );
+//     journey.push({
+//       type: "ACADEMIC",
+//       academicYear: "2026/2027", // Or dynamically get current session
+//       yearOfStudy: student.currentYearOfStudy,
+//       status: liveAnalysis.status,
+//       totalUnits: liveAnalysis.summary.totalExpected,
+//       weight: addWeight(student.currentYearOfStudy),
+//       challenges: formatChallenges(liveAnalysis),
+//       date: new Date(), // Now
+//       isCurrent: true,
+//     });
+//   }
+
+//   // --- PART C: Administrative Events ---
+//   student.statusEvents?.forEach((event) => {
+//     journey.push({
+//       type: "STATUS_CHANGE",
+//       academicYear: event.academicYear,
+//       toStatus: event.toStatus,
+//       reason: event.reason,
+//       date: event.date,
+//     });
+//   });
+
+//   journey.sort(
+//     (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+//   );
+
+//   res.json({
+//     admissionYear: (student.admissionAcademicYear as any)?.year,
+//     currentStatus: student.status.toUpperCase(),
+//     timeline: journey,
+//   });
+// }));
+
+
+
 
 // POST /approve-special: One-click approval for Special Exams
 router.post(
@@ -383,7 +442,7 @@ router.post(
   }),
 );
 
-// POST /api/student/leave
+// POST /student/leave
 router.post(
   "/leave",
   requireAuth,
@@ -395,7 +454,7 @@ router.post(
   })
 );
 
-// POST /api/student/defer
+// POST /student/defer
 router.post(
   "/defer",
   requireAuth,
@@ -407,6 +466,7 @@ router.post(
   })
 );
 
+// POST /student/revert-active
 router.post(
   "/revert-active",
   requireAuth,
