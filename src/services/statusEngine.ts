@@ -9,6 +9,7 @@ import { getYearWeight } from "../utils/weightingRegistry";
 import { performAcademicAudit } from "./academicAudit";
 import { computeFinalGrade } from "./gradeCalculator"; // Assume this is used in the route
 import { resolveStudentStatus } from "../utils/studentStatusResolver";
+import MarkDirect from "../models/MarkDirect";
 
 const getLetterGrade = (mark: number, settings: any): string => {
   if (!settings || !settings.gradingScale) {
@@ -28,6 +29,7 @@ export interface StudentStatusResult {
   variant: "success" | "warning" | "error" | "info";
   details: string;
   weightedMean: string;
+
   summary: { totalExpected: number; passed: number; failed: number; missing: number; isOnLeave?: boolean; };
   passedList: { code: string; mark: number }[];
   failedList: { displayName: string; attempt: number }[];
@@ -37,32 +39,92 @@ export interface StudentStatusResult {
   leaveDetails?: string;
 }
 
-export const calculateStudentStatus = async ( studentId: any, programId: any, academicYearName: string, yearOfStudy: number = 1 ): Promise<StudentStatusResult> => {
+export const calculateStudentStatus = async (
+  studentId: any,
+  programId: any,
+  academicYearName: string,
+  yearOfStudy: number = 1,
+): Promise<StudentStatusResult> => {
   const settings = await InstitutionSettings.findOne().lean();
-  if (!settings) throw new Error( "Institution settings not found. Please configure grading scales." );
+  if (!settings)
+    throw new Error(
+      "Institution settings not found. Please configure grading scales.",
+    );
   const passMark = settings?.passMark || 40;
   const student = await Student.findById(studentId).lean();
   if (!student) throw new Error("Student not found");
   const resolved = resolveStudentStatus(student);
   if (resolved.isLocked) {
     return {
-      status: resolved.status, variant: "info", details: `Student is on ${resolved.status.toLowerCase()}.`,
-      weightedMean: "0.00", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0, isOnLeave: true },
-      passedList: [], failedList: [], specialList: [], missingList: [], incompleteList: [], leaveDetails: resolved.reason,
+      status: resolved.status,
+      variant: "info",
+      details: `Student is on ${resolved.status.toLowerCase()}.`,
+      weightedMean: "0.00",
+      summary: {
+        totalExpected: 0,
+        passed: 0,
+        failed: 0,
+        missing: 0,
+        isOnLeave: true,
+      },
+      passedList: [],
+      failedList: [],
+      specialList: [],
+      missingList: [],
+      incompleteList: [],
+      leaveDetails: resolved.reason,
     };
   }
 
-  const curriculum = (await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy }).populate("unit").lean()) as any[];
-  const marks = await Mark.find({ student: studentId }).lean();
+  const curriculum = (await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy })
+    .populate("unit")
+    .lean()) as any[];
+
+
+        if (!curriculum || !curriculum.length || curriculum.length === 0) {
+          return {
+            status: "CURRICULUM NOT SET", variant: "info",
+            details: `No units defined for Year ${yearOfStudy} in this program. Please contact the Admin to set the curriculum.`,
+            weightedMean: "0.00",
+            summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
+            passedList: [], failedList: [], specialList: [], missingList: [], incompleteList: []
+          };
+        }
+
+  // const marks = await Mark.find({ student: studentId }).lean();
+  
+  // FETCH FROM BOTH MODELS
+  const [detailedMarks, directMarks] = await Promise.all([
+    Mark.find({ student: studentId }).lean(),
+    MarkDirect.find({ student: studentId }).lean(),
+  ]);
+
+  // console.log(`[StatusEngine] Found ${directMarks.length} direct marks for Student: ${studentId}`);
+  // if (directMarks.length > 0) {
+  //   console.log(`[StatusEngine] Sample Direct Mark Unit ID: ${directMarks[0].programUnit.toString()}`);
+  // }
+
   const marksMap = new Map();
-  marks.forEach((m) => marksMap.set(m.programUnit.toString(), m));
+
+  // marks.forEach((m) => marksMap.set(m.programUnit.toString(), m));
+
+  // Merge detailed marks
+  detailedMarks.forEach((m) => marksMap.set(m.programUnit.toString(), { ...m, source: 'detailed' }));
+  
+  // Merge direct marks (Direct marks override detailed if both exist for some reason)
+  directMarks.forEach((m) => marksMap.set(m.programUnit.toString(), { ...m, source: 'direct' }));
+
+  // LOG 2: Verify the Map contains the keys
+  // console.log(`[StatusEngine] Map Keys:`, Array.from(marksMap.keys()));
+
   const unitResults = new Map();
 
   const lists = {
     passed: [] as { code: string; mark: number }[],
     failed: [] as { displayName: string; attempt: number }[],
     special: [] as { displayName: string; grounds: string }[],
-    missing: [] as string[], incomplete: [] as string[],
+    missing: [] as string[],
+    incomplete: [] as string[],
   };
 
   let totalFirstAttemptSum = 0;
@@ -71,26 +133,56 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
   curriculum.forEach((pUnit) => {
     const code = pUnit.unit?.code?.toUpperCase();
     const displayName = `${code}: ${pUnit.unit?.name}`;
-    const rawMarkRecord = marksMap.get(pUnit._id.toString());
+    // const rawMarkRecord = marksMap.get(pUnit._id.toString());
+    const unitId = pUnit._id.toString();
+    const rawMarkRecord = marksMap.get(unitId);
 
-    if (!rawMarkRecord) { lists.missing.push(displayName); return; }
+    if (!rawMarkRecord) {
+      lists.missing.push(displayName);
+      return;
+    }
 
-    const isSpecial = rawMarkRecord.isSpecial ||  rawMarkRecord.attempt === "special" || rawMarkRecord.remarks?.toLowerCase().includes("special");
+    // Direct marks already have totals; Detailed marks rely on agreedMark calculated previously
     const hasCAT = (rawMarkRecord.caTotal30 || 0) > 0;
     const hasExam = (rawMarkRecord.examTotal70 || 0) > 0;
+    // const hasCAT = (rawMarkRecord.caTotal30 || 0) > 0 || (rawMarkRecord.source === 'detailed' && rawMarkRecord.cat1Raw > 0);
+    // const hasExam = (rawMarkRecord.examTotal70 || 0) > 0 || (rawMarkRecord.source === 'detailed' && rawMarkRecord.examRaw > 0);
     const markValue = rawMarkRecord.agreedMark || 0;
+    const isSupplementary = rawMarkRecord.attempt === "supplementary";
+
+    const isSpecial =
+      rawMarkRecord.attempt === "special" ||
+      (rawMarkRecord.source === "detailed" && rawMarkRecord.isSpecial);
 
     // Case B: Special Exams
-    if (isSpecial) lists.special.push({ displayName, grounds: rawMarkRecord.remarks || "Special" });
+    if (isSpecial)
+      lists.special.push({
+        displayName,
+        grounds: rawMarkRecord.remarks || "Special",
+      });
     // Case C: Absolute Zero (No CAT AND No Exam) -> ENG 23c
     else if (!hasCAT && !hasExam) lists.missing.push(`${displayName} (Absent)`);
     // Case D: Partial Data -> ENG 15a
-    else if (!hasCAT && hasExam) lists.incomplete.push(`${displayName} (No CAT)`);
-    else if (!hasExam && hasCAT) lists.missing.push(`${displayName} (Missing Exam)`);
+    // else if (!hasCAT && hasExam) lists.incomplete.push(`${displayName} (No CAT)`);
+    else if (!hasCAT && hasExam) {
+      // If it's a Supp, No CAT is allowed/expected.
+      // Move it to Passed/Failed instead of Incomplete.
+      if (isSupplementary) {
+        if (markValue >= passMark) lists.passed.push({ code, mark: markValue });
+        else lists.failed.push({ displayName, attempt: 2 }); // attempt 2 for supp
+
+        totalFirstAttemptSum += markValue;
+        unitsContributingToMean++;
+      } else {
+        lists.incomplete.push(`${displayName} (No CAT)`);
+      }
+    } else if (!hasExam && hasCAT)
+      lists.missing.push(`${displayName} (Missing Exam)`);
     // Case E: Numerical Result (Passed or Failed)
     else {
       if (markValue >= passMark) lists.passed.push({ code, mark: markValue });
-      else { lists.failed.push({ displayName, attempt: 1 }); }
+      else lists.failed.push({ displayName, attempt: 1 });
+
       // ENG 16c: Mean is based on first attempt marks
       totalFirstAttemptSum += markValue;
       unitsContributingToMean++;
@@ -102,11 +194,12 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
   const missingCount = lists.missing.length;
   const specialCount = lists.special.length;
   const incCount = lists.incomplete.length;
-  const meanMark = unitsContributingToMean > 0 ? totalFirstAttemptSum / totalUnits : 0; // Divided by total prescribed units per ENG 16c
+  const meanMark =
+    unitsContributingToMean > 0 ? totalFirstAttemptSum / totalUnits : 0; // Divided by total prescribed units per ENG 16c
 
   const attemptedUnitsCount = totalUnits - (specialCount + missingCount + incCount);
   const performanceMean = attemptedUnitsCount > 0 ? totalFirstAttemptSum / attemptedUnitsCount : 0;
-  
+
   // The official Mean for ENG 16 (where missing = 0)
   const officialMean = totalFirstAttemptSum / totalUnits;
 
@@ -115,22 +208,38 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
   let details = "Proceed to next year.";
 
   // 1. DEREGISTERED (ENG 23c) - Highest Priority
-  if (missingCount >= 6) { status = "DEREGISTERED"; variant = "error"; details = `Absent from 6+ (${missingCount}) examinations (ENG 23c).`; }
+  if (missingCount >= 6) {
+    status = "DEREGISTERED";
+    variant = "error";
+    details = `Absent from 6+ (${missingCount}) examinations (ENG 23c).`;
+  }
   // 2. SPECIALS PENDING - Pre-empts Failures
   // If a student has ANY special, we don't sentence them to Repeat/Stayout yet
   // UNLESS the number of units they ALREADY sat and failed is >= 50%
   else if (specialCount > 0 && failCount < totalUnits / 2) {
     const parts = [];
-    if (failCount > 0) parts.push(`SUPP ${failCount}`); parts.push(`SPEC ${specialCount}`); if (incCount > 0) parts.push(`INC ${incCount}`);
+    if (failCount > 0) parts.push(`SUPP ${failCount}`);
+    parts.push(`SPEC ${specialCount}`);
+    if (incCount > 0) parts.push(`INC ${incCount}`);
     if (missingCount > 0) parts.push(`INC ${missingCount}`);
 
-    status = parts.join("; "); variant = "info"; details = `Awaiting specials. Current Mean in sat units: ${performanceMean.toFixed(2)}`;
+    status = parts.join("; ");
+    variant = "info";
+    details = `Awaiting specials. Current Mean in sat units: ${performanceMean.toFixed(2)}`;
   }
   // 3. REPEAT YEAR (ENG 16)
   // else if (failCount >= totalUnits / 2 || meanMark < 40) { status = "REPEAT YEAR"; variant = "error"; details = `Failed >= 50% (${failCount}/${totalUnits}) units or Mean (${meanMark.toFixed(2)}) < 40% (ENG 16).`; }
-  else if (failCount >= totalUnits / 2 || officialMean < 40) { status = "REPEAT YEAR"; variant = "error"; details = `Failed >= 50% (${failCount}/${totalUnits}) units or Mean (${officialMean.toFixed(2)}) < 40% (ENG 16).`; }
+  else if (failCount >= totalUnits / 2 || officialMean < 40) {
+    status = "REPEAT YEAR";
+    variant = "error";
+    details = `Failed >= 50% (${failCount}/${totalUnits}) units or Mean (${officialMean.toFixed(2)}) < 40% (ENG 16).`;
+  }
   // 4. STAYOUT (ENG 15h)
-  else if (failCount > totalUnits / 3) { status = "STAYOUT"; variant = "warning"; details = `Failed > 1/3 of units (${failCount}/${totalUnits}). Retake failed units next year (ENG 15h).`;}
+  else if (failCount > totalUnits / 3) {
+    status = "STAYOUT";
+    variant = "warning";
+    details = `Failed > 1/3 of units (${failCount}/${totalUnits}). Retake failed units next year (ENG 15h).`;
+  }
   // 5. SUPPLEMENTARY / INCOMPLETE
   else if (failCount > 0 || incCount > 0 || missingCount > 0) {
     const parts = [];
@@ -141,14 +250,23 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
     variant = "warning";
     details = "Eligible for supplementary exams or pending incomplete marks.";
   }
-  
 
   return {
-    status, variant, details,
+    status,
+    variant,
+    details,
     weightedMean: meanMark.toFixed(2),
-    summary: { totalExpected: totalUnits, passed: lists.passed.length, failed: failCount, missing: lists.missing.length },
+    summary: {
+      totalExpected: totalUnits,
+      passed: lists.passed.length,
+      failed: failCount,
+      missing: lists.missing.length,
+    },
     passedList: lists.passed,
-    failedList: lists.failed, specialList: lists.special, missingList: lists.missing, incompleteList: lists.incomplete,
+    failedList: lists.failed,
+    specialList: lists.special,
+    missingList: lists.missing,
+    incompleteList: lists.incomplete,
   };
 };
 

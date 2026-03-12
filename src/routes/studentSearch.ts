@@ -14,6 +14,8 @@ import { calculateStudentStatus } from "../services/statusEngine";
 import { scopeQuery } from "../lib/multiTenant";
 import { deferAdmission, grantAcademicLeave, revertStatusToActive } from "../services/academicLeave";
 import { getYearWeight } from "../utils/weightingRegistry";
+import MarkDirect from "../models/MarkDirect";
+import InstitutionSettings from "../models/InstitutionSettings";
 
 const router = express.Router();
 
@@ -48,143 +50,120 @@ router.get(
   }),
 );
 
-// // GET STUDENT FULL RESULTS + STATUS
-// router.get(
-//   "/record",
-//   requireAuth,
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     let { regNo, yearOfStudy } = req.query;
-//     if (!regNo || typeof regNo !== "string") return res.status(400).json({ error: "regNo is required" });
-
-//     const targetYearOfStudy = parseInt(yearOfStudy as string) || 1;
-
-//     regNo = decodeURIComponent(regNo);
-//     const student = await Student.findOne( scopeQuery(req, { regNo: { $regex: `^${regNo}$`, $options: "i" }})).populate("program");
-
-//     if (!student) return res.status(404).json({ error: "Student not found" });
-
-//     // 1. Fetch grades with the correct nested path
-//     const grades = await FinalGrade.find({ student: student._id })
-//       .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
-//       .populate("academicYear", "year").sort({ "academicYear.year": 1 }).lean();
-
-//     const academicYearName = (req.query.academicYear as string) || "2024/2025";
-
-//     // 2. Safe mapping to prevent "undefined" errors
-//     const processedGrades = grades
-//       .filter((g) => {
-//         const pUnit = g.programUnit as any;
-//         // Only include units meant for the Year of Study selected by the user
-//         return pUnit?.requiredYear === targetYearOfStudy;
-//       })
-//       .map((g) => {
-//         const pUnit = g.programUnit as any;
-//         return {
-//           ...g,
-//           unit: { code: pUnit?.unit?.code || "N/A", name: pUnit?.unit?.name || "Unknown Unit" },
-//           semester: pUnit?.requiredSemester || "N/A",
-//           academicYear: g.academicYear || { year: "N/A" },
-//         };
-//       });
-
-//     // 2. USE THE SERVICE for Status
-//     // We pass studentId, programId, the Year string, and Year of Study
-//     const academicStatus = await calculateStudentStatus(
-//       student._id,
-//       (student.program as any)._id,
-//       "", // academicYearName is left empty if status engine can derive it from yearOfStudy
-//       targetYearOfStudy,
-//     );
-
-//     res.json({
-//       student: {
-//         _id: student._id, name: student.name, regNo: student.regNo,
-//         programId: (student.program as any)?._id || student.program,
-//         programName: (student.program as any)?.name,
-//         currentYear: student.currentYearOfStudy || 1, // Student's actual level
-//         currentSemester: student.currentSemester || 1, status: student.status,
-//       },
-//       grades: processedGrades, // Only Year X grades
-//       viewingYearOfStudy: targetYearOfStudy,
-//       academicStatus: academicStatus,
-//       summary: academicStatus?.summary || {
-//         totalUnits: processedGrades.length,
-//         passed: processedGrades.filter((g) => g.status === "PASS").length,
-//         failed: processedGrades.filter((g) =>
-//           ["RETAKE", "SUPPLEMENTARY", "FAIL"].includes(g.status),
-//         ).length,
-//       },
-//     });
-//   }),
-// );
-
 // GET STUDENT FULL RESULTS + STATUS
 router.get(
   "/record",
   requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     let { regNo, yearOfStudy } = req.query;
-    if (!regNo || typeof regNo !== "string") return res.status(400).json({ error: "regNo is required" });
+    if (!regNo || typeof regNo !== "string")
+      return res.status(400).json({ error: "regNo is required" });
 
     const targetYearOfStudy = parseInt(yearOfStudy as string) || 1;
     regNo = decodeURIComponent(regNo);
-    const student = await Student.findOne( scopeQuery(req, { regNo: { $regex: `^${regNo}$`, $options: "i" }})).populate("program");
+
+    const [student, settings] = await Promise.all([
+      Student.findOne({
+        regNo: { $regex: `^${regNo}$`, $options: "i" },
+      }).populate("program"),
+      InstitutionSettings.findOne().lean(),
+    ]);
 
     if (!student) return res.status(404).json({ error: "Student not found" });
+    if (!settings)
+      return res.status(500).json({ error: "Institution settings missing" });
 
-    // 1. Fetch grades
-    const grades = await FinalGrade.find({ student: student._id })
-      .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
-      .populate("academicYear", "year").sort({ "academicYear.year": 1 }).lean();
+    const [grades, detailedMarks, directMarks] = await Promise.all([
+      FinalGrade.find({ student: student._id })
+        .populate({
+          path: "programUnit",
+          populate: { path: "unit", select: "code name" },
+        })
+        .populate("academicYear", "year")
+        .lean(),
+      Mark.find({ student: student._id }).lean(),
+      MarkDirect.find({ student: student._id })
+        .populate({
+          path: "programUnit",
+          populate: { path: "unit", select: "code name" },
+        })
+        .populate("academicYear", "year")
+        .lean(),
+    ]);
 
-    const marks = await Mark.find({ student: student._id }).lean();
     const marksMap = new Map();
-    marks.forEach(m => marksMap.set(m.programUnit.toString(), m));
+    detailedMarks.forEach((m) => marksMap.set(m.programUnit.toString(), m));
+    const gradedUnitIds = new Set(
+      grades.map((g) => (g.programUnit as any)?._id.toString()),
+    );
 
-    // 2. Safe mapping and status merging
-    const processedGrades = grades
-      .filter((g) => {
-        const pUnit = g.programUnit as any;
-        return pUnit?.requiredYear === targetYearOfStudy;
-      })
-      .map((g) => {
-        const pUnit = g.programUnit as any;
-        const programUnitId = pUnit._id.toString();
-
-        // Merge special status from raw marks
-        const rawMarkRecord = marksMap.get(programUnitId);
-
-        // --- FIX: Logic to determine status ---
+    // 1. Process Official Grades
+    const processedGrades: any[] = grades
+      .filter((g: any) => g.programUnit?.requiredYear === targetYearOfStudy)
+      .map((g: any) => {
+        const pUnit = g.programUnit;
+        const rawMarkRecord = marksMap.get(pUnit._id.toString());
         let finalStatus = g.status;
-        const isSpecial =
-          rawMarkRecord?.isSpecial || g.isSpecial || g.status === "SPECIAL";
-
-        if (isSpecial) {
+        if (rawMarkRecord?.isSpecial || g.status === "SPECIAL")
           finalStatus = "SPECIAL";
-        } else if (
-          rawMarkRecord &&
-          (!rawMarkRecord.caTotal30 || !rawMarkRecord.examTotal70)
-        ) {
-          // If raw marks exist but are incomplete (CAT/Exam missing)
-          finalStatus = "INCOMPLETE";
-        } else if (g.totalMark === 0 && g.status !== "PASS") {
-          finalStatus = "INCOMPLETE";
-        }
-        // ----------------------------------------
+
         return {
           ...g,
-          unit: {
-            code: pUnit?.unit?.code || "N/A",
-            name: pUnit?.unit?.name || "Unknown Unit",
-          },
+          unit: { code: pUnit?.unit?.code, name: pUnit?.unit?.name },
           semester: pUnit?.requiredSemester || "N/A",
-          academicYear: g.academicYear || { year: "N/A" },
-          // Override status if special
           status: finalStatus,
+          agreedMark: g.totalMark, // Backend alias for frontend table
         };
       });
 
-    // 3. Calculate Status
+    // 2. Inject Direct Marks (Fixing the "Unknown Property" error)
+    // ... inside your GET /record route ...
+
+    // 2. Inject Direct Marks
+    directMarks.forEach((dm: any) => {
+      const pUnit = dm.programUnit;
+      if (
+        pUnit?.requiredYear === targetYearOfStudy &&
+        !gradedUnitIds.has(pUnit._id.toString())
+      ) {
+        const mark = dm.agreedMark || 0;
+        const matchedScale = [...(settings.gradingScale || [])]
+          .sort((a, b) => b.min - a.min)
+          .find((s) => mark >= s.min);
+
+        // Normalize semester to string to prevent .localeCompare error
+        const semesterStr = String(
+          dm.semester || pUnit.requiredSemester || "N/A",
+        );
+
+        processedGrades.push({
+          _id: dm._id,
+          academicYear: dm.academicYear, // Keep as object for frontend display
+          semester: semesterStr,
+          unit: {
+            code: pUnit.unit?.code || "N/A",
+            name: pUnit.unit?.name || "N/A",
+          },
+          totalMark: mark,
+          agreedMark: mark,
+          grade: matchedScale ? matchedScale.grade : "E",
+          status:
+            dm.attempt?.toUpperCase() === "SPECIAL"
+              ? "SPECIAL"
+              : mark >= settings.passMark
+                ? "PASS"
+                : "FAIL",
+        });
+      }
+    });
+
+    // 3. Robust Sorting (Prevents localeCompare crash)
+    const sortedGrades = processedGrades.sort((a, b) => {
+      const semA = String(a.semester || "");
+      const semB = String(b.semester || "");
+      return semA.localeCompare(semB);
+    });
+
     const academicStatus = await calculateStudentStatus(
       student._id,
       (student.program as any)._id,
@@ -194,24 +173,18 @@ router.get(
 
     res.json({
       student: {
-        _id: student._id, name: student.name, regNo: student.regNo,
-        programId: (student.program as any)?._id || student.program,
+        _id: student._id,
+        name: student.name,
+        regNo: student.regNo,
+        programId: (student.program as any)?._id,
+        currentYear: student.currentYearOfStudy,
         programName: (student.program as any)?.name,
-        currentYear: student.currentYearOfStudy || 1,
-        currentSemester: student.currentSemester || 1, status: student.status,
+        status: student.status,
       },
-      grades: processedGrades,
-      viewingYearOfStudy: targetYearOfStudy,
-      academicStatus: academicStatus,
-      summary: academicStatus?.summary || {
-        totalUnits: processedGrades.length,
-        passed: processedGrades.filter((g) => g.status === "PASS").length,
-        failed: processedGrades.filter((g) =>
-          ["RETAKE", "SUPPLEMENTARY", "FAIL"].includes(g.status),
-        ).length,
-      },
+      grades: sortedGrades,
+      academicStatus,
     });
-  }),
+  })
 );
 
 // Helper to keep code clean
@@ -295,106 +268,12 @@ router.get("/journey", requireAuth, asyncHandler(async (req: AuthenticatedReques
 
   res.json({
     admissionYear: (student.admissionAcademicYear as any)?.year,
+    intake: student.intake || "SEPT",
     currentStatus: student.status.toUpperCase(),
     cumulativeMean: projectedMean.toFixed(2),
     timeline: journey,
   });
 }));
-
-// router.get("/journey", requireAuth, asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//   const { regNo } = req.query;
-//   if (!regNo) return res.status(400).json({ error: "regNo is required" });
-
-//   const student = await Student.findOne(
-//     scopeQuery(req, { regNo: regNo as string }),
-//   )
-//     .populate("admissionAcademicYear", "year")
-//     .populate("program")
-//     .lean();
-
-//   if (!student) return res.status(404).json({ error: "Student not found" });
-
-//   const journey: any[] = [];
-//   const program = student.program as any;
-//   const entryType = student.entryType || "Direct";
-
-//   // --- Helper to add Weighting ---
-//   const addWeight = (year: number) => {
-//     // getYearWeight returns 0.15, 0.20 etc. We convert to percentage
-//     return Math.round(getYearWeight(program, entryType, year) * 100);
-//   };
-
-//   // --- PART A: Process Completed Years (The History) ---
-//   const historicalYears = student.academicHistory || [];
-//   for (const record of historicalYears) {
-//     const analysis = await calculateStudentStatus(
-//       student._id,
-//       student.program,
-//       record.academicYear,
-//       record.yearOfStudy,
-//     );
-//     journey.push({
-//       type: "ACADEMIC",
-//       academicYear: record.academicYear,
-//       yearOfStudy: record.yearOfStudy,
-//       status: analysis.status,
-//       totalUnits: analysis.summary.totalExpected,
-//       weight: addWeight(record.yearOfStudy),
-//       challenges: formatChallenges(analysis),
-//       date: record.date || new Date(0),
-//     });
-//   }
-
-//   // --- PART B: Process Current Year (The Live Snapshot) ---
-//   // Check if the current year is already in history to avoid duplicates
-//   const isCurrentYearInHistory = historicalYears.some(
-//     (h) => h.yearOfStudy === student.currentYearOfStudy,
-//   );
-
-//   if (!isCurrentYearInHistory) {
-//     const liveAnalysis = await calculateStudentStatus(
-//       student._id,
-//       student.program,
-//       "CURRENT",
-//       student.currentYearOfStudy,
-//     );
-//     journey.push({
-//       type: "ACADEMIC",
-//       academicYear: "2026/2027", // Or dynamically get current session
-//       yearOfStudy: student.currentYearOfStudy,
-//       status: liveAnalysis.status,
-//       totalUnits: liveAnalysis.summary.totalExpected,
-//       weight: addWeight(student.currentYearOfStudy),
-//       challenges: formatChallenges(liveAnalysis),
-//       date: new Date(), // Now
-//       isCurrent: true,
-//     });
-//   }
-
-//   // --- PART C: Administrative Events ---
-//   student.statusEvents?.forEach((event) => {
-//     journey.push({
-//       type: "STATUS_CHANGE",
-//       academicYear: event.academicYear,
-//       toStatus: event.toStatus,
-//       reason: event.reason,
-//       date: event.date,
-//     });
-//   });
-
-//   journey.sort(
-//     (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-//   );
-
-//   res.json({
-//     admissionYear: (student.admissionAcademicYear as any)?.year,
-//     currentStatus: student.status.toUpperCase(),
-//     timeline: journey,
-//   });
-// }));
-
-
-
 
 // POST /approve-special: One-click approval for Special Exams
 router.post(
@@ -478,119 +357,230 @@ router.post(
   }),
 );
 
-// GET RAW MARKS FOR A STUDENT (FOR COORDINATOR USE)
+
+// GET RAW MARKS FOR A STUDENT
 router.get(
   "/raw-marks",
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { regNo, yearOfStudy } = req.query;
-
     if (!regNo) return res.status(400).json({ error: "regNo required" });
 
     const student = await Student.findOne({ regNo: { $regex: `^${regNo}$`, $options: "i" }});
-
     if (!student) return res.status(404).json({ error: "Student not found" });
 
-    let query: any = { student: student._id };
+    // FETCH FROM BOTH COLLECTIONS
+    const [detailedMarks, directMarks] = await Promise.all([
+      Mark.find({ student: student._id })
+        .populate({
+          path: "programUnit",
+          match: yearOfStudy ? { requiredYear: parseInt(yearOfStudy as string) } : {},
+          populate: { path: "unit", select: "code name" },
+        })
+        .populate("academicYear", "year").lean(),
+      MarkDirect.find({ student: student._id })
+        .populate({
+          path: "programUnit",
+          match: yearOfStudy ? { requiredYear: parseInt(yearOfStudy as string) } : {},
+          populate: { path: "unit", select: "code name" },
+        })
+        .populate("academicYear", "year").lean()
+    ]);
 
-    // Fetch marks linked to ProgramUnits of a specific Year of Study
-    const marks = await Mark.find(query)
-      .populate({
-        path: "programUnit",
-        match: yearOfStudy
-          ? { requiredYear: parseInt(yearOfStudy as string) }
-          : {}, // FILTER BY YEAR
-        populate: { path: "unit", select: "code name" },
-      })
-      .populate("academicYear", "year")
-      .lean();
+    // Merge and flag sources so the frontend knows how to display them
+    const combined = [
+      ...detailedMarks.filter(m => m.programUnit).map(m => ({ ...m, entryMode: 'detailed' })),
+      ...directMarks.filter(m => m.programUnit).map(m => ({ ...m, entryMode: 'direct' }))
+    ];
 
-    // Filter out marks where programUnit didn't match the yearOfStudy
-    const filteredMarks = marks.filter((m) => m.programUnit !== null);
-
-    res.json(filteredMarks);
+    res.json(combined);
   }),
 );
 
-// POST /raw-marks: Upload or Update Raw Marks for a Student
+// POST /raw-marks: Handles both Detailed and Direct mark entries
 router.post(
   "/raw-marks",
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { regNo, unitCode, academicYear, semester, cat1, cat2, cat3, assignment1, practicalRaw, examQ1, examQ2, examQ3, examQ4, examQ5, isSpecial, examMode } = req.body;
+    const { 
+      regNo, unitCode, academicYear, semester, 
+      // Detailed fields
+      cat1, cat2, cat3, assignment1, practicalRaw, 
+      examQ1, examQ2, examQ3, examQ4, examQ5, examMode,
+      // Direct fields
+      caDirect, examDirect, agreedMark,
+      isSpecial, attempt 
+    } = req.body;
 
-    if (!regNo || !unitCode || !academicYear) return res.status(400).json({ error: "regNo, unitCode, and academicYear are required" });    
+    if (!regNo || !unitCode || !academicYear) {
+      return res.status(400).json({ error: "regNo, unitCode, and academicYear are required" });
+    }
 
-    console.log(`[LOG] Incoming Update -> Student: ${regNo}, Unit: ${unitCode}, Year: ${academicYear}`);
-
-    const student = await Student.findOne({ regNo: { $regex: `^${regNo}$`, $options: "i" },});
-    const unitDoc = await Unit.findOne({ code: unitCode });
-    const yearDoc = await AcademicYear.findOne({ year: academicYear });
-
-    if (!student || !unitDoc || !yearDoc) return res.status(404).json({ error: "Student, Unit, or Academic Year not found" });
+    // 1. Resolve Metadata
+    const [student, unitDoc, yearDoc] = await Promise.all([
+      Student.findOne({ regNo: { $regex: `^${regNo}$`, $options: "i" } }),
+      Unit.findOne({ code: unitCode.toUpperCase().trim() }),
+      AcademicYear.findOne({ year: academicYear })
+    ]);
 
     if (!student || !unitDoc || !yearDoc) {
-      console.error(`[ERROR] Missing Metadata: Student(${!!student}), Unit(${!!unitDoc}), Year(${!!yearDoc})`);
       return res.status(404).json({ error: "Required metadata (Student/Unit/Year) not found" });
     }
-    
-
 
     const programUnit = await ProgramUnit.findOne({ program: student.program, unit: unitDoc._id });
-    if (!programUnit) return res.status(400).json({ error: `Unit ${unitCode} is not linked to program.` });
-    
-    // let isSpecial = false;
-
-    
-    let existingMark = await Mark.findOne({ student: student._id, programUnit: programUnit._id, academicYear: yearDoc._id });
-
-    let detectedAttempt = "1st";
-    if (!existingMark) {
-      // Only check previous years if this is a BRAND NEW mark entry
-      const totalPastAttempts = await Mark.countDocuments({ student: student._id, programUnit: programUnit._id });
-      if (totalPastAttempts === 1) detectedAttempt = "supplementary";
-      else if (totalPastAttempts >= 2) detectedAttempt = "re-take";
-    } else {
-      // If mark exists for this year, keep its current attempt status!
-      detectedAttempt = existingMark.attempt;
+    if (!programUnit) {
+      return res.status(400).json({ error: `Unit ${unitCode} is not linked to student's program.` });
     }
 
-  const updateData = {
-    institution: student.institution, student: student._id, programUnit: programUnit._id, academicYear: yearDoc._id, semester: semester || "SEMESTER 1",
-    cat1Raw: Number(cat1) || 0, cat2Raw: Number(cat2) || 0, cat3Raw: cat3 ? Number(cat3) : undefined, assgnt1Raw: Number(assignment1) || 0, practicalRaw: Number(practicalRaw) || 0,
-    examQ1Raw: Number(examQ1) || 0, examQ2Raw: Number(examQ2) || 0, examQ3Raw: Number(examQ3) || 0, examQ4Raw: Number(examQ4) || 0, examQ5Raw: Number(examQ5) || 0,
-    examMode: examMode || "standard", isSpecial: isSpecial === true || isSpecial === "true", attempt: isSpecial ? "special" : detectedAttempt,
-    // isSupplementary: detectedAttempt === "supplementary",
-    // isRetake: detectedAttempt.includes("re-take"),
-    uploadedBy: req.user._id, uploadedAt: new Date(),
-    caTotal30: existingMark?.caTotal30 || 0, examTotal70: existingMark?.examTotal70 || 0, agreedMark: existingMark?.agreedMark || 0,
-  };
+    const isDirectEntry = caDirect !== undefined || examDirect !== undefined;
 
-    // const mark = await Mark.findOneAndUpdate(
-    const updatedMark = await Mark.findOneAndUpdate(
-      {
+    // 2. Logic Fork: Direct vs Detailed
+    if (isDirectEntry) {
+      console.log(`[LOG] Processing DIRECT Mark for ${regNo} - ${unitCode}`);
+      
+      const directUpdate = {
+        institution: student.institution,
         student: student._id,
         programUnit: programUnit._id,
         academicYear: yearDoc._id,
-      },
-     updateData,
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    ).populate({
-      path: "programUnit",
-      populate: { path: "unit", select: "code name" },
-    });
+        semester: semester || "SEMESTER 1",
+        caTotal30: Number(caDirect) || 0,
+        examTotal70: Number(examDirect) || 0,
+        agreedMark: Number(agreedMark) || (Number(caDirect) + Number(examDirect)),
+        attempt: isSpecial ? "special" : (attempt || "1st"),
+        isSpecial: isSpecial === true,
+        uploadedBy: req.user._id,
+        uploadedAt: new Date(),
+      };
 
-    console.log(`[LOG] Mark Document ${updatedMark._id} updated. Triggering Grade Calc...`);
+      const updatedDirect = await MarkDirect.findOneAndUpdate(
+        { student: student._id, programUnit: programUnit._id, academicYear: yearDoc._id },
+        directUpdate,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
 
-    // Recalculate Final Grade
-    const gradeResult = await computeFinalGrade({ markId: updatedMark._id as any, coordinatorReq: req  });
+      return res.json({ 
+        success: true, 
+        message: "Direct mark saved successfully", 
+        data: updatedDirect 
+      });
 
-    console.log(`[SUCCESS] Grade Processed: ${gradeResult.finalMark} (${gradeResult.grade}) - Status: ${gradeResult.status}`);
-    res.json({ success: true, message: "Marks updated and grades recalculated", data: gradeResult });
+    } else {
+      // 3. Detailed Mark Logic
+      console.log(`[LOG] Processing DETAILED Mark for ${regNo} - ${unitCode}`);
+      
+      const detailedUpdate = {
+        institution: student.institution,
+        student: student._id,
+        programUnit: programUnit._id,
+        academicYear: yearDoc._id,
+        semester: semester || "SEMESTER 1",
+        cat1Raw: Number(cat1) || 0,
+        cat2Raw: Number(cat2) || 0,
+        cat3Raw: cat3 ? Number(cat3) : undefined,
+        assgnt1Raw: Number(assignment1) || 0,
+        practicalRaw: Number(practicalRaw) || 0,
+        examQ1Raw: Number(examQ1) || 0,
+        examQ2Raw: Number(examQ2) || 0,
+        examQ3Raw: Number(examQ3) || 0,
+        examQ4Raw: Number(examQ4) || 0,
+        examQ5Raw: Number(examQ5) || 0,
+        examMode: examMode || "standard",
+        isSpecial: isSpecial === true,
+        attempt: isSpecial ? "special" : (attempt || "1st"),
+        uploadedBy: req.user._id,
+        uploadedAt: new Date(),
+      };
+
+      const updatedMark = await Mark.findOneAndUpdate(
+        { student: student._id, programUnit: programUnit._id, academicYear: yearDoc._id },
+        detailedUpdate,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+
+      // Trigger the complex grading engine for detailed marks
+      const gradeResult = await computeFinalGrade({ 
+        markId: updatedMark._id as any, 
+        coordinatorReq: req 
+      });
+
+      return res.json({ 
+        success: true, 
+        message: "Detailed marks processed", 
+        data: gradeResult 
+      });
+    }
   }),
 );
+
+// router.get(
+//   "/raw-marks",
+//   requireAuth,
+//   requireRole("coordinator"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { regNo, yearOfStudy } = req.query;
+//     const student = await Student.findOne({
+//       regNo: { $regex: `^${regNo}$`, $options: "i" },
+//     });
+//     if (!student) return res.status(404).json({ error: "Student not found" });
+
+//     console.log(
+//       `[Diagnostic] Fetching marks for ${regNo} (Year: ${yearOfStudy})`,
+//     );
+
+//     const [detailed, direct] = await Promise.all([
+//       Mark.find({ student: student._id })
+//         .populate({
+//           path: "programUnit",
+//           match: yearOfStudy
+//             ? { requiredYear: parseInt(yearOfStudy as string) }
+//             : {},
+//           populate: { path: "unit", select: "code name" },
+//         })
+//         .populate("academicYear", "year")
+//         .lean(),
+//       MarkDirect.find({ student: student._id })
+//         .populate({
+//           path: "programUnit",
+//           match: yearOfStudy
+//             ? { requiredYear: parseInt(yearOfStudy as string) }
+//             : {},
+//           populate: { path: "unit", select: "code name" },
+//         })
+//         .populate("academicYear", "year")
+//         .lean(),
+//     ]);
+
+//     // LOGGING: Check if records found but filtered by 'match'
+//     console.log(
+//       `[Diagnostic] Detailed Found: ${detailed.length}, Direct Found: ${direct.length}`,
+//     );
+
+//     const combined = [
+//       ...detailed.filter((m) => {
+//         if (!m.programUnit)
+//           console.log(
+//             `[Diagnostic] Detailed Mark ${m._id} filtered out (Year mismatch)`,
+//           );
+//         return m.programUnit != null;
+//       }),
+//       ...direct.filter((m) => {
+//         if (!m.programUnit)
+//           console.log(
+//             `[Diagnostic] Direct Mark ${m._id} filtered out (Year mismatch)`,
+//           );
+//         return m.programUnit != null;
+//       }),
+//     ];
+
+//     console.log(
+//       `[Diagnostic] Total combined records sending to Frontend: ${combined.length}`,
+//     );
+//     res.json(combined);
+//   }),
+// );
 
 
 

@@ -72,6 +72,7 @@ router.get(
   })
 );
 
+
 router.get(
   "/template",
   requireAuth,
@@ -145,7 +146,7 @@ router.get(
 
     // ── Table Headers (Row 5) ──────────────────────────────────────────
     const headerRowNum = 5;
-    const headers = ["Reg No *", "Full Name *", "Program *", "Year of Study *"];
+    const headers = ["Reg No", "Full Name", "Program", "Year of Study", "Intake"];
     const headerRow = worksheet.getRow(headerRowNum);
 
     headers.forEach((header, idx) => {
@@ -155,12 +156,7 @@ router.get(
         font: { bold: true, name: fontName, color: { argb: "FFFFFFFF" } },
         fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E40AF" } },
         alignment: { horizontal: "center", vertical: "middle" },
-        border: { 
-          top: { style: "thin" }, 
-          left: { style: "thin" }, 
-          bottom: { style: "thin" }, 
-          right: { style: "thin" } 
-        }
+        border: { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } }
       };
       cell.protection = { locked: true };
     });
@@ -177,23 +173,20 @@ router.get(
 
       // Apply borders to the 4 columns
       for (let c = 1; c <= 4; c++) {
-        row.getCell(c).border = {
-          top: { style: "thin" },
-          left: { style: "thin" },
-          bottom: { style: "thin" },
-          right: { style: "thin" },
-        };
+        row.getCell(c).border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" }};
       }
 
       // Column A & B (Reg No & Name): Always UNLOCKED
       row.getCell(1).protection = { locked: false };
       row.getCell(2).protection = { locked: false };
+      row.getCell(5).protection = { locked: false };
+      
 
       // Column C (Program)
       const progDataCell = row.getCell(3);
       if (selectedProgram) {
         progDataCell.value = fixedProgramValue;
-        progDataCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+        progDataCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" }};
         progDataCell.protection = { locked: true }; // Pre-filled, so lock it
       } else {
         progDataCell.protection = { locked: false }; // Let them select
@@ -210,11 +203,28 @@ router.get(
       // Column D (Year of Study): Always UNLOCKED
       const yearDataCell = row.getCell(4);
       yearDataCell.protection = { locked: false };
-      yearDataCell.dataValidation = {
+      yearDataCell.dataValidation = { type: "list", allowBlank: false, formulae: ['"1,2,3,4,5,6"']};
+
+      // --- COLUMN E: INTAKE SELECTION ---
+      const intakeCell = row.getCell(5);
+      intakeCell.protection = { locked: false };
+      intakeCell.style = {
+        font: { name: "Book Antiqua", size: 10 },
+        border: { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" }},
+      };
+
+      // This creates the dropdown menu in Excel
+      intakeCell.dataValidation = {
         type: "list",
         allowBlank: false,
-        formulae: ['"1,2,3,4,5,6"'],
+        formulae: ['"JAN,MAY,SEPT"'],
+        showErrorMessage: true,
+        errorTitle: "Invalid Intake",
+        error: "Please select an intake from the list (JAN, MAY, or SEPT)."
       };
+  
+      // Set default value for the template
+      intakeCell.value = "SEPT";
     }
 
     // Auto-size columns
@@ -223,6 +233,7 @@ router.get(
       { width: 40 }, // Full Name
       { width: 50 }, // Program
       { width: 20 }, // Year of Study
+      { width: 15 }, // Intake
     ];
 
     worksheet.views = [{ state: "frozen", ySplit: headerRowNum }];
@@ -282,6 +293,7 @@ router.post(
       normalizedProgram: normalizeProgramName(s.program?.trim() || ""),
       yearOfStudy: Number(s.currentYearOfStudy) || 1, // Note: using currentYearOfStudy from frontend
       academicYearId: s.academicYearId,
+      intake: s.intake?.trim().toUpperCase() || "JAN",
       admissionAcademicYearString: s.admissionAcademicYearString || "2024/2025",
     }));
 
@@ -355,7 +367,7 @@ router.post(
         else { finalYearId = academicYearMap.get(s.admissionAcademicYearString)!;}
         
         return {
-          regNo: s.regNo, name: s.name, institution: institutionId, program: progDoc._id, programType: pType, entryType: eType,
+          regNo: s.regNo, name: s.name, institution: institutionId, program: progDoc._id, programType: pType, entryType: eType, intake: s.intake,
           currentYearOfStudy: s.yearOfStudy, admissionAcademicYear: finalYearId, status: "active", initialRegistrationDate: new Date(),
         };
   });
@@ -385,17 +397,6 @@ router.post(
   })
 );
 
-router.post("/bulk/graduate", requireAuth, requireRole("coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const { studentIds } = req.body; // Array of IDs
-  
-  const result = await Student.updateMany(
-    { _id: { $in: studentIds }, institution: req.user.institution },
-    { $set: { status: "graduated" } }
-  );
-
-  res.json({ message: `${result.modifiedCount} students marked as graduated.` });
-}));
-
 // A. DELETE SINGLE STUDENT
 router.delete("/:id", requireAuth, requireRole("admin"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const student = await Student.findOneAndDelete({ 
@@ -407,7 +408,6 @@ router.delete("/:id", requireAuth, requireRole("admin"), asyncHandler(async (req
   await logAudit(req, { action: "delete_student", details: { regNo: student.regNo } });
   res.json({ message: "Student deleted successfully" });
 }));
-
 
 // B. DELETE BY PROGRAM (e.g., if a program is decommissioned)
 router.delete("/bulk/by-program", requireAuth, requireRole("admin"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {

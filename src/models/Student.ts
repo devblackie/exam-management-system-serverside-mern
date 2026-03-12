@@ -13,7 +13,7 @@ export interface IStudent extends Document {
   currentSemester: number;
   status: "active" | "graduated" | "discontinued" | "deregistered" | "repeat" | "on_leave" | "deferred";
   admissionAcademicYear: mongoose.Types.ObjectId;
-
+  intake: string;
   academicLeavePeriod?: { startDate: Date; endDate: Date; reason: string; type: "compassionate" | "financial" | "other"; };
   totalTimeOutYears: number; // ENG 19.d/e: Total years allowed out
   // ENG 22.b: Track attempts per unit (Limit: 5)
@@ -34,6 +34,7 @@ const schema = new Schema<IStudent>({
   currentYearOfStudy: { type: Number, default: 1 },
   currentSemester: { type: Number, default: 1 },
   admissionAcademicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true },
+  intake: { type: String, required: true, enum: ["JAN", "MAY", "SEPT"], uppercase: true, default: "SEPT" },
   status: { type: String, default: "active" },
   academicLeavePeriod: { startDate: Date, endDate: Date, reason: String, type: { type: String, enum: ["compassionate", "financial", "other"] }},
   totalTimeOutYears: { type: Number, default: 0 },
@@ -45,6 +46,7 @@ const schema = new Schema<IStudent>({
 schema.index({ institution: 1, regNo: 1 }, { unique: true });
 // schema.index({ regNo: 1 });
 schema.index({ institution: 1, program: 1, admissionAcademicYear: 1 });
+schema.index({ institution: 1, intake: 1 });
 export default mongoose.model<IStudent>("Student", schema);
 
 // set up the Mongoose Indexes to optimize those multi-tenant queries?
