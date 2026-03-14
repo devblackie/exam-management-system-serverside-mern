@@ -9,12 +9,7 @@ import Unit from "../models/Unit"; // Added Unit import
 import MarkDirect from "../models/MarkDirect";
 import type { AuthenticatedRequest } from "../middleware/auth";
 
-interface ImportResult {
-  total: number;
-  success: number;
-  errors: string[];
-  warnings: string[];
-}
+interface ImportResult { total: number; success: number; errors: string[]; warnings: string[]; }
 
 export async function importDirectMarksFromBuffer(
   buffer: Buffer,
@@ -24,12 +19,7 @@ export async function importDirectMarksFromBuffer(
   const institutionId = req.user.institution;
   if (!institutionId) throw new Error("Coordinator not linked to institution");
 
-  const result: ImportResult = {
-    total: 0,
-    success: 0,
-    errors: [],
-    warnings: [],
-  };
+  const result: ImportResult = { total: 0, success: 0, errors: [], warnings: []};
 
   const workbook = xlsx.read(buffer, { type: "buffer" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -40,8 +30,7 @@ export async function importDirectMarksFromBuffer(
   const yearMatch = academicYearText.match(/\d{4}\/\d{4}/);
   const academicYearStr = yearMatch ? yearMatch[0] : null;
 
-  if (!unitCode || !academicYearStr)
-    throw new Error("Template metadata missing (Unit Code or Year).");
+  if (!unitCode || !academicYearStr) throw new Error("Template metadata missing (Unit Code or Year).");
 
   // 2. Resolve Global Records (Unit and Academic Year)
   const [unitDoc, academicYearDoc] = await Promise.all([
@@ -98,9 +87,8 @@ export async function importDirectMarksFromBuffer(
           student: student._id,
           programUnit: programUnit._id,
           academicYear: academicYearDoc._id,
-          semester: academicYearText.toUpperCase().includes("SEMESTER 2")
-            ? "SEMESTER 2"
-            : "SEMESTER 1",
+          // semester: academicYearText.toUpperCase().includes("SEMESTER 2")
+          //   ? "SEMESTER 2" : "SEMESTER 1",
           caTotal30: Number(row[4]) || 0,
           examTotal70: Number(row[5]) || 0,
           externalTotal100: row[7] !== undefined && row[7] !== null ? Number(row[7]) : null,
@@ -120,6 +108,8 @@ export async function importDirectMarksFromBuffer(
           markData,
           { upsert: true, session },
         );
+
+        
       });
       result.success++;
     } catch (err: any) {

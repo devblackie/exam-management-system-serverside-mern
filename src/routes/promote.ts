@@ -20,6 +20,7 @@ import { logAudit } from "../lib/auditLogger";
 import ProgramUnit from "../models/ProgramUnit";
 import Mark from "../models/Mark";
 import { generateConsolidatedMarkSheet, ConsolidatedData } from "../utils/consolidatedMS";
+import MarkDirect from "../models/MarkDirect";
 
 const router = Router();
 
@@ -62,8 +63,17 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       // 3. Fetch Marks
       const allStudents = [...preview.eligible, ...preview.blocked];
       const studentIds = allStudents.map((s) => { const id = s._id || s.student?._id || s.id || s.student; return id?.toString(); }).filter((id) => id && id.length >= 24); 
-      const rawMarks = await Mark.find({ student: { $in: studentIds } }).populate({ path: "programUnit", populate: { path: "unit", select: "code name" }}).lean();
-      const filteredMarks = rawMarks.filter((m: any) => { return m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote); });
+      // const rawMarks = await Mark.find({ student: { $in: studentIds } }).populate({ path: "programUnit", populate: { path: "unit", select: "code name" }}).lean();
+      // const filteredMarks = rawMarks.filter((m: any) => { return m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote); });
+      // Fetch from both Detailed (Mark) and Direct (MarkDirect) models
+      const [detailedMarks, directMarks] = await Promise.all([
+        Mark.find({ student: { $in: studentIds } }).populate({ path: "programUnit", populate: { path: "unit", select: "code name" }}).lean(),
+        MarkDirect.find({ student: { $in: studentIds } }).populate({ path: "programUnit", populate: { path: "unit", select: "code name" }}).lean()
+      ]);
+      // Merge them: Direct marks often take precedence if duplicates exist
+      const combinedMarks = [...detailedMarks, ...directMarks];
+      // Filter marks strictly for the Year of Study being promoted
+      const filteredMarks = combinedMarks.filter((m: any) => { return m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote);});
       const offeredUnitsRaw = await ProgramUnit.find({ program: programId, requiredYear: yearToPromote }).populate("unit").lean();
       const offeredUnits = offeredUnitsRaw.map((pu: any) => ({ code: pu.unit?.code || "N/A", name: pu.unit?.name || "N/A" }));
 

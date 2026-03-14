@@ -118,6 +118,82 @@ router.get(
   })
 );
 
+router.get(
+  "/direct-template",
+  requireAuth, 
+  requireRole("coordinator", "admin"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, unitId, academicYearId, yearOfStudy, semester } = req.query;
+
+    if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
+      return res.status(400).json({
+        error:
+          "Missing required parameters: programId, unitId, academicYearId, yearOfStudy, semester",
+      });
+    }
+
+    try {
+      // Validation and Casting: Checks if the input string can be an ObjectId.
+      if (
+        !mongoose.Types.ObjectId.isValid(programId as string) ||
+        !mongoose.Types.ObjectId.isValid(unitId as string) ||
+        !mongoose.Types.ObjectId.isValid(academicYearId as string)
+      ) {
+        throw new Error(
+          "One or more provided IDs (programId, unitId, academicYearId) are invalid."
+        );
+      }
+
+      // Fetch Unit details for the filename
+      const unit = await Unit.findById(unitId).lean();
+      // 1. Trim invisible spaces first
+      const rawCode = (unit?.code || "UNIT").trim();
+      const rawName = (unit?.name || "TEMPLATE").trim();
+
+      const cleanName =
+        `${rawCode}_${rawName}`
+          .replace(/[^a-zA-Z0-9]/g, "_") // Replace anything not a letter or number
+          .replace(/_+/g, "_") // Collapse multiple underscores (___ -> _)
+          .replace(/^_|_$/g, "") // Remove _ from start or end
+          ?.toUpperCase() || "TEMPLATE";
+
+      const fileName = `Scoresheet_${cleanName}.xlsx`;
+
+    const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
+    const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+
+    const buffer = await generateDirectScoresheetTemplate(
+      new mongoose.Types.ObjectId(programId as string),
+        new mongoose.Types.ObjectId(unitId as string),
+        parseInt(yearOfStudy as string, 10),
+        parseInt(semester as string, 10),
+        new mongoose.Types.ObjectId(academicYearId as string),
+        logoBuffer
+    );
+
+    res
+      .header(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      )
+      .header("Access-Control-Expose-Headers", "Content-Disposition")
+      .attachment(fileName)
+      .send(buffer);
+  } catch (error: any) {
+    // Handle cases where IDs are invalid or DB lookup fails
+    // console.error("Error generating scoresheet template:", error.message);
+
+    // Return a 400 for invalid ID format, otherwise a 500
+    const status = error.message.includes("invalid") ? 400 : 500;
+
+    return res.status(status).json({
+      message: "Failed to generate scoresheet template. Check input IDs.",
+      error: error.message,
+    });
+  }
+})
+);
+
 // Route: POST marks/upload
 router.post(
   "/upload",
@@ -212,81 +288,7 @@ router.post(
 
 // Add to src/routes/marks.ts
 
-router.get(
-  "/direct-template",
-  requireAuth, 
-  requireRole("coordinator", "admin"),
-  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { programId, unitId, academicYearId, yearOfStudy, semester } = req.query;
 
-    if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
-      return res.status(400).json({
-        error:
-          "Missing required parameters: programId, unitId, academicYearId, yearOfStudy, semester",
-      });
-    }
-
-    try {
-      // Validation and Casting: Checks if the input string can be an ObjectId.
-      if (
-        !mongoose.Types.ObjectId.isValid(programId as string) ||
-        !mongoose.Types.ObjectId.isValid(unitId as string) ||
-        !mongoose.Types.ObjectId.isValid(academicYearId as string)
-      ) {
-        throw new Error(
-          "One or more provided IDs (programId, unitId, academicYearId) are invalid."
-        );
-      }
-
-      // Fetch Unit details for the filename
-      const unit = await Unit.findById(unitId).lean();
-      // 1. Trim invisible spaces first
-      const rawCode = (unit?.code || "UNIT").trim();
-      const rawName = (unit?.name || "TEMPLATE").trim();
-
-      const cleanName =
-        `${rawCode}_${rawName}`
-          .replace(/[^a-zA-Z0-9]/g, "_") // Replace anything not a letter or number
-          .replace(/_+/g, "_") // Collapse multiple underscores (___ -> _)
-          .replace(/^_|_$/g, "") // Remove _ from start or end
-          ?.toUpperCase() || "TEMPLATE";
-
-      const fileName = `Scoresheet_${cleanName}.xlsx`;
-
-    const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
-    const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
-
-    const buffer = await generateDirectScoresheetTemplate(
-      new mongoose.Types.ObjectId(programId as string),
-        new mongoose.Types.ObjectId(unitId as string),
-        parseInt(yearOfStudy as string, 10),
-        parseInt(semester as string, 10),
-        new mongoose.Types.ObjectId(academicYearId as string),
-        logoBuffer
-    );
-
-    res
-      .header(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      )
-      .header("Access-Control-Expose-Headers", "Content-Disposition")
-      .attachment(fileName)
-      .send(buffer);
-  } catch (error: any) {
-    // Handle cases where IDs are invalid or DB lookup fails
-    // console.error("Error generating scoresheet template:", error.message);
-
-    // Return a 400 for invalid ID format, otherwise a 500
-    const status = error.message.includes("invalid") ? 400 : 500;
-
-    return res.status(status).json({
-      message: "Failed to generate scoresheet template. Check input IDs.",
-      error: error.message,
-    });
-  }
-})
-);
 
 export default router;
 

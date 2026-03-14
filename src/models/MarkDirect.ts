@@ -6,7 +6,8 @@ export interface IMarkDirect extends Document {
   student: mongoose.Types.ObjectId;
   programUnit: mongoose.Types.ObjectId;
   academicYear: mongoose.Types.ObjectId;
-  semester: string;
+  semester: "SEMESTER 1" | "SEMESTER 2" | "SEMESTER 3";
+
   caTotal30: number;    // Input directly: 0-30
   examTotal70: number;  // Input directly: 0-70
   externalTotal100?: number;  // Calculated: (examTotal70 / 70) * 100
@@ -29,7 +30,8 @@ const schema = new Schema<IMarkDirect>({
   student: { type: Schema.Types.ObjectId, ref: "Student", required: true },
   programUnit: { type: Schema.Types.ObjectId, ref: "ProgramUnit", required: true },
   academicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true },
-  semester: { type: String, required: true },
+  semester: { type: String, enum: ["SEMESTER 1", "SEMESTER 2", "SEMESTER 3"], required: true, default: "SEMESTER 1" },
+
   caTotal30: { type: Number, min: 0, max: 30, required: true },
   examTotal70: { type: Number, min: 0, max: 70, required: true },
   externalTotal100: { type: Number, min: 0, max: 100, default: null },

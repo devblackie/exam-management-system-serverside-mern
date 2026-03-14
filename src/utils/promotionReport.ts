@@ -751,6 +751,16 @@ function createStandardUnitDetailTable(students: any[], cellMargin: any, filterK
     // Filter reasons to only show relevant units (e.g., only failed units, not specials)
     const relevantReasons = s.reasons?.filter((r: string) => {
       const lowerR = r.toLowerCase();
+
+      // 1. FILTER OUT RULE TAGS: Ignore strings that start with your ENG rules
+      const isRuleTag =
+        lowerR.startsWith("eng") ||
+        lowerR.includes("failures >") ||
+        lowerR.includes("failures >=") ||
+        lowerR.includes("mean <");
+      if (isRuleTag) return false;
+
+      // 2. Keyword Filtering (e.g.,
       if (filterKeyword) return lowerR.includes(filterKeyword.toLowerCase());
       // Default: show everything except "special" or "leave" tags if we just want failure units
       return !lowerR.includes("special") && !lowerR.includes("leave");

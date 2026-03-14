@@ -207,42 +207,82 @@ router.get("/journey", requireAuth, asyncHandler(async (req: AuthenticatedReques
 
   if (!student) return res.status(404).json({ error: "Student not found" });
 
+  const admissionYearString = (student.admissionAcademicYear as any)?.year || "N/A";
   const journey: any[] = [];
   const program = student.program as any;
   const entryType = student.entryType || "Direct";
   let cumulativeWeightApplied = 0;
   let weightedSum = 0;
 
-  const addWeight = (year: number) => getYearWeight(program, entryType, year);
+  const incrementYear = (yearStr: string, offset: number) => {
+    if (!yearStr || !yearStr.includes("/")) return yearStr;
+    const [start] = yearStr.split("/").map(Number);
+    const newStart = start + offset;
+    return `${newStart}/${newStart + 1}`;
+  };
 
+  const addWeight = (year: number) => getYearWeight(program, entryType, year);
+  // console.log(`[JourneyAudit] Student: ${student.regNo}`);
+  // console.log(`[JourneyAudit] Admission Year: ${admissionYearString}`);
   // --- PART A: History ---
   for (const record of student.academicHistory || []) {
-    const analysis = await calculateStudentStatus(student._id, student.program, record.academicYear, record.yearOfStudy);
+    // console.log(
+    //   `[HistoryItem] YOS: ${record.yearOfStudy} | DB_Year: ${record.academicYear}`,
+    // );
+    const analysis = await calculateStudentStatus(
+      student._id,
+      student.program,
+      record.academicYear,
+      record.yearOfStudy,
+    );
     const weight = addWeight(record.yearOfStudy);
-    
+
+    // LOGIC: If DB has no year, or it's incorrectly repeating the admission year for Y2+
+    let resolvedYear = record.academicYear;
+    if (
+      !resolvedYear ||
+      (record.yearOfStudy > 1 && resolvedYear === admissionYearString)
+    ) {
+      resolvedYear = incrementYear(admissionYearString, record.yearOfStudy - 1);
+    }
+
+    let formalOutcome = analysis.status;
+    if (analysis.status === "PASS") {
+      formalOutcome = "PASS (PROMOTED)";
+    } else if (analysis.status === "SUPP") {
+      formalOutcome = "PROCEEDED (WITH SUPPLEMENTARIES)";
+    }
+
     journey.push({
       type: "ACADEMIC",
-      academicYear: record.academicYear,
+      // academicYear: record.academicYear,
+      academicYear: resolvedYear,
       yearOfStudy: record.yearOfStudy,
-      status: analysis.status,
+      // status: analysis.status,
+      status: formalOutcome,
+      // status: analysis.status === "PASS" ? "PASS (PROMOTED)" : analysis.status,
       totalUnits: analysis.summary.totalExpected,
       weight: Math.round(weight * 100),
       challenges: formatChallenges(analysis),
       date: record.date || new Date(0),
+      isCurrent: false,
     });
 
-    weightedSum += (parseFloat(analysis.weightedMean) * weight);
+    weightedSum += parseFloat(analysis.weightedMean) * weight;
     cumulativeWeightApplied += weight;
   }
 
   // --- PART B: Current Year ---
   if (!student.academicHistory?.some(h => h.yearOfStudy === student.currentYearOfStudy)) {
+    console.log(`[CurrentYear] YOS: ${student.currentYearOfStudy} | Looking for current AcademicYear doc...`);
+    const currentYearDoc = await AcademicYear.findOne({ institution: student.institution, isCurrent: true }).lean();
     const live = await calculateStudentStatus(student._id, student.program, "CURRENT", student.currentYearOfStudy);
     const weight = addWeight(student.currentYearOfStudy);
+   
 
     journey.push({
       type: "ACADEMIC",
-      academicYear: "2026/2027",
+      academicYear: currentYearDoc?.year || "2026/2027",
       yearOfStudy: student.currentYearOfStudy,
       status: live.status,
       totalUnits: live.summary.totalExpected,
@@ -399,6 +439,7 @@ router.get(
 );
 
 // POST /raw-marks: Handles both Detailed and Direct mark entries
+
 router.post(
   "/raw-marks",
   requireAuth,
@@ -469,7 +510,7 @@ router.post(
 
     } else {
       // 3. Detailed Mark Logic
-      console.log(`[LOG] Processing DETAILED Mark for ${regNo} - ${unitCode}`);
+      // console.log(`[LOG] Processing DETAILED Mark for ${regNo} - ${unitCode}`);
       
       const detailedUpdate = {
         institution: student.institution,

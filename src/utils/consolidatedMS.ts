@@ -112,9 +112,21 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
 
       if (resolvedStatus.isLocked) rowData.push("");
       else if (markObj) {
-        const isSpecial = markObj.isSpecial || markObj.remarks?.toLowerCase().includes("special");
+        const isSpecial =
+          markObj.isSpecial ||
+          markObj.remarks?.toLowerCase().includes("special");
         const markValue = markObj.agreedMark ?? 0;
-        const isMissingData = !markObj.caTotal30 || !markObj.examTotal70;
+        // const isMissingData = !markObj.caTotal30 || !markObj.examTotal70;
+
+        // FIX: Check for null/undefined instead of falsy 0
+        const hasCA =
+          markObj.caTotal30 !== null && markObj.caTotal30 !== undefined;
+        const hasExam =
+          markObj.examTotal70 !== null && markObj.examTotal70 !== undefined;
+
+        // In Direct Entry, if they have the markObj, they usually have the data.
+        // We only show INC if the fields are physically missing from the DB record.
+        const isMissingData = !hasCA || !hasExam;
 
         if (isSpecial) rowData.push(`${markValue}C`);
         else if (isMissingData || markValue === 0) rowData.push("INC");
@@ -143,11 +155,9 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
       // Priority 2: The remarks field
       const remarks = student.remarks?.toLowerCase() || "";
       
-      if (leaveType) {
-          studentMattersList.push(leaveType.toUpperCase());
-      } else if (remarks.includes("financial")) {
-          studentMattersList.push("FINANCIAL");
-      } else if (remarks.includes("compassionate") || remarks.includes("medical")) {
+      if (leaveType) studentMattersList.push(leaveType.toUpperCase());
+      else if (remarks.includes("financial")) studentMattersList.push("FINANCIAL");
+      else if (remarks.includes("compassionate") || remarks.includes("medical")) {
           studentMattersList.push("COMPASSIONATE");
       } else if (audit.leaveDetails) {
           // Fallback to the reason string from resolveStudentStatus

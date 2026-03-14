@@ -10,6 +10,7 @@
   import mongoose from "mongoose";
   import * as ExcelJS from "exceljs";
   import config from "../config/config";
+import { calculateStudentStatus } from "../services/statusEngine";
   
   /**
    * GENERATE SCORESHEET TEMPLATE
@@ -27,7 +28,8 @@
     unitType: "theory" | "lab" | "workshop" = "theory",
   ): Promise<any> => {
     const programUnit = await ProgramUnit.findOne({ program: programId, unit: unitId }).lean();
-    const [program, unit, academicYear, eligibleStudents] = await Promise.all([
+    const [program, unit, academicYear ] = await Promise.all([
+      // const [program, unit, academicYear, eligibleStudents] = await Promise.all([
       Program.findById(programId).lean(),
       Unit.findById(unitId).lean(),
       AcademicYear.findById(academicYearId).lean(),
@@ -37,6 +39,44 @@
     const settings = await InstitutionSettings.findOne({ institution: program?.institution });
     if (!settings) throw new Error("Institution settings missing.");
   
+    // 2. Fetch All Active Students initially
+  let eligibleStudents = await Student.find({ 
+    program: programId, 
+    currentYearOfStudy: yearOfStudy, 
+    status: "active" 
+  }).sort({ regNo: 1 }).lean();
+
+  // 3. APPLY SUPPLEMENTARY FILTERS
+  // If the session is SUPPLEMENTARY, we must filter the list
+  if (academicYear?.session === "SUPPLEMENTARY") {
+    const filteredList = [];
+    const unitCode = unit?.code?.toUpperCase() || "";
+
+    for (const student of eligibleStudents) {
+      const result = await calculateStudentStatus(
+        student._id, 
+        programId, 
+        academicYear.year, 
+        yearOfStudy
+      );
+
+      // Rule: STAYOUT, REPEAT, and DEREGISTERED cannot sit supps
+      const isTerminal = ["STAYOUT", "REPEAT YEAR", "DEREGISTERED", "DISCONTINUED"].includes(result.status);
+      
+      if (!isTerminal) {
+        // Only include if they have a specific reason to be here for THIS unit
+        const hasFailedUnit = result.failedList.some(f => f.displayName.startsWith(unitCode));
+        const hasSpecialUnit = result.specialList.some(s => s.displayName.startsWith(unitCode));
+        const hasIncompleteUnit = result.incompleteList.some(i => i.startsWith(unitCode));
+
+        if (hasFailedUnit || hasSpecialUnit || hasIncompleteUnit) {
+          filteredList.push(student);
+        }
+      }
+    }
+    eligibleStudents = filteredList;
+  }
+
     const previousMarks = programUnit ? await Mark.find({
       student: { $in: eligibleStudents.map((s) => s._id) },
       programUnit: programUnit._id,

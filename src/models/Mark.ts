@@ -96,9 +96,7 @@ const schema = new Schema<IMark>(
 schema.index({ student: 1, programUnit: 1, academicYear: 1 }, { unique: true });
 schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
   // If the query specifically searches for deletedAt, don't override it
-  if (!this.getQuery().deletedAt) {
-    this.where({ deletedAt: null });
-  }
+  if (!this.getQuery().deletedAt) this.where({ deletedAt: null });
   next();
 });
 schema.index({ student: 1, academicYear: 1, programUnit: 1, deletedAt: 1 });
