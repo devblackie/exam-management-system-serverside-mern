@@ -121,3 +121,35 @@ export const revertStatusToActive = async (studentId: string) => {
     $unset: { academicLeavePeriod: 1 }
   }, { new: true });
 };
+
+// --- IMPLEMENTING READMISSION (ENG. 23 / 24) ---
+export const readmitStudent = async (studentId: string, remarks: string) => {
+  const student = await Student.findById(studentId);
+  if (!student) throw new Error("Student not found");
+
+  // Only allow readmission for terminal or inactive statuses
+  const terminalStatuses = ["deregistered", "discontinued", "on_leave", "deferred"];
+  if (!terminalStatuses.includes(student.status)) throw new Error(`Readmission denied: Student is currently ${student.status.toUpperCase()}.`);
+
+  const previousStatus = student.status.toUpperCase();
+  const now = new Date();
+  
+  // Determine the academic year context
+  const lastHistory = student.academicHistory?.slice(-1)[0];
+  const currentAY = lastHistory?.academicYear || "NEW CYCLE";
+
+  return await Student.findByIdAndUpdate(
+    studentId,
+    {
+      $set: { status: "active", remarks: `READMITTED: ${remarks} (Prev: ${previousStatus})`},
+      $push: {        
+        statusEvents: { fromStatus: previousStatus, toStatus: "active", date: now, academicYear: currentAY, reason: `OFFICIAL READMISSION: ${remarks}`},
+        // 2. Track the return in Promotion History
+        promotionHistory: { from: student.currentYearOfStudy, to: student.currentYearOfStudy, date: now, remarks: `READMISSION FROM ${previousStatus}`}
+      },
+      // Clear any pending leave periods
+      $unset: { academicLeavePeriod: 1 }
+    },
+    { new: true }
+  );
+};

@@ -47,15 +47,9 @@ schema.index({ institution: 1, regNo: 1 }, { unique: true });
 // schema.index({ regNo: 1 });
 schema.index({ institution: 1, program: 1, admissionAcademicYear: 1 });
 schema.index({ institution: 1, intake: 1 });
-// Add these to src/models/Student.ts before the export
-
-// 1. Critical for the Journey Timeline lookup
-schema.index({ institution: 1, regNo: 1 }, { unique: true });
-
-// 2. Optimized for "Year-of-Study" reports & Promotions
+schema.index({ "statusEvents.toStatus": 1, "statusEvents.academicYear": 1 });
 schema.index({ institution: 1, status: 1, currentYearOfStudy: 1 });
-
-// 3. Optimized for filtering students by Academic Year intake
+schema.index({ institution: 1, program: 1, currentYearOfStudy: 1, status: 1 });
 schema.index({ institution: 1, admissionAcademicYear: 1, intake: 1 });
 export default mongoose.model<IStudent>("Student", schema);
 

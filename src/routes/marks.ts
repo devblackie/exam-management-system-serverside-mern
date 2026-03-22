@@ -14,6 +14,7 @@ import path from "path";
 import Unit from "../models/Unit";
 import { generateDirectScoresheetTemplate } from "../utils/directTemplate";
 import { importDirectMarksFromBuffer } from "../services/directMarksImporter";
+import AcademicYear from "../models/AcademicYear";
 
 const router = Router();
 
@@ -23,15 +24,7 @@ router.get(
   requireAuth,
   requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const {
-      programId,
-      unitId,
-      academicYearId,
-      yearOfStudy,
-      semester,
-      examMode,
-      unitType,
-    } = req.query;
+    const { programId, unitId, academicYearId, yearOfStudy, semester, examMode, unitType } = req.query;
 
     if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
       return res.status(400).json({
@@ -48,16 +41,24 @@ router.get(
         !mongoose.Types.ObjectId.isValid(academicYearId as string)
       ) {
         throw new Error(
-          "One or more provided IDs (programId, unitId, academicYearId) are invalid."
+          "One or more provided IDs (programId, unitId, academicYearId) are invalid.",
         );
       }
 
       // Fetch Unit details for the filename
-      const unit = await Unit.findById(unitId).lean();
+      // const unit = await Unit.findById(unitId).lean();
+
+      const [unit, academicYear] = await Promise.all([
+        Unit.findById(unitId).lean(),
+        AcademicYear.findById(academicYearId).lean(),
+      ]);
+
+      if (!academicYear) throw new Error("Academic Year not found.");
       // 1. Trim invisible spaces first
       const rawCode = (unit?.code || "UNIT").trim();
       const rawName = (unit?.name || "TEMPLATE").trim();
 
+      const yearLabel = (academicYear.year || "YEAR").trim().replace(/\//g, "-");
       const cleanName =
         `${rawCode}_${rawName}`
           .replace(/[^a-zA-Z0-9]/g, "_") // Replace anything not a letter or number
@@ -65,21 +66,14 @@ router.get(
           .replace(/^_|_$/g, "") // Remove _ from start or end
           ?.toUpperCase() || "TEMPLATE";
 
-      const fileName = `Scoresheet_${cleanName}.xlsx`;
+      const fileName = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
 
       // --- 1. LOAD THE LOGO IMAGE ---
-      const logoPath = path.join(
-        __dirname,
-        "../../public/institutionLogoExcel.png"
-      );
+      const logoPath = path.join( __dirname, "../../public/institutionLogoExcel.png" );
 
       let logoBuffer: Buffer;
-      if (fs.existsSync(logoPath)) {
-        logoBuffer = fs.readFileSync(logoPath);
-      } else {
-        // console.warn("Logo file not found at:", logoPath);
-        logoBuffer = Buffer.alloc(0); // Fallback to empty if file is missing
-      }
+      if (fs.existsSync(logoPath)) logoBuffer = fs.readFileSync(logoPath);
+      else logoBuffer = Buffer.alloc(0); // Fallback to empty if file is missing      
 
       // --- 2. GENERATE THE EXCEL BUFFER ---
       const excelBuffer = await generateFullScoresheetTemplate(
@@ -145,11 +139,20 @@ router.get(
       }
 
       // Fetch Unit details for the filename
-      const unit = await Unit.findById(unitId).lean();
+      // const unit = await Unit.findById(unitId).lean();
+
+      const [unit, academicYear] = await Promise.all([
+        Unit.findById(unitId).lean(),
+        AcademicYear.findById(academicYearId).lean(),
+      ]);
+
+      if (!academicYear) throw new Error("Academic Year not found.");
+
       // 1. Trim invisible spaces first
       const rawCode = (unit?.code || "UNIT").trim();
       const rawName = (unit?.name || "TEMPLATE").trim();
 
+      const yearLabel = (academicYear.year || "YEAR").trim().replace(/\//g, "-");
       const cleanName =
         `${rawCode}_${rawName}`
           .replace(/[^a-zA-Z0-9]/g, "_") // Replace anything not a letter or number
@@ -157,7 +160,7 @@ router.get(
           .replace(/^_|_$/g, "") // Remove _ from start or end
           ?.toUpperCase() || "TEMPLATE";
 
-      const fileName = `Scoresheet_${cleanName}.xlsx`;
+      const fileName = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
 
     const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
     const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);

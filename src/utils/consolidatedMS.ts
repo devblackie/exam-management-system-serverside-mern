@@ -4,6 +4,7 @@ import config from "../config/config";
 import InstitutionSettings from "../models/InstitutionSettings";
 import { resolveStudentStatus } from "./studentStatusResolver";
 import { calculateStudentStatus } from "../services/statusEngine";
+import { getAttemptLabel } from "./academicRules";
 
 export interface ConsolidatedData {
   programName: string; academicYear: string; yearOfStudy: number;
@@ -93,16 +94,19 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
 
     // --- REPEAT FLAG LOGIC (RPT) ---
     // Count how many times they have a record for this specific year of study in their history
-    const repeatCount =
-      student.academicHistory?.filter((h: any) => h.yearOfStudy === yearOfStudy && h.status === "REPEAT YEAR").length || 0;
+    const repeatCount = student.academicHistory?.filter((h: any) => h.yearOfStudy === yearOfStudy && h.status === "REPEAT YEAR").length || 0;
 
+    // Determine the dynamic notation for Column 4
+    const attemptNotation = getAttemptLabel(student.attemptNumber || 1, student.status, student.regNo);
+    
     const repeatTag = repeatCount > 0 ? ` (RPT${repeatCount})` : "";
     const reinstatedTag = hasReturnHistory ? " (REINSTATED)" : "";
 
     // Final Display Name: "John Doe (REINSTATED) (RPT1)"
     const finalDisplayName = `${student.name}${reinstatedTag}${repeatTag}`.toUpperCase();
 
-    const rowData: any[] = [ currentIndex + 1, student.regNo, finalDisplayName, "B/S" ];
+    // const rowData: any[] = [ currentIndex + 1, student.regNo, finalDisplayName, "B/S" ];
+    const rowData: any[] = [ currentIndex + 1, student.regNo, finalDisplayName, attemptNotation ];
 
     // const rowData: any[] = [currentIndex + 1, student.regNo, student.name, "B/S"];
 
@@ -112,17 +116,13 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
 
       if (resolvedStatus.isLocked) rowData.push("");
       else if (markObj) {
-        const isSpecial =
-          markObj.isSpecial ||
-          markObj.remarks?.toLowerCase().includes("special");
+        const isSpecial = markObj.isSpecial || markObj.remarks?.toLowerCase().includes("special");
         const markValue = markObj.agreedMark ?? 0;
         // const isMissingData = !markObj.caTotal30 || !markObj.examTotal70;
 
         // FIX: Check for null/undefined instead of falsy 0
-        const hasCA =
-          markObj.caTotal30 !== null && markObj.caTotal30 !== undefined;
-        const hasExam =
-          markObj.examTotal70 !== null && markObj.examTotal70 !== undefined;
+        const hasCA = markObj.caTotal30 !== null && markObj.caTotal30 !== undefined;
+        const hasExam = markObj.examTotal70 !== null && markObj.examTotal70 !== undefined;
 
         // In Direct Entry, if they have the markObj, they usually have the data.
         // We only show INC if the fields are physically missing from the DB record.

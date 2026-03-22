@@ -11,6 +11,7 @@ import { computeFinalGrade } from "./gradeCalculator"; // Assume this is used in
 import { resolveStudentStatus } from "../utils/studentStatusResolver";
 import MarkDirect from "../models/MarkDirect";
 import AcademicYear from "../models/AcademicYear";
+import { getAttemptLabel } from "../utils/academicRules";
 
 const getLetterGrade = (mark: number, settings: any): string => {
   if (!settings || !settings.gradingScale) {
@@ -25,6 +26,24 @@ const getLetterGrade = (mark: number, settings: any): string => {
   return matched ? matched.grade : settings.failingGrade || "E";
 };
 
+const syncTerminalStatusToDb = async ( studentId: string, engineStatus: string, details: string, academicYear: string ) => {
+  const terminalMap: Record<string, string> = { DEREGISTERED: "deregistered", "REPEAT YEAR": "repeat", STAYOUT: "active", DISCONTINUED: "discontinued"  };
+
+  const dbStatus = terminalMap[engineStatus];
+  if (!dbStatus) return;
+
+  const student = await Student.findById(studentId);
+  // Only update if there's a change to avoid infinite loops/redundant writes
+  if (!student || student.status === dbStatus) return;
+
+  const fromStatus = student.status;
+
+  await Student.findByIdAndUpdate(studentId, {
+    $set: { status: dbStatus as any, remarks: details },
+    $push: { statusEvents: { fromStatus, toStatus: dbStatus, date: new Date(), reason: `Auto-Sync: ${details}`, academicYear }},
+  });
+};
+
 export interface StudentStatusResult {
   status: string;
   variant: "success" | "warning" | "error" | "info";
@@ -33,67 +52,128 @@ export interface StudentStatusResult {
 
   summary: { totalExpected: number; passed: number; failed: number; missing: number; isOnLeave?: boolean; };
   passedList: { code: string; mark: number }[];
-  failedList: { displayName: string; attempt: number }[];
+  failedList: { displayName: string; attempt: string | number }[];
   specialList: { displayName: string; grounds: string }[];
   missingList: string[];
   incompleteList: string[];
   leaveDetails?: string;
 }
 
-export const calculateStudentStatus = async ( studentId: any, programId: any, academicYearName: string, yearOfStudy: number = 1): Promise<StudentStatusResult> => {
+export const calculateStudentStatus = async (
+  studentId: any,
+  programId: any,
+  academicYearName: string,
+  yearOfStudy: number = 1,
+): Promise<StudentStatusResult> => {
   const settings = await InstitutionSettings.findOne().lean();
-  if (!settings) throw new Error("Institution settings not found. Please configure grading scales.");
+  if (!settings)
+    throw new Error(
+      "Institution settings not found. Please configure grading scales.",
+    );
+
   const passMark = settings?.passMark || 40;
   const student = await Student.findById(studentId).lean();
   if (!student) throw new Error("Student not found");
-  const resolved = resolveStudentStatus(student);
-  if (resolved.isLocked) {
+
+  // const resolved = resolveStudentStatus(student);
+  // if (resolved.isLocked) {
+  //   return {
+  //     status: resolved.status, variant: "info",
+  //     details: `Student is on ${resolved.status.toLowerCase()}.`,
+  //     weightedMean: "0.00",
+  //     summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0, isOnLeave: true },
+  //     passedList: [], failedList: [], specialList: [],
+  //     missingList: [], incompleteList: [], leaveDetails: resolved.reason,
+  //   };
+  // }
+
+  // --- FIX: RESOLVE THE CORRECT ACADEMIC YEAR DOCUMENT ---
+  let targetYearDoc;
+  if (
+    !academicYearName ||
+    academicYearName === "CURRENT" ||
+    academicYearName === "undefined"
+  ) {
+    targetYearDoc = await AcademicYear.findOne({ isCurrent: true }).lean();
+  } else {
+    targetYearDoc = await AcademicYear.findOne({
+      year: academicYearName,
+    }).lean();
+  }
+
+  // If we still can't find a year, we can't accurately pull marks
+  if (!targetYearDoc) {
+    console.error(
+      `[StatusEngine] Critical: Could not resolve year for "${academicYearName}"`,
+    );
+    // Return a neutral status instead of failing/deregistering
     return {
-      status: resolved.status, variant: "info",
-      details: `Student is on ${resolved.status.toLowerCase()}.`,
+      status: "YEAR NOT FOUND",
+      variant: "info",
+      details: "Please ensure an Academic Year is active in settings.",
       weightedMean: "0.00",
-      summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0, isOnLeave: true },
-      passedList: [], failedList: [], specialList: [],
-      missingList: [], incompleteList: [], leaveDetails: resolved.reason,
+      summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
+      passedList: [],
+      failedList: [],
+      specialList: [],
+      missingList: [],
+      incompleteList: [],
     };
   }
 
-  const curriculum = (await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy })
+  const curriculum = (await ProgramUnit.find({
+    program: programId,
+    requiredYear: yearOfStudy,
+  })
     .populate("unit")
     .lean()) as any[];
 
-        if (!curriculum || !curriculum.length || curriculum.length === 0) {
-          return {
-            status: "CURRICULUM NOT SET", variant: "info",
-            details: `No units defined for Year ${yearOfStudy} in this program. Please contact the Admin to set the curriculum.`,
-            weightedMean: "0.00",
-            summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
-            passedList: [], failedList: [], specialList: [], missingList: [], incompleteList: []
-          };
-        }
+  if (!curriculum || !curriculum.length || curriculum.length === 0) {
+    return {
+      status: "CURRICULUM NOT SET",
+      variant: "info",
+      details: `No units defined for Year ${yearOfStudy} in this program. Please contact the Admin to set the curriculum.`,
+      weightedMean: "0.00",
+      summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
+      passedList: [],
+      failedList: [],
+      specialList: [],
+      missingList: [],
+      incompleteList: [],
+    };
+  }
 
-  // const marks = await Mark.find({ student: studentId }).lean();
-  
+  // const targetYearDoc = await AcademicYear.findOne({  year: academicYearName }).lean();
+
+  // // Handle case where the year doesn't exist in DB
+  // if (!targetYearDoc && academicYearName !== "CURRENT") {
+  //   console.warn(`[StatusEngine] Year ${academicYearName} not found in DB.`);
+  // }
+
+  // const marks = await Mark.find({ student: studentId, academicYear: targetYearDoc?._id }).lean();
+
   // FETCH FROM BOTH MODELS
   const [detailedMarks, directMarks] = await Promise.all([
-    Mark.find({ student: studentId }).lean(),
-    MarkDirect.find({ student: studentId }).lean(),
+    Mark.find({ student: studentId, academicYear: targetYearDoc?._id }).lean(),
+    MarkDirect.find({
+      student: studentId,
+      academicYear: targetYearDoc?._id,
+    }).lean(),
   ]);
-
-  // console.log(`[StatusEngine] Found ${directMarks.length} direct marks for Student: ${studentId}`);
-  // if (directMarks.length > 0) {
-  //   console.log(`[StatusEngine] Sample Direct Mark Unit ID: ${directMarks[0].programUnit.toString()}`);
-  // }
 
   const marksMap = new Map();
 
   // marks.forEach((m) => marksMap.set(m.programUnit.toString(), m));
 
   // Merge detailed marks
-  detailedMarks.forEach((m) => marksMap.set(m.programUnit.toString(), { ...m, source: 'detailed' }));
-  
+  detailedMarks.forEach((m) =>
+    marksMap.set(m.programUnit.toString(), { ...m, source: "detailed" }),
+  );
+
   // Merge direct marks (Direct marks override detailed if both exist for some reason)
-  directMarks.forEach((m) => marksMap.set(m.programUnit.toString(), { ...m, source: 'direct' }));
+  directMarks.forEach((m) =>
+    marksMap.set(m.programUnit.toString(), { ...m, source: "direct" }),
+  );
 
   // LOG 2: Verify the Map contains the keys
   // console.log(`[StatusEngine] Map Keys:`, Array.from(marksMap.keys()));
@@ -102,7 +182,7 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
 
   const lists = {
     passed: [] as { code: string; mark: number }[],
-    failed: [] as { displayName: string; attempt: number }[],
+    failed: [] as { displayName: string; attempt: string | number }[],
     special: [] as { displayName: string; grounds: string }[],
     missing: [] as string[],
     incomplete: [] as string[],
@@ -134,10 +214,17 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
     const isSpecial =
       rawMarkRecord.attempt === "special" ||
       (rawMarkRecord.source === "detailed" && rawMarkRecord.isSpecial);
-
+    const notation = getAttemptLabel(
+      rawMarkRecord.attemptNumber || 1,
+      student.status,
+      student.regNo,
+    );
     // Case B: Special Exams
     if (isSpecial)
-      lists.special.push({ displayName, grounds: rawMarkRecord.remarks || "Special"  });
+      lists.special.push({
+        displayName,
+        grounds: rawMarkRecord.remarks || "Special",
+      });
     // Case C: Absolute Zero (No CAT AND No Exam) -> ENG 23c
     else if (!hasCAT && !hasExam) lists.missing.push(`${displayName} (Absent)`);
     // Case D: Partial Data -> ENG 15a
@@ -147,16 +234,18 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
       // Move it to Passed/Failed instead of Incomplete.
       if (isSupplementary) {
         if (markValue >= passMark) lists.passed.push({ code, mark: markValue });
-        else lists.failed.push({ displayName, attempt: 2 }); // attempt 2 for supp
-
+        // else lists.failed.push({ displayName, attempt: 2 }); // attempt 2 for supp
+        else lists.failed.push({ displayName, attempt: notation });
         totalFirstAttemptSum += markValue;
         unitsContributingToMean++;
       } else lists.incomplete.push(`${displayName} (No CAT)`);
-    } else if (!hasExam && hasCAT) lists.missing.push(`${displayName} (Missing Exam)`);
+    } else if (!hasExam && hasCAT)
+      lists.missing.push(`${displayName} (Missing Exam)`);
     // Case E: Numerical Result (Passed or Failed)
     else {
       if (markValue >= passMark) lists.passed.push({ code, mark: markValue });
-      else lists.failed.push({ displayName, attempt: 1 });
+      // else lists.failed.push({ displayName, attempt: 1 });
+      else lists.failed.push({ displayName, attempt: notation });
 
       // ENG 16c: Mean is based on first attempt marks
       totalFirstAttemptSum += markValue;
@@ -169,7 +258,8 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
   const missingCount = lists.missing.length;
   const specialCount = lists.special.length;
   const incCount = lists.incomplete.length;
-  const meanMark = unitsContributingToMean > 0 ? totalFirstAttemptSum / totalUnits : 0; // Divided by total prescribed units per ENG 16c
+  const meanMark =
+    unitsContributingToMean > 0 ? totalFirstAttemptSum / totalUnits : 0; // Divided by total prescribed units per ENG 16c
 
   const attemptedUnitsCount = totalUnits - (specialCount + missingCount + incCount);
   const performanceMean = attemptedUnitsCount > 0 ? totalFirstAttemptSum / attemptedUnitsCount : 0;
@@ -177,25 +267,37 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
   // The official Mean for ENG 16 (where missing = 0)
   const officialMean = totalFirstAttemptSum / totalUnits;
 
-  const academicYear = await AcademicYear.findOne({ isCurrent: true }).lean();
-  const isSessionClosed = academicYear?.session === "CLOSED" || academicYear?.session === "SUPPLEMENTARY";
+  const currentYearDoc = await AcademicYear.findOne({ isCurrent: true }).lean();
+  const [targetStart] = academicYearName.split("/").map(Number);
+  const [globalStart] = currentYearDoc
+    ? currentYearDoc.year.split("/").map(Number)
+    : [0];
 
+  const isPastYear = targetStart < globalStart;
+  const isSessionClosed =
+    academicYearName === "CURRENT"
+      ? false
+      : currentYearDoc?.session === "CLOSED";
   let status = "PASS";
   let variant: "success" | "warning" | "error" | "info" = "success";
   let details = "Proceed to next year.";
 
   // 1. DEREGISTERED (ENG 23c) - Highest Priority
-  if (isSessionClosed && missingCount >= 6) {
+  if (missingCount >= 6 && (isPastYear || isSessionClosed)) {
     status = "DEREGISTERED";
     variant = "error";
     details = `Absent from 6+ (${missingCount}) examinations (ENG 23c).`;
-  } else if (!isSessionClosed && missingCount > 0) {
+  }
+  // else if (!isSessionClosed && missingCount > 0) {
+  else if (
+    academicYearName === "CURRENT" ||
+    (targetStart === globalStart && !isSessionClosed)
+  ) {
     // If session is still ORDINARY/OPEN, missing marks are just "PENDING"
     status = "SESSION IN PROGRESS";
     variant = "info";
     details = "Results are currently being compiled.";
   }
-
   // 2. SPECIALS PENDING - Pre-empts Failures
   // If a student has ANY special, we don't sentence them to Repeat/Stayout yet
   // UNLESS the number of units they ALREADY sat and failed is >= 50%
@@ -237,20 +339,32 @@ export const calculateStudentStatus = async ( studentId: any, programId: any, ac
   // --- FINAL FILTER: Clear failedList for terminal statuses ---
   // If the status is one that forbids supplementaries, we empty the returned failedList
   // so the Frontend/Promotion logic doesn't "see" them as pending exams.
-  const isTerminal = ["REPEAT YEAR", "STAYOUT", "DEREGISTERED", "DISCONTINUED"].includes(status);
+  const isTerminal = [
+    "REPEAT YEAR",
+    "STAYOUT",
+    "DEREGISTERED",
+    "DISCONTINUED",
+  ].includes(status);
 
   return {
-    status, variant, details, 
+    status,
+    variant,
+    details,
     // weightedMean: meanMark.toFixed(2),
-     weightedMean: officialMean.toFixed(2),
-    summary: { totalExpected: totalUnits, passed: lists.passed.length,
-       failed: failCount, 
-        // failed: isTerminal ? 0 : failCount,
-      missing: lists.missing.length },
+    weightedMean: officialMean.toFixed(2),
+    summary: {
+      totalExpected: totalUnits,
+      passed: lists.passed.length,
+      failed: failCount,
+      // failed: isTerminal ? 0 : failCount,
+      missing: lists.missing.length,
+    },
     passedList: lists.passed,
-    failedList: lists.failed, 
+    failedList: lists.failed,
     // failedList: isTerminal ? [] : lists.failed,
-    specialList: lists.special, missingList: lists.missing, incompleteList: lists.incomplete,
+    specialList: lists.special,
+    missingList: lists.missing,
+    incompleteList: lists.incomplete,
   };
 };
 
@@ -302,19 +416,47 @@ export const promoteStudent = async (studentId: string) => {
   const student = await Student.findById(studentId).populate("program");
   if (!student) throw new Error("Student not found");
 
-  if (student.status !== "active") return { success: false, message: `Promotion blocked: Student status is ${student.status}`};
+  // If already non-active, don't re-process unless explicitly requested
+  if (student.status !== "active")
+    return {
+      success: false,
+      message: `Promotion blocked: Student status is ${student.status}`,
+    };
+
+  // Prevent promoting someone already out of the system unless they were readmitted
+  if (["deregistered", "discontinued", "graduated"].includes(student.status)) {
+    return {
+      success: false,
+      message: `Action blocked: Student is currently ${student.status}`,
+    };
+  }
 
   const auditResult = await performAcademicAudit(studentId);
-  if (auditResult.discontinued) return { success: false, message: `Discontinued: ${auditResult.reason}` };
-  
+  if (auditResult.discontinued)
+    return { success: false, message: `Discontinued: ${auditResult.reason}` };
+
   const program = student.program as any;
   const duration = program.durationYears || 4;
   const actualCurrentYear = student.currentYearOfStudy || 1;
-
   const currentSession = await AcademicYear.findOne({ isCurrent: true }).lean();
   const completedYearLabel = currentSession?.year || "N/A";
-  const statusResult = await calculateStudentStatus( student._id, student.program, "N/A", actualCurrentYear );
 
+  // 1. Run the audit for the year they just finished
+  const statusResult = await calculateStudentStatus( student._id, student.program, completedYearLabel, actualCurrentYear );
+
+  // --- AUTO-SYNC TERMINAL STATUSES ---
+  const terminalStatuses = ["DEREGISTERED", "REPEAT YEAR", "DISCONTINUED"];
+  if (terminalStatuses.includes(statusResult.status)) {
+    await syncTerminalStatusToDb( studentId, statusResult.status, statusResult.details, completedYearLabel );
+
+    return {
+      success: false,
+      message: `Promotion Blocked: Student status updated to ${statusResult.status}`,
+      details: statusResult,
+    };
+  }
+
+  // --- EXISTING PROMOTION LOGIC ---
   if (statusResult?.status === "PASS") {
     const rawMean = parseFloat(statusResult.weightedMean);
     const yearWeight = getYearWeight( program, student.entryType || "Direct", actualCurrentYear );
@@ -328,12 +470,15 @@ export const promoteStudent = async (studentId: string) => {
       unitsTakenCount: statusResult.summary.totalExpected,
       failedUnitsCount: statusResult.summary.failed,
       isRepeatYear: false,
-      date: new Date()
+      date: new Date(),
     };
 
     if (actualCurrentYear === duration) {
       const fullHistory = [...(student.academicHistory || []), historyRecord];
-      const finalWAA = fullHistory.reduce((acc, curr) => acc + (curr.weightedContribution || 0), 0 );
+      const finalWAA = fullHistory.reduce(
+        (acc, curr) => acc + (curr.weightedContribution || 0),
+        0,
+      );
 
       let classification = "PASS";
       if (finalWAA >= 70) classification = "FIRST CLASS HONOURS";
@@ -341,31 +486,50 @@ export const promoteStudent = async (studentId: string) => {
       else if (finalWAA >= 50) classification = "SECOND CLASS HONOURS (LOWER DIVISION)";
 
       await Student.findByIdAndUpdate(studentId, {
-        $set: { status: "graduand", finalWeightedAverage: finalWAA.toFixed(2),
-          classification: classification, graduationYear: new Date().getFullYear(), currentYearOfStudy: actualCurrentYear + 1, 
-          currentSemester: 1
+        $set: {
+          status: "graduand",
+          finalWeightedAverage: finalWAA.toFixed(2),
+          classification: classification,
+          graduationYear: new Date().getFullYear(),
+          currentYearOfStudy: actualCurrentYear + 1,
+          currentSemester: 1,
         },
         $push: { academicHistory: historyRecord },
       });
-      return { success: true, message: `Student completed final year. Classified as ${classification}`, isGraduation: true };
+      return {
+        success: true,
+        message: `Student completed final year. Classified as ${classification}`,
+        isGraduation: true,
+      };
     }
 
     const nextYear = actualCurrentYear + 1;
     await Student.findByIdAndUpdate(studentId, {
       $set: { currentYearOfStudy: nextYear, currentSemester: 1 },
-      $push: { promotionHistory: { from: actualCurrentYear, to: nextYear, date: new Date() }, academicHistory: historyRecord },
+      $push: {
+        promotionHistory: { from: actualCurrentYear, to: nextYear, date: new Date() },
+        academicHistory: historyRecord,
+      },
     });
-    return { success: true, message: `Successfully promoted to Year ${nextYear}` };
+    return {
+      success: true,
+      message: `Successfully promoted to Year ${nextYear}`,
+    };
   }
 
+  
+
+  // Handle Repeat Year/Stay Out (Optional: also sync status to DB)
   let blockMessage = `Promotion Blocked: `;
-  if (statusResult?.status === "SPECIALS PENDING") {
+  if (statusResult?.status === "REPEAT YEAR") {
+    // Sync to DB so they appear as 'repeat' status
+    await Student.findByIdAndUpdate(studentId, { $set: { status: "repeat" } });
     blockMessage +=
-      "Student has pending Special Examinations. These must be sat and graded before promotion.";
-  } else if (statusResult?.status === "REPEAT YEAR") {
-    blockMessage += 
       "Student is required to repeat the year based on academic performance.";
-  } else { blockMessage += `Current status is '${statusResult?.status}'.`; }
+  } else if (statusResult?.status === "SPECIALS PENDING")
+    blockMessage += "Student has pending Special Examinations.";
+  else blockMessage += `Current status is '${statusResult?.status}'.`;
+
   return { success: false, message: blockMessage, details: statusResult };
 };
 

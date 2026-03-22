@@ -172,6 +172,35 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
   }),
 );
 
+router.post(
+  "/:studentId",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { studentId } = req.params;
+
+    const result = await promoteStudent(studentId);
+
+    if (!result.success) {
+      return res.status(400).json({
+        error: "Promotion Denied",
+        message: result.message,
+        details: result.details,
+      });
+    }
+
+    await logAudit(req, {
+      action: "individual_student_promoted",
+      targetUser: studentId as any,
+      details: { message: result.message },
+    });
+
+    res.json(result);
+  }),
+);
+
+
+
 // download-notices-progress
 router.post(
   "/download-notices-progress",
@@ -236,6 +265,8 @@ router.post(
     }
   }),
 );
+
+
 
 // download-transcripts-progress
 // router.post(

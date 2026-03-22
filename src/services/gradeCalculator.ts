@@ -1,62 +1,98 @@
 // src/services/gradeCalculator.ts
-import Mark from "../models/Mark";
+import Mark, { IMark } from "../models/Mark";
+import MarkDirect, { IMarkDirect } from "../models/MarkDirect";
 import FinalGrade from "../models/FinalGrade";
 import InstitutionSettings from "../models/InstitutionSettings";
 import { calculateFinalResult } from "../utils/gradingCore";
-import mongoose from "mongoose"; // Import mongoose
+import mongoose from "mongoose";
 import { AuthenticatedRequest } from "../middleware/auth";
 
-interface ComputeOptions { markId: mongoose.Types.ObjectId; coordinatorReq?: AuthenticatedRequest; session?: mongoose.ClientSession; }
+interface ComputeOptions { 
+  markId: mongoose.Types.ObjectId; 
+  coordinatorReq?: AuthenticatedRequest; 
+  session?: mongoose.ClientSession; 
+}
 
 export async function computeFinalGrade({ markId, session }: ComputeOptions) {
-  const mark = await Mark.findById(markId)
-    .populate(["student", "academicYear", "programUnit"])
-    .session(session || null);
-  if (!mark) throw new Error("Mark not found");
+  let markDoc: any = await Mark.findById(markId).populate(["student", "academicYear", "programUnit"]).session(session || null);
 
+  let isDirect = false;
+  if (!markDoc) {
+    markDoc = await MarkDirect.findById(markId).populate(["student", "academicYear", "programUnit"]).session(session || null);
+    isDirect = true;
+  }
 
-  const settings = await InstitutionSettings.findOne({ institution: mark.institution }).session(session || null);
+  if (!markDoc) throw new Error("Mark not found");
+
+  const settings = await InstitutionSettings.findOne({ institution: markDoc.institution }).session(session || null);
   if (!settings) throw new Error("Settings not found");
 
-  // Cast to any to bypass strict check on custom schema fields like unitType
-  const markData = mark as any;
-
+  // 1. Run the raw calculation
   const result = calculateFinalResult({
-    cat1: markData.cat1Raw || 0, cat2: markData.cat2Raw || 0, cat3: markData.cat3Raw || 0,
-    ass1: markData.assgnt1Raw || 0, ass2: markData.assgnt2Raw || 0, ass3: markData.assgnt3Raw || 0,
-    practical: markData.practicalRaw || 0, examQ1: markData.examQ1Raw || 0, 
-    examQ2: markData.examQ2Raw || 0, examQ3: markData.examQ3Raw || 0, examQ4: markData.examQ4Raw || 0, examQ5: markData.examQ5Raw || 0,
-    unitType: (markData.unitType as "theory" | "lab" | "workshop") || "theory",
-    examMode: (markData.examMode as "standard" | "mandatory_q1") || "standard",
-    attempt: markData.attempt || "1st",
+    cat1: markDoc.cat1Raw || 0, cat2: markDoc.cat2Raw || 0, cat3: markDoc.cat3Raw || 0,
+    ass1: markDoc.assgnt1Raw || 0, ass2: markDoc.assgnt2Raw || 0, ass3: markDoc.assgnt3Raw || 0,
+    practical: markDoc.practicalRaw || 0, 
+    examQ1: markDoc.examQ1Raw || 0, examQ2: markDoc.examQ2Raw || 0, 
+    examQ3: markDoc.examQ3Raw || 0, examQ4: markDoc.examQ4Raw || 0, examQ5: markDoc.examQ5Raw || 0,
+    unitType: (markDoc.unitType as any) || "theory", examMode: (markDoc.examMode as any) || "standard", attempt: markDoc.attempt || "1st",
     settings: { catMax: settings.cat1Max || 30, assMax: settings.assignmentMax || 10, practicalMax: settings.practicalMax || 10, passMark: settings.passMark || 40 },
   });
 
-  const grade = result.finalMark >= 70 ? "A" : result.finalMark >= 60 ? "B" : result.finalMark >= 50 ? "C" : result.finalMark >= 40 ? "D" : "E";
-  const status = result.finalMark >= settings.passMark ? "PASS" : "SUPPLEMENTARY";
+  // 2. PRESERVATION STRATEGY
+  let finalCA = (result.caTotal === 0 && markDoc.caTotal30 > 0) ? markDoc.caTotal30 : result.caTotal;
+  let finalExam = (result.examTotal === 0 && markDoc.examTotal70 > 0) ? markDoc.examTotal70 : result.examTotal;
+  let finalAgreed = finalCA + finalExam;
+
+  // 3. SPECIAL EXAM OVERRIDE
+  // Check if current state is Special (either just granted or already special)
+  const isSpecial = markDoc.isSpecial || markDoc.attempt === "special";
+  
+  let grade: string;
+  let status: string;
+
+  if (isSpecial) {
+    grade = "I"; // Incomplete
+    status = "SPECIAL";
+    finalExam = 0;
+    finalAgreed = finalCA; 
+  } else {
+    grade = finalAgreed >= 70 ? "A" : finalAgreed >= 60 ? "B" : finalAgreed >= 50 ? "C" : finalAgreed >= 40 ? "D" : "E";
+    status = finalAgreed >= settings.passMark ? "PASS" : "SUPPLEMENTARY";
+  }
+
+  // 4. Update the source document (Mark or MarkDirect)
+  const updatePayload = { $set: { caTotal30: finalCA, examTotal70: finalExam, agreedMark: finalAgreed }};
+
+  if (isDirect) await MarkDirect.updateOne({ _id: markId }, updatePayload).session(session || null);
+  else await Mark.updateOne({ _id: markId }, updatePayload).session(session || null);
   
 
-  // --- FIX 2: Atomic Update for Mark Document ---
-  await Mark.updateOne(
-    { _id: markId },
-    { $set: { caTotal30: result.caTotal, examTotal70: result.examTotal, agreedMark: result.finalMark },},
-  ).session(session || null);
-
-
-  // --- FIX 3: Atomic Update for FinalGrade ---
+  // 5. Update the FinalGrade record for the transcripts
   await FinalGrade.findOneAndUpdate(
-    { student: mark.student, programUnit: mark.programUnit, academicYear: mark.academicYear },
+    { 
+        student: markDoc.student._id || markDoc.student, 
+        programUnit: markDoc.programUnit._id || markDoc.programUnit, 
+        academicYear: markDoc.academicYear._id || markDoc.academicYear 
+    },
     {
       $set: {
-        totalMark: result.finalMark, grade, caTotal30: result.caTotal,
-        examTotal70: result.examTotal, status: status,
-        institution: mark.institution, semester: markData.semester || "SEMESTER 1",
+        totalMark: finalAgreed, 
+        grade, 
+        caTotal30: finalCA,
+        examTotal70: finalExam, 
+        status: status,
+        institution: markDoc.institution, 
+        semester: markDoc.semester || "SEMESTER 1",
       },
     },
-    { upsert: true, session }, // Ensure session is passed here
+    { upsert: true, session },
   );
  
-  return { ...result, grade, status };
+  return { caTotal: finalCA, examTotal: finalExam, finalMark: finalAgreed, grade, status };
 }
+
+
+
+
 
 

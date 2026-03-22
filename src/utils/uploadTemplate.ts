@@ -10,7 +10,7 @@
   import mongoose from "mongoose";
   import * as ExcelJS from "exceljs";
   import config from "../config/config";
-import { calculateStudentStatus } from "../services/statusEngine";
+  import { calculateStudentStatus } from "../services/statusEngine";
   
   /**
    * GENERATE SCORESHEET TEMPLATE
@@ -18,73 +18,97 @@ import { calculateStudentStatus } from "../services/statusEngine";
    * Features: Theory/Lab/Workshop Normalization, Mandatory Q1 logic, and Supplementary Capping.
    */
   export const generateFullScoresheetTemplate = async (
-    programId: mongoose.Types.ObjectId,
-    unitId: mongoose.Types.ObjectId,
-    yearOfStudy: number,
-    semester: number,
-    academicYearId: mongoose.Types.ObjectId,
-    logoBuffer: any,
-    examMode: string = "standard",
-    unitType: "theory" | "lab" | "workshop" = "theory",
+    programId: mongoose.Types.ObjectId, unitId: mongoose.Types.ObjectId, yearOfStudy: number,
+    semester: number, academicYearId: mongoose.Types.ObjectId,
+    logoBuffer: any, examMode: string = "standard", unitType: "theory" | "lab" | "workshop" = "theory",
   ): Promise<any> => {
     const programUnit = await ProgramUnit.findOne({ program: programId, unit: unitId }).lean();
-    const [program, unit, academicYear ] = await Promise.all([
+    const [program, unit, academicYear] = await Promise.all([
       // const [program, unit, academicYear, eligibleStudents] = await Promise.all([
       Program.findById(programId).lean(),
       Unit.findById(unitId).lean(),
       AcademicYear.findById(academicYearId).lean(),
       Student.find({ program: programId, currentYearOfStudy: yearOfStudy, status: "active" }).sort({ regNo: 1 }).lean(),
     ]);
-  
+
+    if (!academicYear) throw new Error(`Academic Year with ID ${academicYearId} not found.`);    
+
     const settings = await InstitutionSettings.findOne({ institution: program?.institution });
     if (!settings) throw new Error("Institution settings missing.");
-  
-    // 2. Fetch All Active Students initially
-  let eligibleStudents = await Student.find({ 
-    program: programId, 
-    currentYearOfStudy: yearOfStudy, 
-    status: "active" 
-  }).sort({ regNo: 1 }).lean();
 
-  // 3. APPLY SUPPLEMENTARY FILTERS
-  // If the session is SUPPLEMENTARY, we must filter the list
-  if (academicYear?.session === "SUPPLEMENTARY") {
-    const filteredList = [];
+    // Exclude anyone who is deregistered, discontinued, or graduated.
+    const forbiddenStatuses = [ "deregistered", "discontinued", "graduated", "deferred", "academic leave" ];
+
+    // 2. Fetch All Active Students initially
+    let eligibleStudents = await Student.find({
+      program: programId,
+      currentYearOfStudy: yearOfStudy,
+      status: {
+        $in: ["active", "repeat", "on_leave", "stayout"], // Must be one of these
+        $nin: forbiddenStatuses.map((s) => new RegExp(`^${s}$`, "i")),
+      },
+    }).populate("admissionAcademicYear").sort({ regNo: 1 }).lean();
+
+
+    // --- 2. AUDIT-BASED FILTERING (The "Agnes" Shield) ---
     const unitCode = unit?.code?.toUpperCase() || "";
+    const filteredList = [];
+
+    // Dynamic Previous Year Calculation (e.g., "2017/2018" -> "2016/2017")
+    const [startYear] = academicYear.year.split("/").map(Number);
+    const previousYearStr = `${startYear - 1}/${startYear}`;
+
+    console.log(`[ScoresheetGen] Auditing ${eligibleStudents.length} students. Context: ${academicYear.year}. Previous: ${previousYearStr}`);
 
     for (const student of eligibleStudents) {
-      const result = await calculateStudentStatus(
-        student._id, 
-        programId, 
-        academicYear.year, 
-        yearOfStudy
-      );
+      // 1. Resolve Admission Year (Handle populated vs ID)
+      const admissionYearObj = student.admissionAcademicYear;
+      const admissionYearStr = typeof admissionYearObj === "object" && "year" in admissionYearObj ? (admissionYearObj as any).year : ""; // If not populated, we might need a fallback or pre-populate it
 
-      // Rule: STAYOUT, REPEAT, and DEREGISTERED cannot sit supps
-      const isTerminal = ["STAYOUT", "REPEAT YEAR", "DEREGISTERED", "DISCONTINUED"].includes(result.status);
-      
-      if (!isTerminal) {
-        // Only include if they have a specific reason to be here for THIS unit
-        const hasFailedUnit = result.failedList.some(f => f.displayName.startsWith(unitCode));
-        const hasSpecialUnit = result.specialList.some(s => s.displayName.startsWith(unitCode));
-        const hasIncompleteUnit = result.incompleteList.some(i => i.startsWith(unitCode));
+      const [admStart] = admissionYearStr ? admissionYearStr.split("/").map(Number) : [0];
 
-        if (hasFailedUnit || hasSpecialUnit || hasIncompleteUnit) {
-          filteredList.push(student);
+      // 2. THE SHIELD: If student was admitted BEFORE or DURING the previous year, check their history.
+      // For Agnes (Adm: 2016), and Current: 2017, Previous: 2016. admStart (2016) <= 2016 is TRUE.
+      const shouldHaveHistory = admStart > 0 && admStart <= startYear - 1;
+
+      if (shouldHaveHistory) {
+        const historyAudit = await calculateStudentStatus( student._id, programId, previousYearStr, 1 );
+
+        if ( historyAudit.status === "DEREGISTERED" || historyAudit.status === "DISCONTINUED" )
+         {
+          console.warn(`[ScoresheetGen] EXCLUDING ${student.regNo}: Found terminal status [${historyAudit.status}] in ${previousYearStr}`);
+          continue;
         }
       }
-    }
-    eligibleStudents = filteredList;
-  }
 
-    const previousMarks = programUnit ? await Mark.find({
-      student: { $in: eligibleStudents.map((s) => s._id) },
-      programUnit: programUnit._id,
-    }).lean() : [];
+      // 3. Current Year Progress Audit
+      const auditResult = await calculateStudentStatus( student._id, programId, academicYear.year, yearOfStudy );
+
+      // If they are DEREGISTERED in the CURRENT session results, exclude them
+      if (auditResult.status === "DEREGISTERED") {
+        console.warn(`[ScoresheetGen] EXCLUDING ${student.regNo}: Engine returned DEREGISTERED for current context.`);
+        continue;
+      }
+
+      // 4. Session Filtering (Ordinary vs Supp)
+      if (academicYear?.session === "SUPPLEMENTARY") {
+        const hasReason =
+          auditResult.failedList.some((f) => f.displayName.startsWith(unitCode)) ||
+          auditResult.specialList.some((s) => s.displayName.startsWith(unitCode)) || 
+          auditResult.incompleteList.some((i) => i.startsWith(unitCode));
+
+        if (hasReason) filteredList.push(student);
+      } else filteredList.push(student);      
+    }
+
+    eligibleStudents = filteredList;
+    console.log(`[ScoresheetGen] Final Count: ${eligibleStudents.length}`);
   
+    const previousMarks = programUnit ? await Mark.find({ student: { $in: eligibleStudents.map((s) => s._id) }, programUnit: programUnit._id }).lean() : [];
+
     const isMandatoryQ1Mode = examMode === "mandatory_q1";
     const q1Max = isMandatoryQ1Mode ? 30 : 10;
-  
+
     // Determine Weights per ENG 10(c)
     const weights = {
       practical: unitType === "lab" ? 15 : unitType === "workshop" ? 40 : 0,
@@ -92,13 +116,13 @@ import { calculateStudentStatus } from "../services/statusEngine";
       tests: unitType === "lab" ? 10 : unitType === "theory" ? 20 : 0,
       exam: unitType === "workshop" ? 60 : 70,
     };
-  
-    const rawPaperMax = 70; 
+
+    const rawPaperMax = 70;
     const caWeightTotal = 100 - weights.exam;
-  
+
     // Header Definition
-    const headers = [ "S/N", "REG. NO.", "NAME", "ATTEMPT", "CAT 1", "CAT 2", "CAT 3", "AVG CAT", "ASSGNT 1", "ASSGNT 2", "ASSGNT 3", "AVG ASSGNT", "PRACTICAL", `CA TOTAL (${caWeightTotal}%)`, `Q1 (/${q1Max})`, "Q2", "Q3", "Q4", "Q5", `EXAM (${weights.exam}%)`, "INTERNAL (/100)", "EXTERNAL (/100)", "AGREED (/100)", "GRADE", ];
-  
+    const headers = [ "S/N", "REG. NO.", "NAME", "ATTEMPT", "CAT 1", "CAT 2", "CAT 3", "AVG CAT", "ASSGNT 1",  "ASSGNT 2", "ASSGNT 3", "AVG ASSGNT", "PRACTICAL", `CA TOTAL (${caWeightTotal}%)`, `Q1 (/${q1Max})`, "Q2", "Q3", "Q4", "Q5", `EXAM (${weights.exam}%)`, "INTERNAL (/100)", "EXTERNAL (/100)", "AGREED (/100)", "GRADE" ];
+
     const dynamicMaxScores = [
       null, null, null, null,
       unitType === "workshop" ? null : settings.cat1Max,
@@ -110,97 +134,84 @@ import { calculateStudentStatus } from "../services/statusEngine";
       unitType === "workshop" ? null : settings.assignmentMax,
       null,
       unitType === "theory" ? null : settings.practicalMax,
-      caWeightTotal,
-      q1Max, 20, 20, 20, 20, weights.exam, 100, 100, 100, null,
+      caWeightTotal, q1Max, 20, 20, 20, 20, weights.exam,
+      100, 100, 100, null,
     ];
-  
+
     const workbook = new ExcelJS.Workbook();
     const sheetName = `${unit?.code || "SCORESHEET"}`;
     const sheet = workbook.addWorksheet(sheetName.trim());
-  
+
     const fontName = "Book Antiqua";
     const fontSize = 9;
-    const greyFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFE0E0E0" }, };
-    const pinkColor = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFFA6C9" }, };
-    const purpleFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFC5A3FF" }, };
-    const thinBorder: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" }, };
-  
+    const greyFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFE0E0E0" }};
+    const pinkColor = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFFA6C9" }};
+    const purpleFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFC5A3FF" }};
+    const thinBorder: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" }};
+
     // Logo & Headers
     if (logoBuffer?.length > 0) {
       const logoId = workbook.addImage({ buffer: logoBuffer, extension: "png" });
-      sheet.addImage(logoId, { tl: { col: 9, row: 0 }, ext: { width: 100, height: 80 }, });
+      sheet.addImage(logoId, { tl: { col: 9, row: 0 }, ext: { width: 100, height: 80 }});
     }
-  
-    const centerBold = { alignment: { horizontal: "center" as const, vertical: "middle" as const }, font: { bold: true, name: fontName, underline: true }, };
-  
+
+    const centerBold = { alignment: { horizontal: "center" as const, vertical: "middle" as const }, font: { bold: true, name: fontName, underline: true }};
+
     sheet.mergeCells("E6:P6");
     sheet.getCell("E6").value = config.instName.toUpperCase();
-    sheet.getCell("E6").style = { ...centerBold, font: { ...centerBold.font, size: 12 }, };
-  
+    sheet.getCell("E6").style = { ...centerBold, font: { ...centerBold.font, size: 12 }};
+
     sheet.mergeCells("D7:Q7");
     sheet.getCell("D7").value = `DEGREE: ${program?.name.toUpperCase() || "BACHELOR OF TECHNOLOGY"}`;
     sheet.getCell("D7").style = { ...centerBold, font: { ...centerBold.font } };
-  
+
     const semTxt = semester === 1 ? "FIRST" : "SECOND";
     const yrTxt = ["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH"][yearOfStudy - 1] || `${yearOfStudy}TH`;
     sheet.mergeCells("D8:Q8");
     sheet.getCell("D8").value = `${yrTxt} YEAR ${semTxt} SEMESTER ${academicYear?.year || ""} ACADEMIC YEAR`;
     sheet.getCell("D8").style = { ...centerBold, font: { ...centerBold.font } };
-  
+
     sheet.mergeCells("F10:O10");
     sheet.getCell("F10").value = `SCORESHEET FOR ${unit?.code || "UNITS"} (${unitType.toUpperCase()}) `;
-    sheet.getCell("F10").style = { ...centerBold, font: { ...centerBold.font } };
-  
+    sheet.getCell("F10").style = { ...centerBold, font: { ...centerBold.font }};
+
     // Unit Info
-    sheet.mergeCells("E12:G12");
-    sheet.getCell("E12").value = "UNIT CODE:";
-    sheet.mergeCells("H12:J12");
-    const unitCodeCell = sheet.getCell("H12");
+    sheet.mergeCells("E12:G12"); sheet.getCell("E12").value = "UNIT CODE:";
+    sheet.mergeCells("H12:J12"); const unitCodeCell = sheet.getCell("H12");
     unitCodeCell.value = unit?.code;
-    unitCodeCell.style = {
-      alignment: { horizontal: "center", vertical: "middle" },
-      font: { bold: true, name: fontName, size: fontSize, underline: true },
-    };
-    sheet.mergeCells("L12:M12");
-    sheet.getCell("L12").value = "UNIT TITLE:";
+    unitCodeCell.style = { alignment: { horizontal: "center", vertical: "middle" }, font: { bold: true, name: fontName, size: fontSize, underline: true }};
+    sheet.mergeCells("L12:M12"); sheet.getCell("L12").value = "UNIT TITLE:";
     sheet.getCell("N12").value = unit?.name.toUpperCase();
     sheet.getRow(12).font = { name: fontName, bold: true, size: fontSize };
-  
+
     // 4. TABLE HEADERS (Starting from Column A = Index 1)
     // A=1, B=2, C=3, D=4 (S/N, REG, NAME, ATTEMPT)
-    sheet.mergeCells("A14:A15");
-    sheet.mergeCells("B14:B15");
-    sheet.mergeCells("C14:C15");
-    sheet.mergeCells("D14:D15");
-  
+    sheet.mergeCells("A14:A15"); sheet.mergeCells("B14:B15"); sheet.mergeCells("C14:C15"); sheet.mergeCells("D14:D15");
+
     // Table Groups
     const groupHeaderRow = sheet.getRow(14);
     groupHeaderRow.height = 25;
-    sheet.mergeCells("E14:H14");
-    sheet.getCell("E14").value = "CONTINUOUS ASSESSMENT TESTS";
-    sheet.mergeCells("I14:L14");
-    sheet.getCell("I14").value = "ASSIGNMENTS";
-    sheet.mergeCells("O14:T14");
-    sheet.getCell("O14").value = "END OF SEMESTER EXAMINATION";
-  
+    sheet.mergeCells("E14:H14"); sheet.getCell("E14").value = "CONTINUOUS ASSESSMENT TESTS";
+    sheet.mergeCells("I14:L14"); sheet.getCell("I14").value = "ASSIGNMENTS";
+    sheet.mergeCells("O14:T14"); sheet.getCell("O14").value = "END OF SEMESTER EXAMINATION";
+
     const headerRow = sheet.getRow(15);
     headerRow.height = 47;
     headers.forEach((val, i) => { headerRow.getCell(i + 1).value = val; });
-  
+
     const scoreRow = sheet.getRow(16);
     dynamicMaxScores.forEach((val, i) => { if (val !== null) scoreRow.getCell(i + 1).value = val; });
-  
+
     [14, 15, 16].forEach((rowNum) => {
       const row = sheet.getRow(rowNum);
       for (let c = 1; c <= 24; c++) {
         const cell = row.getCell(c);
         cell.font = { name: fontName, bold: true, size: 8 };
-        cell.border = { ...thinBorder, bottom: rowNum === 16 ? { style: "double" } : thinBorder.bottom, };
-        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true, };
+        cell.border = { ...thinBorder, bottom: rowNum === 16 ? { style: "double" } : thinBorder.bottom };
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
         if (rowNum === 14 && [5, 9, 15].includes(c)) cell.fill = greyFill;
-        if ((rowNum === 15 && c >= 4) || (rowNum === 14 && c === 4))
-          cell.alignment.textRotation = 90;
-  
+        if ((rowNum === 15 && c >= 4) || (rowNum === 14 && c === 4)) cell.alignment.textRotation = 90;
+
         if (c <= 3) {
           if (rowNum === 14) cell.border = { ...cell.border, bottom: undefined };
           if (rowNum === 15) cell.border = { ...cell.border, top: undefined };
@@ -209,36 +220,55 @@ import { calculateStudentStatus } from "../services/statusEngine";
         if (unitType === "theory" && c === 13) cell.fill = greyFill;
       }
     });
-  
+
     // Data Rows
     const startRow = 17;
-    // const endRow = startRow + Math.max(eligibleStudents.length + 10, 20);
-    const endRow = startRow + Math.max(eligibleStudents.length + 10);
-  
+    const endRow = startRow + Math.max(eligibleStudents.length + 5, 10);
+    // const endRow = startRow + Math.max(eligibleStudents.length + 10);
+
     for (let r = startRow; r <= endRow; r++) {
-      const studentIdx = r - startRow; const student = eligibleStudents[studentIdx];
-      const row = sheet.getRow(r); row.height = 13;
+      const studentIdx = r - startRow;
+      const student = eligibleStudents[studentIdx];
+      const row = sheet.getRow(r);
+      row.height = 13;
       row.font = { name: fontName, size: fontSize };
 
       let attemptLabel = "1st"; let isSupp = false; let isSpecial = false;
 
       if (student) {
-        const prevMark = previousMarks.find( (m) => m.student.toString() === student._id.toString(), );
-        if (prevMark) {
+        // --- DYNAMIC LABELING START ---
+        const prevMark = previousMarks.find((m) => m.student.toString() === student._id.toString());
+        const normalizedStatus = student.status?.toLowerCase();
+
+        // 1. Check Student Status Priorities first (Repeat/Stay Out)
+        if ( normalizedStatus === "repeat" || normalizedStatus === "repeat year" ) attemptLabel = "Repeat Year";
+        else if ( normalizedStatus === "stayout" || normalizedStatus === "on_leave" ) attemptLabel = "Stay Out";
+        
+        // 2. Check Mark-level status (Supp/Special)
+        else if (prevMark) {
           if (prevMark.isSpecial || prevMark.attempt === "special") {
             attemptLabel = "Special"; isSpecial = true;
-          } else if ( prevMark.agreedMark < settings.passMark || prevMark.attempt === "supplementary")
-         { attemptLabel = "Supp"; isSupp = true; }
-          else if (prevMark.attempt === "re-take") { attemptLabel = "Retake"; }
+          } else if ( prevMark.agreedMark < settings.passMark || prevMark.attempt === "supplementary" ) {
+            attemptLabel = "Supp"; isSupp = true;
+          } else if (prevMark.attempt === "re-take") attemptLabel = "Retake";
+          
+        } else {
+          // 3. Fallback to "1st" for active/normal students with no previous record
+          attemptLabel = "1st";
         }
+        // --- DYNAMIC LABELING END ---
 
-        sheet.getRow(r).getCell(4).value = attemptLabel; sheet.getRow(r).getCell(1).value = r - 16;
-        sheet.getRow(r).getCell(2).value = student.regNo; sheet.getRow(r).getCell(3).value = student.name.toUpperCase();
+        sheet.getRow(r).getCell(4).value = attemptLabel;
+        sheet.getRow(r).getCell(1).value = r - 16;
+        sheet.getRow(r).getCell(2).value = student.regNo;
+        sheet.getRow(r).getCell(3).value = student.name.toUpperCase();
         sheet.getRow(r).getCell(3).font = { name: fontName, size: 8 };
 
         if (isSpecial && prevMark) {
-          row.getCell(5).value = prevMark.cat1Raw; row.getCell(6).value = prevMark.cat2Raw;
-          row.getCell(7).value = prevMark.cat3Raw; row.getCell(9).value = prevMark.assgnt1Raw;
+          row.getCell(5).value = prevMark.cat1Raw;
+          row.getCell(6).value = prevMark.cat2Raw;
+          row.getCell(7).value = prevMark.cat3Raw;
+          row.getCell(9).value = prevMark.assgnt1Raw;
           row.getCell(13).value = prevMark.practicalRaw;
 
           for (let c = 5; c <= 13; c++) { const cell = row.getCell(c); cell.fill = greyFill; cell.protection = { locked: true }; }
@@ -251,8 +281,7 @@ import { calculateStudentStatus } from "../services/statusEngine";
         cell.alignment = { vertical: "middle" };
         if (student) {
           const isSupp = row.getCell(4).value === "Supp";
-          if (isSupp && c >= 5 && c <= 13) {
-            cell.fill = greyFill; cell.protection = { locked: true };
+          if (isSupp && c >= 5 && c <= 13) { cell.fill = greyFill; cell.protection = { locked: true };
           } else if (unitType === "workshop" && c >= 5 && c <= 12) {
             cell.fill = greyFill; cell.protection = { locked: true };
           } else if (unitType === "theory" && c === 13) {
@@ -261,12 +290,13 @@ import { calculateStudentStatus } from "../services/statusEngine";
             if (c === 8 || c === 12) cell.fill = pinkColor;
             if (c === 13) cell.fill = greyFill;
             if (c >= 14 && c <= 19) cell.fill = purpleFill;
-            if ([2, 3, 4, 5, 6, 7, 9, 10, 11, 14, 15, 16, 17, 18, 21].includes(c)) 
-             { cell.protection = { locked: false }; }
+            if ([2, 3, 4, 5, 6, 7, 9, 10, 11, 14, 15, 16, 17, 18, 21].includes(c)) cell.protection = { locked: false };
           }
         } else {
-          if (c === 8 || c === 12) cell.fill = pinkColor; if (c === 13) cell.fill = greyFill; 
-          if (c >= 14 && c <= 19) cell.fill = purpleFill; cell.protection = { locked: c === 13 }; // Lock practical column if no student
+          if (c === 8 || c === 12) cell.fill = pinkColor;
+          if (c === 13) cell.fill = greyFill;
+          if (c >= 14 && c <= 19) cell.fill = purpleFill;
+          cell.protection = { locked: c === 13 }; // Lock practical column if no student
         }
       }
 
@@ -277,14 +307,15 @@ import { calculateStudentStatus } from "../services/statusEngine";
       const assDivisor = settings.assignmentMax || 1;
       const pracDivisor = settings.practicalMax || 1;
       const catFormula = unitType === "workshop" ? "0" : `IFERROR((AVERAGE(E${r}:G${r})/${catDivisor})*${weights.tests}, 0)`;
-      sheet.getCell(`H${r}`).value = { formula: `IF(${isRowEmpty}, "", ${catFormula})`,};
+      sheet.getCell(`H${r}`).value = { formula: `IF(${isRowEmpty}, "", ${catFormula})`};
 
       const assFormula = unitType === "workshop" ? "0" : `IFERROR((AVERAGE(I${r}:K${r})/${assDivisor})*${weights.assignment}, 0)`;
-      sheet.getCell(`L${r}`).value = { formula: `IF(${isRowEmpty}, "", ${assFormula})`,};
+      sheet.getCell(`L${r}`).value = { formula: `IF(${isRowEmpty}, "", ${assFormula})`};
 
       const pracNorm = `IFERROR((M${r}/${pracDivisor})*${weights.practical}, 0)`;
       const caMultiplier = `IF(D${r}="Supp", 0, 1)`;
-      sheet.getCell(`N${r}`).value = { formula: `IF(${isRowEmpty}, "", ROUND((H${r} + L${r} + ${pracNorm})*${caMultiplier}, 2))`,};
+      // const caMultiplier = `IF(OR(D${r}="A/S", D${r}="Supp", D${r}="A/CF"), 0, 1)`;
+      sheet.getCell(`N${r}`).value = { formula: `IF(${isRowEmpty}, "", ROUND((H${r} + L${r} + ${pracNorm})*${caMultiplier}, 2))`};
       // Exam Formula: Q1 + Best 2 or Best 3
       const q1 = `O${r}`;
       const others = `P${r}:S${r}`;
@@ -295,24 +326,27 @@ import { calculateStudentStatus } from "../services/statusEngine";
 
       // Normalize raw score (out of 70) to Weight (70 or 60)
       const normalizedExamValue = `IFERROR(((${examFormula})/${rawPaperMax})*${weights.exam}, 0)`;
-      sheet.getCell(`T${r}`).value = { formula: `IF(${isRowEmpty}, "", ROUND(${normalizedExamValue}, 2))`,};
-      sheet.getCell(`U${r}`).value = { formula: `IF(${isRowEmpty}, "", ROUND(N${r}+T${r}, 0))`,};
+      sheet.getCell(`T${r}`).value = { formula: `IF(${isRowEmpty}, "", ROUND(${normalizedExamValue}, 2))`};
+      sheet.getCell(`U${r}`).value = { formula: `IF(${isRowEmpty}, "", ROUND(N${r}+T${r}, 0))`};
       // --- FINAL AGREED MARK (Rule ENG 13.f) ---
       // If Supp: Cap at 40 and ignore CA. Else: N + T.
       // sheet.getCell(`W${r}`).value = { formula: `IF(${isRowEmpty}, "", IF(D${r}="Supp", MIN(${settings.passMark}, T${r}), ROUND(N${r}+T${r}, 0)))`,};
-      sheet.getCell(`W${r}`).value = { formula: `IF(${isRowEmpty}, "", IF(D${r}="Supp", MIN(${settings.passMark}, IF(V${r}<>"", V${r}, U${r})), IF(V${r}<>"", V${r}, U${r})))`, };
+      sheet.getCell(`W${r}`).value = { formula: `IF(${isRowEmpty}, "", IF(D${r}="Supp", MIN(${settings.passMark}, IF(V${r}<>"", V${r}, U${r})), IF(V${r}<>"", V${r}, U${r})))`};
       // Grade Nesting
-      const sortedScale = [...(settings.gradingScale || [])].sort((a, b) => a.min - b.min, );
+      const sortedScale = [...(settings.gradingScale || [])].sort((a, b) => a.min - b.min);
       let gradeIfs = `"E"`;
-      sortedScale.forEach((scale) => { gradeIfs = `IF(W${r}>=${scale.min}, "${scale.grade}", ${gradeIfs})`; });
-      sheet.getCell(`X${r}`).value = { formula: `IF(${isRowEmpty}, "", ${gradeIfs})`, };
+      sortedScale.forEach((scale) => { gradeIfs = `IF(W${r}>=${scale.min}, "${scale.grade}", ${gradeIfs})`;});
+      sheet.getCell(`X${r}`).value = { formula: `IF(${isRowEmpty}, "", ${gradeIfs})`};
 
       // Cell Formatting & THE FIX FOR DATA VALIDATION
       const applyValidation = (cellAddr: string, maxVal: number) => {
         sheet.getCell(cellAddr).dataValidation = {
-          type: "decimal", operator: "between",
-          allowBlank: true, formulae: [0, maxVal],
-          showErrorMessage: true, errorTitle: "Invalid Score",
+          type: "decimal",
+          operator: "between",
+          allowBlank: true,
+          formulae: [0, maxVal],
+          showErrorMessage: true,
+          errorTitle: "Invalid Score",
           error: `Value must be between 0 and ${maxVal}`,
         };
       };
@@ -321,27 +355,27 @@ import { calculateStudentStatus } from "../services/statusEngine";
         const cell = row.getCell(c);
         cell.border = thinBorder;
         const isFormulaColumn = [8, 12, 14, 20, 21, 23, 24].includes(c);
-        const isCAInput = c >= 5 && c <= 12; 
+        const isCAInput = c >= 5 && c <= 12;
         const isPracticalInput = c === 13;
 
         // 1. Supp Students: Lock all CA input (CATs, Assgn, and Practical)
-        if ( student && row.getCell(4).value === "Supp" && (isCAInput || isPracticalInput))
-        { cell.fill = greyFill; cell.protection = { locked: true }; cell.value = 0;  }
+        if ( student && row.getCell(4).value === "Supp" && (isCAInput || isPracticalInput)) {
+          cell.fill = greyFill; cell.protection = { locked: true }; cell.value = 0;}
         // 2. Mode-based Locking
         // THEORY: Lock Practical (13)
-        else if (unitType === "theory" && isPracticalInput) { cell.fill = greyFill; cell.protection = { locked: true }; }
+        else if (unitType === "theory" && isPracticalInput) { cell.fill = greyFill; cell.protection = { locked: true };}
         // WORKSHOP: Lock CATs/Assignments (5-12) BUT UNLOCK Practical (13)
-        else if (unitType === "workshop" && isCAInput) { cell.fill = greyFill; cell.protection = { locked: true }; }
+        else if (unitType === "workshop" && isCAInput) { cell.fill = greyFill; cell.protection = { locked: true };}
         // 3. Formula Columns
         else if (isFormulaColumn) { cell.fill = greyFill; cell.protection = { locked: true }; }
         // 4. Special Students
-        else if ( student && row.getCell(4).value === "Special" && (isCAInput || isPracticalInput))
-         { cell.fill = greyFill; cell.protection = { locked: true }; }
-         else {
+        else if ( student && row.getCell(4).value === "Special" && (isCAInput || isPracticalInput)) {
+          cell.fill = greyFill; cell.protection = { locked: true };
+        } else {
           // Editable cells
           cell.protection = { locked: false };
-          if ( isPracticalInput && (unitType === "workshop" || unitType === "lab"))
-           { cell.fill = { type: "pattern", pattern: "none" }; }
+          if ( isPracticalInput && (unitType === "workshop" || unitType === "lab")) cell.fill = { type: "pattern", pattern: "none" };
+          
           // Apply validation to input cells
           if (c === 5) applyValidation(`E${r}`, settings.cat1Max);
           if (c === 6) applyValidation(`F${r}`, settings.cat2Max);
@@ -354,7 +388,7 @@ import { calculateStudentStatus } from "../services/statusEngine";
         if (c >= 15 && c <= 19) cell.fill = purpleFill;
       }
     }
-  
+
     //  CONDITIONAL FORMATTING
     let activeColumnsExpression = "";
     if (unitType === "theory") {
@@ -372,14 +406,15 @@ import { calculateStudentStatus } from "../services/statusEngine";
       ref: `E17:S${endRow}`, // Expanded range to cover Practical and Exam Questions
       rules: [
         {
-          priority: 1, type: "expression",
+          priority: 1,
+          type: "expression",
           // The formula checks: Not Blank Student AND Blank Cell AND Column is Active for this Mode
-          formulae: [ `AND(NOT(ISBLANK($B17)), ISBLANK(E17), ${activeColumnsExpression})`, ],
-          style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFFFA6C9" },},},
+          formulae: [`AND(NOT(ISBLANK($B17)), ISBLANK(E17), ${activeColumnsExpression})`],
+          style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFFFA6C9" }}},
         },
       ],
     });
-  
+
     // Thick Borders (A14 to W_endRow)
     for (let r = 14; r <= endRow; r++) {
       for (let c = 1; c <= 24; c++) {
@@ -393,15 +428,18 @@ import { calculateStudentStatus } from "../services/statusEngine";
         };
       }
     }
-  
+
     // Final column sizing
-    sheet.getColumn("A").width = 4; sheet.getColumn("B").width = 22; sheet.getColumn("C").width = 35; sheet.getColumn("N").width = 9;
-  
+    sheet.getColumn("A").width = 4;
+    sheet.getColumn("B").width = 22;
+    sheet.getColumn("C").width = 35;
+    sheet.getColumn("N").width = 9;
+
     ["L", "M"].forEach((col) => (sheet.getColumn(col).width = 8));
-  
+
     ["T", "U", "V", "W"].forEach((col) => (sheet.getColumn(col).width = 7.8));
-    ["E", "F", "G", "H", "I", "J", "K", "L", "O", "P", "Q", "R", "S"].forEach((col) => (sheet.getColumn(col).width = 4.5), );
-  
+    ["E", "F", "G", "H", "I", "J", "K", "L", "O", "P", "Q", "R", "S"].forEach((col) => (sheet.getColumn(col).width = 4.5));
+
     sheet.protect("1234", { selectLockedCells: true, selectUnlockedCells: true });
     return await workbook.xlsx.writeBuffer();
-  };
+  };;
