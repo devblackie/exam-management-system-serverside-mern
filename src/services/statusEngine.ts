@@ -66,115 +66,74 @@ export const calculateStudentStatus = async (
   yearOfStudy: number = 1,
 ): Promise<StudentStatusResult> => {
   const settings = await InstitutionSettings.findOne().lean();
-  if (!settings)
-    throw new Error(
-      "Institution settings not found. Please configure grading scales.",
-    );
+  if (!settings) throw new Error("Institution settings not found. Please configure grading scales.");
 
   const passMark = settings?.passMark || 40;
   const student = await Student.findById(studentId).lean();
   if (!student) throw new Error("Student not found");
 
-  // const resolved = resolveStudentStatus(student);
-  // if (resolved.isLocked) {
-  //   return {
-  //     status: resolved.status, variant: "info",
-  //     details: `Student is on ${resolved.status.toLowerCase()}.`,
-  //     weightedMean: "0.00",
-  //     summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0, isOnLeave: true },
-  //     passedList: [], failedList: [], specialList: [],
-  //     missingList: [], incompleteList: [], leaveDetails: resolved.reason,
-  //   };
-  // }
+  let targetYearDoc: any = null;
 
-  // --- FIX: RESOLVE THE CORRECT ACADEMIC YEAR DOCUMENT ---
-  let targetYearDoc;
-  if (
-    !academicYearName ||
-    academicYearName === "CURRENT" ||
-    academicYearName === "undefined"
-  ) {
-    targetYearDoc = await AcademicYear.findOne({ isCurrent: true }).lean();
+  if ( !academicYearName || academicYearName === "CURRENT" || academicYearName === "undefined" ) {
+    targetYearDoc = (await AcademicYear.findOne({ isCurrent: true }).lean()) || (await AcademicYear.findOne().sort({ startDate: -1 }).lean());
+
+    if (!targetYearDoc) console.warn("[StatusEngine] No AcademicYear documents found. Proceeding without session context.");
   } else {
-    targetYearDoc = await AcademicYear.findOne({
-      year: academicYearName,
-    }).lean();
+    targetYearDoc =
+      (await AcademicYear.findOne({ year: academicYearName }).lean()) ||
+      (await AcademicYear.findOne({ year: { $regex: new RegExp(`^${academicYearName.replace("/", "\\/")}$`, "i")}}).lean());
+
+    if (!targetYearDoc) console.warn(`[StatusEngine] AcademicYear "${academicYearName}" not found. isPastYear/session checks will be skipped.`);
   }
 
-  // If we still can't find a year, we can't accurately pull marks
-  if (!targetYearDoc) {
-    console.error(
-      `[StatusEngine] Critical: Could not resolve year for "${academicYearName}"`,
-    );
-    // Return a neutral status instead of failing/deregistering
-    return {
-      status: "YEAR NOT FOUND",
-      variant: "info",
-      details: "Please ensure an Academic Year is active in settings.",
-      weightedMean: "0.00",
-      summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
-      passedList: [],
-      failedList: [],
-      specialList: [],
-      missingList: [],
-      incompleteList: [],
-    };
-  }
-
-  const curriculum = (await ProgramUnit.find({
-    program: programId,
-    requiredYear: yearOfStudy,
-  })
-    .populate("unit")
-    .lean()) as any[];
+  const curriculum = (await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy }).populate("unit").lean()) as any[];
 
   if (!curriculum || !curriculum.length || curriculum.length === 0) {
     return {
-      status: "CURRICULUM NOT SET",
-      variant: "info",
+      status: "CURRICULUM NOT SET", variant: "info",
       details: `No units defined for Year ${yearOfStudy} in this program. Please contact the Admin to set the curriculum.`,
-      weightedMean: "0.00",
-      summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
-      passedList: [],
-      failedList: [],
-      specialList: [],
-      missingList: [],
-      incompleteList: [],
+      weightedMean: "0.00", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
+      passedList: [], failedList: [], specialList: [], missingList: [], incompleteList: [],
     };
   }
 
-  // const targetYearDoc = await AcademicYear.findOne({  year: academicYearName }).lean();
+  const programUnitIds = curriculum.map((pu) => pu._id);
 
-  // // Handle case where the year doesn't exist in DB
-  // if (!targetYearDoc && academicYearName !== "CURRENT") {
-  //   console.warn(`[StatusEngine] Year ${academicYearName} not found in DB.`);
-  // }
-
-  // const marks = await Mark.find({ student: studentId, academicYear: targetYearDoc?._id }).lean();
-
-  // FETCH FROM BOTH MODELS
-  const [detailedMarks, directMarks] = await Promise.all([
-    Mark.find({ student: studentId, academicYear: targetYearDoc?._id }).lean(),
-    MarkDirect.find({
-      student: studentId,
-      academicYear: targetYearDoc?._id,
-    }).lean(),
+  const [detailedMarks, directMarks, finalGrades] = await Promise.all([
+    Mark.find({ student: studentId, programUnit: { $in: programUnitIds }}).lean(),
+    MarkDirect.find({ student: studentId, programUnit: { $in: programUnitIds }}).lean(),
+    FinalGrade.find({ student: studentId, programUnit: { $in: programUnitIds }}).lean(),
   ]);
 
   const marksMap = new Map();
 
-  // marks.forEach((m) => marksMap.set(m.programUnit.toString(), m));
+  // Priority 3 (lowest): FinalGrade — the computed official record.
+  // Used as fallback when no raw Mark/MarkDirect document exists,
+  // which happens for legacy imports or historical data.
+  finalGrades.forEach((fg: any) => {
+    const key = fg.programUnit?.toString();
+    if (!key) return;
 
-  // Merge detailed marks
-  detailedMarks.forEach((m) =>
-    marksMap.set(m.programUnit.toString(), { ...m, source: "detailed" }),
-  );
+    // Build a mark-compatible object from FinalGrade fields
+    marksMap.set(key, {
+      agreedMark: fg.totalMark ?? 0,
+      // If caTotal30 is stored, use it. Otherwise infer from totalMark.
+      // A non-zero value prevents the "No CAT" incomplete trigger.
+      caTotal30: fg.caTotal30 != null ? fg.caTotal30 : fg.totalMark > 0 ? 1 : 0,
+      examTotal70: fg.examTotal70 != null ? fg.examTotal70 : fg.totalMark > 0 ? 1 : 0,
+      attempt: fg.attemptType === "SUPPLEMENTARY" ? "supplementary" : fg.attemptType === "RETAKE" ? "re-take" : "1st",
+      isSpecial: fg.isSpecial === true || fg.status === "SPECIAL",
+      isSupplementary: fg.status === "SUPPLEMENTARY",
+      isMissingCA: false, // FinalGrade exists = coursework was assessed
+      source: "finalGrade",
+    });
+  });
 
-  // Merge direct marks (Direct marks override detailed if both exist for some reason)
-  directMarks.forEach((m) =>
-    marksMap.set(m.programUnit.toString(), { ...m, source: "direct" }),
-  );
+  // Priority 2: MarkDirect — overrides FinalGrade when present
+  directMarks.forEach((m) => marksMap.set(m.programUnit.toString(), { ...m, source: "direct" }));
 
+  // Priority 1 (highest): Detailed Mark — most granular, always wins
+  detailedMarks.forEach((m) => marksMap.set(m.programUnit.toString(), { ...m, source: "detailed" }));
   // LOG 2: Verify the Map contains the keys
   // console.log(`[StatusEngine] Map Keys:`, Array.from(marksMap.keys()));
 
@@ -211,20 +170,11 @@ export const calculateStudentStatus = async (
     const markValue = rawMarkRecord.agreedMark || 0;
     const isSupplementary = rawMarkRecord.attempt === "supplementary";
 
-    const isSpecial =
-      rawMarkRecord.attempt === "special" ||
-      (rawMarkRecord.source === "detailed" && rawMarkRecord.isSpecial);
-    const notation = getAttemptLabel(
-      rawMarkRecord.attemptNumber || 1,
-      student.status,
-      student.regNo,
-    );
+    const isSpecial = rawMarkRecord.attempt === "special" || (rawMarkRecord.source === "detailed" && rawMarkRecord.isSpecial);
+    const notation = getAttemptLabel( rawMarkRecord.attemptNumber || 1, student.status, student.regNo );
     // Case B: Special Exams
     if (isSpecial)
-      lists.special.push({
-        displayName,
-        grounds: rawMarkRecord.remarks || "Special",
-      });
+      lists.special.push({ displayName, grounds: rawMarkRecord.remarks || "Special" });
     // Case C: Absolute Zero (No CAT AND No Exam) -> ENG 23c
     else if (!hasCAT && !hasExam) lists.missing.push(`${displayName} (Absent)`);
     // Case D: Partial Data -> ENG 15a
@@ -267,17 +217,24 @@ export const calculateStudentStatus = async (
   // The official Mean for ENG 16 (where missing = 0)
   const officialMean = totalFirstAttemptSum / totalUnits;
 
-  const currentYearDoc = await AcademicYear.findOne({ isCurrent: true }).lean();
-  const [targetStart] = academicYearName.split("/").map(Number);
-  const [globalStart] = currentYearDoc
+ 
+  const currentYearDoc = targetYearDoc?.isCurrent
+    ? targetYearDoc
+    : (await AcademicYear.findOne({ isCurrent: true }).lean()) ||
+      (await AcademicYear.findOne().sort({ startDate: -1 }).lean());
+
+  const [targetStart] = (academicYearName || "0/0").split("/").map(Number);
+  const [globalStart] = currentYearDoc?.year
     ? currentYearDoc.year.split("/").map(Number)
     : [0];
 
-  const isPastYear = targetStart < globalStart;
+  // If targetYearDoc is null we cannot determine if it's a past year,
+  // so we default to false (safer: won't fire false DEREGISTERED).
+  const isPastYear = targetYearDoc ? targetStart < globalStart : false;
   const isSessionClosed =
-    academicYearName === "CURRENT"
+    !academicYearName || academicYearName === "CURRENT"
       ? false
-      : currentYearDoc?.session === "CLOSED";
+      : targetYearDoc?.session === "CLOSED";
   let status = "PASS";
   let variant: "success" | "warning" | "error" | "info" = "success";
   let details = "Proceed to next year.";
@@ -366,7 +323,7 @@ export const calculateStudentStatus = async (
     missingList: lists.missing,
     incompleteList: lists.incomplete,
   };
-};
+};;
 
 export const previewPromotion = async ( programId: string, yearToPromote: number, academicYearName: string ) => {
   const nextYear = yearToPromote + 1;

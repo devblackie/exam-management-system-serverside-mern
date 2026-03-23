@@ -90,9 +90,3 @@ export async function computeFinalGrade({ markId, session }: ComputeOptions) {
  
   return { caTotal: finalCA, examTotal: finalExam, finalMark: finalAgreed, grade, status };
 }
-
-
-
-
-
-

@@ -6,9 +6,7 @@ export const scopeQuery = (req: any, query: any = {}) => {
 
   if (req.user?.role === "admin" && !institutionId) {
     return query;
-  }
-
-  
+  } 
 
   if (!institutionId) {
     throw new Error("MULTI_TENANT_VIOLATION: Institution context missing");

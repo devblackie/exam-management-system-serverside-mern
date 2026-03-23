@@ -1,4 +1,4 @@
-// Shared Utility Logic
+// serverside/src/utils/gradingCore.ts
 
 export interface GradingInput {
   cat1: number; cat2: number; cat3?: number;
