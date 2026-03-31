@@ -11,6 +11,7 @@
   import * as ExcelJS from "exceljs";
   import config from "../config/config";
   import { calculateStudentStatus } from "../services/statusEngine";
+import MarkDirect from "../models/MarkDirect";
   
   /**
    * GENERATE SCORESHEET TEMPLATE
@@ -36,73 +37,246 @@
     const settings = await InstitutionSettings.findOne({ institution: program?.institution });
     if (!settings) throw new Error("Institution settings missing.");
 
-    // Exclude anyone who is deregistered, discontinued, or graduated.
-    const forbiddenStatuses = [ "deregistered", "discontinued", "graduated", "deferred", "academic leave" ];
+    // // Exclude anyone who is deregistered, discontinued, or graduated.
+    // const forbiddenStatuses = [ "deregistered", "discontinued", "graduated", "deferred", "academic leave" ];
 
-    // 2. Fetch All Active Students initially
-    let eligibleStudents = await Student.find({
+    // // 2. Fetch All Active Students initially
+    // let eligibleStudents = await Student.find({
+    //   program: programId,
+    //   currentYearOfStudy: yearOfStudy,
+    //   status: {
+    //     $in: ["active", "repeat", "on_leave", "stayout"], // Must be one of these
+    //     $nin: forbiddenStatuses.map((s) => new RegExp(`^${s}$`, "i")),
+    //   },
+    // }).populate("admissionAcademicYear").sort({ regNo: 1 }).lean();
+
+    // ---------added patch ----------
+    const EXCLUDED_FROM_SCORESHEET = [
+      "deregistered",
+      "discontinued",
+      "graduated",
+      "graduand",
+      "deferred",
+      "on_leave", // ← on_leave added here
+    ];
+
+    let eligibleStudents = (await Student.find({
       program: programId,
       currentYearOfStudy: yearOfStudy,
-      status: {
-        $in: ["active", "repeat", "on_leave", "stayout"], // Must be one of these
-        $nin: forbiddenStatuses.map((s) => new RegExp(`^${s}$`, "i")),
-      },
-    }).populate("admissionAcademicYear").sort({ regNo: 1 }).lean();
+      status: { $nin: EXCLUDED_FROM_SCORESHEET }, // ← $nin instead of $in/$nin combo
+    })
+      .populate("admissionAcademicYear")
+      .sort({ regNo: 1 })
+      .lean());
+
+      // ---------- added patch end ------
+
 
 
     // --- 2. AUDIT-BASED FILTERING (The "Agnes" Shield) ---
-    const unitCode = unit?.code?.toUpperCase() || "";
-    const filteredList = [];
+    // const unitCode = unit?.code?.toUpperCase() || "";
+    // const filteredList = [];
 
-    // Dynamic Previous Year Calculation (e.g., "2017/2018" -> "2016/2017")
-    const [startYear] = academicYear.year.split("/").map(Number);
-    const previousYearStr = `${startYear - 1}/${startYear}`;
+    // // Dynamic Previous Year Calculation (e.g., "2017/2018" -> "2016/2017")
+    // const [startYear] = academicYear.year.split("/").map(Number);
+    // const previousYearStr = `${startYear - 1}/${startYear}`;
 
-    console.log(`[ScoresheetGen] Auditing ${eligibleStudents.length} students. Context: ${academicYear.year}. Previous: ${previousYearStr}`);
+    // // console.log(`[ScoresheetGen] Auditing ${eligibleStudents.length} students. Context: ${academicYear.year}. Previous: ${previousYearStr}`);
 
-    for (const student of eligibleStudents) {
-      // 1. Resolve Admission Year (Handle populated vs ID)
-      const admissionYearObj = student.admissionAcademicYear;
-      const admissionYearStr = typeof admissionYearObj === "object" && "year" in admissionYearObj ? (admissionYearObj as any).year : ""; // If not populated, we might need a fallback or pre-populate it
+    // for (const student of eligibleStudents) {
+    //   // 1. Resolve Admission Year (Handle populated vs ID)
+    //   const admissionYearObj = student.admissionAcademicYear;
+    //   const admissionYearStr = typeof admissionYearObj === "object" && "year" in admissionYearObj ? (admissionYearObj as any).year : ""; // If not populated, we might need a fallback or pre-populate it
 
-      const [admStart] = admissionYearStr ? admissionYearStr.split("/").map(Number) : [0];
+    //   const [admStart] = admissionYearStr ? admissionYearStr.split("/").map(Number) : [0];
 
-      // 2. THE SHIELD: If student was admitted BEFORE or DURING the previous year, check their history.
-      // For Agnes (Adm: 2016), and Current: 2017, Previous: 2016. admStart (2016) <= 2016 is TRUE.
-      const shouldHaveHistory = admStart > 0 && admStart <= startYear - 1;
+    //   // 2. THE SHIELD: If student was admitted BEFORE or DURING the previous year, check their history.
+    //   // For Agnes (Adm: 2016), and Current: 2017, Previous: 2016. admStart (2016) <= 2016 is TRUE.
+    //   const shouldHaveHistory = admStart > 0 && admStart <= startYear - 1;
 
-      if (shouldHaveHistory) {
-        const historyAudit = await calculateStudentStatus( student._id, programId, previousYearStr, 1 );
+    //   if (shouldHaveHistory) {
+    //     const historyAudit = await calculateStudentStatus( student._id, programId, previousYearStr, 1 );
 
-        if ( historyAudit.status === "DEREGISTERED" || historyAudit.status === "DISCONTINUED" )
-         {
-          console.warn(`[ScoresheetGen] EXCLUDING ${student.regNo}: Found terminal status [${historyAudit.status}] in ${previousYearStr}`);
-          continue;
+    //     if ( historyAudit.status === "DEREGISTERED" || historyAudit.status === "DISCONTINUED" )
+    //      {
+    //       console.warn(`[ScoresheetGen] EXCLUDING ${student.regNo}: Found terminal status [${historyAudit.status}] in ${previousYearStr}`);
+    //       continue;
+    //     }
+    //   }
+
+    //   // 3. Current Year Progress Audit
+    //   const auditResult = await calculateStudentStatus( student._id, programId, academicYear.year, yearOfStudy );
+
+    //   // If they are DEREGISTERED in the CURRENT session results, exclude them
+    //   if (auditResult.status === "DEREGISTERED") {
+    //     console.warn(`[ScoresheetGen] EXCLUDING ${student.regNo}: Engine returned DEREGISTERED for current context.`);
+    //     continue;
+    //   }
+
+    //   // 4. Session Filtering (Ordinary vs Supp)
+    //   if (academicYear?.session === "SUPPLEMENTARY") {
+    //     const hasReason =
+    //       auditResult.failedList.some((f) => f.displayName.startsWith(unitCode)) ||
+    //       auditResult.specialList.some((s) => s.displayName.startsWith(unitCode)) || 
+    //       auditResult.incompleteList.some((i) => i.startsWith(unitCode));
+
+    //     if (hasReason) filteredList.push(student);
+    //   } else filteredList.push(student);      
+    // }
+
+    // eligibleStudents = filteredList;
+
+    const ADMIN_GATE_STATUSES = new Set([
+      "deregistered",
+      "discontinued",
+      "graduated",
+      "deferred",
+    ]);
+
+    if (
+      academicYear.session === "SUPPLEMENTARY" ||
+      academicYear.session === "CLOSED"
+    ) {
+      // ── Supplementary: only students who failed or have specials for THIS unit ─
+      const filteredList: typeof eligibleStudents = [];
+      const programUnitId = programUnit?._id;
+
+      if (!programUnitId) {
+        // No curriculum link found — include everyone (fallback)
+        eligibleStudents = eligibleStudents;
+      } else {
+        const [priorDetailed, priorDirect] = await Promise.all([
+          Mark.find({
+            student: { $in: eligibleStudents.map((s) => s._id) },
+            programUnit: programUnitId,
+          })
+            .select("student agreedMark attempt isSpecial")
+            .lean(),
+          MarkDirect.find({
+            student: { $in: eligibleStudents.map((s) => s._id) },
+            programUnit: programUnitId,
+          })
+            .select("student agreedMark attempt isSpecial")
+            .lean(),
+        ]);
+
+        const passMark = settings?.passMark || 40;
+        const needsUnitSet = new Set<string>();
+        const hasMarkSet = new Set<string>();
+
+        for (const m of [...priorDetailed, ...priorDirect]) {
+          const sid = m.student?.toString();
+          if (!sid) continue;
+          hasMarkSet.add(sid);
+          const mark = (m as any).agreedMark ?? 0;
+          const passed = mark >= passMark && !(m as any).isSpecial;
+          if (!passed) needsUnitSet.add(sid);
         }
+
+        // Students with no mark for this unit also appear on supp sheet
+        for (const s of eligibleStudents) {
+          if (!hasMarkSet.has(s._id.toString())) {
+            needsUnitSet.add(s._id.toString());
+          }
+        }
+
+        for (const s of eligibleStudents) {
+          if (needsUnitSet.has(s._id.toString())) filteredList.push(s);
+        }
+        eligibleStudents = filteredList;
       }
+      // } else {
+      //   // ── ORDINARY: include all active/repeat students — no engine call needed ──
+      //   // A fresh cohort with zero marks is valid for ORDINARY session.
+      //   // The "Agnes shield" (previous year deregistration check) is a lightweight
+      //   // DB check, not a full engine call.
+      //   const [startYear] = (academicYear.year || "2024/2025").split("/").map(Number);
+      //   const previousYearStr = `${startYear - 1}/${startYear}`;
 
-      // 3. Current Year Progress Audit
-      const auditResult = await calculateStudentStatus( student._id, programId, academicYear.year, yearOfStudy );
+      //   const filteredList: typeof eligibleStudents = [];
+      //   for (const student of eligibleStudents) {
+      //     const admYearObj = student.admissionAcademicYear as any;
+      //     const admYearStr =
+      //       typeof admYearObj === "object" && admYearObj?.year
+      //         ? admYearObj.year
+      //         : "";
+      //     const [admStart] = admYearStr ? admYearStr.split("/").map(Number) : [0];
 
-      // If they are DEREGISTERED in the CURRENT session results, exclude them
-      if (auditResult.status === "DEREGISTERED") {
-        console.warn(`[ScoresheetGen] EXCLUDING ${student.regNo}: Engine returned DEREGISTERED for current context.`);
-        continue;
-      }
+      //     // Only run the audit for students admitted BEFORE the current session
+      //     // (they should have history — check for terminal status in prior year)
+      //     if (admStart > 0 && admStart < startYear) {
+      //       // Quick DB check: is this student deregistered/discontinued already?
+      //       if (ADMIN_GATE_STATUSES.has(student.status)) continue;
 
-      // 4. Session Filtering (Ordinary vs Supp)
-      if (academicYear?.session === "SUPPLEMENTARY") {
-        const hasReason =
-          auditResult.failedList.some((f) => f.displayName.startsWith(unitCode)) ||
-          auditResult.specialList.some((s) => s.displayName.startsWith(unitCode)) || 
-          auditResult.incompleteList.some((i) => i.startsWith(unitCode));
+      //       // Check prior year marks for deregistration (6+ absences)
+      //       // We do a COUNT, not a full engine call
+      //       const priorYearDoc = await AcademicYear.findOne({
+      //         year: previousYearStr,
+      //       }).lean();
+      //       if (priorYearDoc) {
+      //         const [dCount, dDirectCount] = await Promise.all([
+      //           Mark.countDocuments({
+      //             student: student._id,
+      //             academicYear: priorYearDoc._id,
+      //           }),
+      //           MarkDirect.countDocuments({
+      //             student: student._id,
+      //             academicYear: priorYearDoc._id,
+      //           }),
+      //         ]);
+      //         // If student has NO marks at all in prior year AND they were admitted then,
+      //         // they are likely deregistered — skip them
+      //         const totalPriorMarks = dCount + dDirectCount;
+      //         const curriculum = await ProgramUnit.countDocuments({
+      //           program: programId,
+      //           requiredYear: yearOfStudy - 1 > 0 ? yearOfStudy - 1 : 1,
+      //         });
+      //         // Deregistered heuristic: 0 marks when curriculum > 0 in prior year
+      //         if (totalPriorMarks === 0 && curriculum > 0 && yearOfStudy > 1)
+      //           continue;
+      //       }
+      //     }
 
-        if (hasReason) filteredList.push(student);
-      } else filteredList.push(student);      
+      //     filteredList.push(student);
+      //   }
+      //   eligibleStudents = filteredList;
+      // }
+    } else {
+      // ORDINARY: exclude students who are terminal in a prior year.
+      // No engine call — just a cheap DB check for prior-year marks.
+      const [startYear] = (academicYear.year || "2024/2025")
+        .split("/")
+        .map(Number);
+
+      // Students admitted before current year who have ZERO marks ever = likely ghost records
+      // We keep everyone who was admitted this year OR has at least 1 mark anywhere
+      const studentIds = eligibleStudents.map((s) => s._id);
+
+      const studentsWithAnyMark = await Mark.distinct("student", {
+        student: { $in: studentIds },
+      });
+      const studentsWithAnyDirectMark = await MarkDirect.distinct("student", {
+        student: { $in: studentIds },
+      });
+
+      const hasMarkSet = new Set<string>([
+        ...studentsWithAnyMark.map((id: any) => id.toString()),
+        ...studentsWithAnyDirectMark.map((id: any) => id.toString()),
+      ]);
+
+      // Keep: admitted this year (no marks yet is fine) OR has marks anywhere
+      eligibleStudents = eligibleStudents.filter((s) => {
+        const admYearObj = s.admissionAcademicYear as any;
+        const admYear =
+          typeof admYearObj === "object" && admYearObj?.year
+            ? admYearObj.year
+            : "";
+        const [admStart] = admYear ? admYear.split("/").map(Number) : [0];
+        const isNewStudent = admStart >= startYear;
+        return isNewStudent || hasMarkSet.has(s._id.toString());
+      });
     }
-
-    eligibleStudents = filteredList;
-    console.log(`[ScoresheetGen] Final Count: ${eligibleStudents.length}`);
+    // console.log(`[ScoresheetGen] Final Count: ${eligibleStudents.length}`);
   
     const previousMarks = programUnit ? await Mark.find({ student: { $in: eligibleStudents.map((s) => s._id) }, programUnit: programUnit._id }).lean() : [];
 

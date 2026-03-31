@@ -1,3 +1,4 @@
+// serverside/src/models/AcademicYear.ts
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface IAcademicYear extends Document {

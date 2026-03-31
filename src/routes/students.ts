@@ -1,3 +1,4 @@
+
 // src/routes/students.ts
 import { Router, Response } from "express";
 import ExcelJS from "exceljs";
@@ -398,7 +399,7 @@ router.post(
 );
 
 // A. DELETE SINGLE STUDENT
-router.delete("/:id", requireAuth, requireRole("admin"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+router.delete("/:id", requireAuth, requireRole("admin","coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const student = await Student.findOneAndDelete({ 
     _id: req.params.id, 
     institution: req.user.institution 
@@ -407,6 +408,25 @@ router.delete("/:id", requireAuth, requireRole("admin"), asyncHandler(async (req
 
   await logAudit(req, { action: "delete_student", details: { regNo: student.regNo } });
   res.json({ message: "Student deleted successfully" });
+}));
+
+// serverside/src/routes/students.ts
+
+// UPDATE student (Only name allowed)
+router.patch("/:id", requireAuth, requireRole("admin", "coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ message: "Name is required" });
+
+  const student = await Student.findOneAndUpdate(
+    { _id: req.params.id, institution: req.user.institution },
+    { $set: { name: name.trim() } },
+    { new: true }
+  ).select("name regNo");
+
+  if (!student) return res.status(404).json({ message: "Student not found" });
+
+  await logAudit(req, { action: "update_student_name", details: { regNo: student.regNo, newName: name } });
+  res.json(student);
 }));
 
 // B. DELETE BY PROGRAM (e.g., if a program is decommissioned)
@@ -434,3 +454,4 @@ router.delete("/bulk/cleanup-graduated", requireAuth, requireRole("admin"), asyn
   res.json({ message: `Cleanup complete. ${result.deletedCount} records removed.` });
 }));
 export default router;
+

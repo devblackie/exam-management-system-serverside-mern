@@ -9,6 +9,8 @@ const config = Object.freeze({
   frontendUrl: process.env.FRONTEND_URL,
   // jwtSecret: process.env.JWT_SECRET || "please-change-me",
   jwtSecret: process.env.JWT_SECRET!,
+  emailHot: process.env.EMAIL_HOST,
+  emailPot: process.env.EMAIL_PORT,
   emailUser: process.env.EMAIL_USER || "",
   emailPass: process.env.EMAIL_PASS || "",
   appName: process.env.APP_NAME || "Exam System", 

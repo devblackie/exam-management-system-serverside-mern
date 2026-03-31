@@ -11,6 +11,7 @@ import {
   generateStayoutExamsDoc, generateAcademicLeaveDoc, generateDeregistrationDoc, generateDiscontinuationDoc, generateRepeatYearDoc,
   generateIncompleteListDoc,
   generateCarryForwardDoc,
+  generateDefermentDoc,
 } from "../utils/promotionReport";
 import fs from "fs";
 import path from "path";
@@ -21,6 +22,9 @@ import ProgramUnit from "../models/ProgramUnit";
 import Mark from "../models/Mark";
 import { generateConsolidatedMarkSheet, ConsolidatedData } from "../utils/consolidatedMS";
 import MarkDirect from "../models/MarkDirect";
+import { undoPromotion } from "../services/undoPromotion";
+import AcademicYear from "../models/AcademicYear";
+import InstitutionSettings from "../models/InstitutionSettings";
 
 const router = Router();
 
@@ -57,6 +61,14 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       // 1. Fetch Basic Data
       const preview = await previewPromotion( programId, yearToPromote, academicYearName );
       const program = await Program.findById(programId).lean();
+      const academicYearDocForSession = await AcademicYear.findOne({year: academicYearName}).lean();
+      const institutionSettings = await InstitutionSettings.findOne({institution: program?.institution}).lean();
+
+      const passMark = institutionSettings?.passMark ?? 40;
+      const gradingScale = institutionSettings?.gradingScale ?? [];
+
+      const sessionExamType: "ORDINARY" | "SUPPLEMENTARY" = academicYearDocForSession?.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY" : "ORDINARY";
+          
       const logoPath = path.join( __dirname, "../../public/institutionLogoExcel.png", );
       const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
 
@@ -80,15 +92,26 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       // 5. Prepare Data Objects (Separated for type safety)
       const wordData: PromotionData = {
         programName: program?.name || "Program", academicYear: academicYearName, yearOfStudy: yearToPromote,
-        eligible: preview.eligible, blocked: preview.blocked, offeredUnits, logoBuffer,
+        eligible: preview.eligible, blocked: preview.blocked, offeredUnits, logoBuffer, examType: sessionExamType,
       };
+
+      const studentsByHistory = await Student.find({
+        program: programId,
+        $or: [{ currentYearOfStudy: yearToPromote }, { "academicHistory.yearOfStudy": yearToPromote }]}).lean();
+
+      // Deduplicate — preview already has blocked (on_leave, deferred etc).
+      // Merge so every student who ever touched this year is on the CMS.
+      const previewIds = new Set([...preview.eligible, ...preview.blocked].map((s) => (s.id || s._id)?.toString()));
+      const historyOnly = studentsByHistory.filter((s) => !previewIds.has(s._id.toString()));
+
+      const allCmsStudents = [ ...preview.eligible, ...preview.blocked, ...historyOnly ];
 
       const excelData: ConsolidatedData = {
         programName: program?.name || "Program", academicYear: academicYearName, yearOfStudy: yearToPromote,
-        students: [...preview.eligible, ...preview.blocked], marks: filteredMarks, offeredUnits, logoBuffer,
-          institutionId: program?.institution?.toString() || "", programId: programId,
-      };
-
+        session: sessionExamType, students: allCmsStudents, marks: filteredMarks, offeredUnits, logoBuffer,
+        institutionId: program?.institution?.toString() || "", programId: programId, passMark, gradingScale, 
+      };  
+      
       // 6. Generate and Zip reports
       const cleanAcadYear = academicYearName.replace(/\//g, "_");
       const progCode = program?.code || "PROG";
@@ -106,7 +129,10 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       };
      
       sendProgress(30, "Generating Main Summary & Marksheet...");
-      zip.addFile(`Summary_Ordinary_Exams_${progCode}_${progName}_${yearPrefix}_${cleanAcadYear}.docx`, await generatePromotionWordDoc(wordData));
+      // zip.addFile(`Summary_Ordinary_Exams_${progCode}_${progName}_${yearPrefix}_${cleanAcadYear}.docx`, await generatePromotionWordDoc(wordData));
+      // zip.addFile(`${progName}__${progCode}_${cleanAcadYear}_${yearPrefix}_CMS.xlsx`, await generateConsolidatedMarkSheet(excelData));
+      const summaryPrefix = sessionExamType === "SUPPLEMENTARY" ? "Summary_Supp_Special" : "Summary_Ordinary";
+      zip.addFile(`${summaryPrefix}_${progCode}_${progName}_${yearPrefix}_${cleanAcadYear}.docx`, await generatePromotionWordDoc(wordData));
       zip.addFile(`${progName}__${progCode}_${cleanAcadYear}_${yearPrefix}_CMS.xlsx`, await generateConsolidatedMarkSheet(excelData));
 
       sendProgress(40, "Checking Pass List...");
@@ -117,11 +143,22 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       await addDocIfNotEmpty(suppList, getFileName("Supplementary_List"), generateSupplementaryExamsDoc);
 
       sendProgress(60, "Checking Special Exams...");
-      const finSpecials = wordData.blocked.filter(s => s.status.includes("SPEC") && s.remarks?.toLowerCase().includes("financial"));
+      const getSpecialGround = (s: any): string => {
+        const grounds = (s.specialGrounds || "").toLowerCase();
+        const remarks = (s.remarks || "").toLowerCase();
+        const leaveType = (s.academicLeavePeriod?.type || "").toLowerCase();
+        const details = (s.details || "").toLowerCase();
+        return `${grounds} ${remarks} ${leaveType} ${details}`;
+      };
+
+      const isSpecialStudent = (s: any): boolean => /spec/i.test(s.status);
+      const finSpecials = wordData.blocked.filter((s: any) => isSpecialStudent(s) && getSpecialGround(s).includes("financial"));
+      const compSpecials = wordData.blocked.filter((s: any) => isSpecialStudent(s) && /compassionate|medical|sick/.test(getSpecialGround(s)));
+      const otherSpecials = wordData.blocked.filter((s: any) => isSpecialStudent(s) && !getSpecialGround(s).includes("financial") && !/compassionate|medical|sick/.test(getSpecialGround(s)));
+     
       await addDocIfNotEmpty(finSpecials, getFileName("Special_Exams_Financial"), generateSpecialExamsDoc, "Financial");
-      
-      const compSpecials = wordData.blocked.filter(s => s.status.includes("SPEC") && (s.remarks?.toLowerCase().includes("compassionate") || s.remarks?.toLowerCase().includes("medical")));
       await addDocIfNotEmpty(compSpecials, getFileName("Special_Exams_Compassionate"), generateSpecialExamsDoc, "Compassionate");
+      await addDocIfNotEmpty(otherSpecials, getFileName("Special_Exams_Other"), generateSpecialExamsDoc, "Other");
 
       sendProgress(70, "Checking Stayout & Repeat Year...");
       const stayoutList = wordData.blocked.filter(s => s.status === "STAYOUT");
@@ -136,11 +173,23 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       await addDocIfNotEmpty(incompleteList, getFileName("Incomplete_Results_List"), generateIncompleteListDoc);
 
       // 2. ACADEMIC LEAVE - Financial
-      const finLeave = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "ON LEAVE" || s.status === "DEFERMENT" && s.academicLeavePeriod?.type === "financial" || s.remarks?.toLowerCase().includes("financial"));
+      const isFinancialLeave = (s: any): boolean => {
+        const type    = (s.academicLeavePeriod?.type || "").toLowerCase();
+        const remarks = (s.remarks || "").toLowerCase();
+        const isLeaveStatus = ["ACADEMIC LEAVE", "ON LEAVE"].includes(s.status);
+        return isLeaveStatus && (type === "financial" || remarks.includes("financial"));
+      };
+      const finLeave  = wordData.blocked.filter(isFinancialLeave);
       await addDocIfNotEmpty(finLeave, getFileName("Academic_Leave_Financial"), generateAcademicLeaveDoc, "Financial", "ACADEMIC LEAVE");
 
-      // 3. ACADEMIC LEAVE - Compassionate      
-      const compLeave = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "ON LEAVE" || s.status === "DEFERMENT" && s.academicLeavePeriod?.type === "compassionate" || s.remarks?.toLowerCase().includes("compassionate"));
+      // 3. ACADEMIC LEAVE - Compassionate  
+      const isCompassionateLeave = (s: any): boolean => {
+        const type    = (s.academicLeavePeriod?.type || "").toLowerCase();
+        const remarks = (s.remarks || "").toLowerCase();
+        const isLeaveStatus = ["ACADEMIC LEAVE", "ON LEAVE"].includes(s.status);
+        return isLeaveStatus && ( type === "compassionate" || remarks.includes("compassionate") || remarks.includes("medical"));
+      };      
+      const compLeave = wordData.blocked.filter(isCompassionateLeave);    
       await addDocIfNotEmpty(compLeave, getFileName("Academic_Leave_Compassionate"), generateAcademicLeaveDoc, "Compassionate", "ACADEMIC LEAVE");
 
       sendProgress(80, "Checking Discontinuations & Deregistrations...");
@@ -150,9 +199,9 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       const deregList = wordData.blocked.filter(s => s.status === "DEREGISTERED");
       await addDocIfNotEmpty(deregList, getFileName("Deregistration_List"), generateDeregistrationDoc);
 
-      sendProgress(85, "Checking Administrative Statuses...");
-      const leaveList = wordData.blocked.filter(s => s.status === "ACADEMIC LEAVE" || s.status === "DEFERMENT");
-      await addDocIfNotEmpty( leaveList, getFileName("Academic_Leave_Deferment"), generateAcademicLeaveDoc);
+      sendProgress(85, "Checking Deferment List...");
+      const defermentList = wordData.blocked.filter((s) => s.status === "DEFERMENT");
+      await addDocIfNotEmpty( defermentList, getFileName("Deferment_List"), generateDefermentDoc );
 
       sendProgress(90, "Checking Carry Forward List...");
       const carryList = wordData.eligible.filter(s => s.reasons?.length > 0 && s.status !== "ALREADY PROMOTED");
@@ -172,6 +221,136 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
   }),
 );
 
+// POST /promote/download-cms
+router.post(
+  "/download-cms",
+  requireAuth,
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, yearToPromote, academicYearName } = req.body;
+ 
+    // Stream progress events to the client
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+ 
+    const sendProgress = (percent: number, message: string, file?: string) => {
+      const data = JSON.stringify({ percent, message, file });
+      res.write(`data: ${data}\n\n`);
+    };
+ 
+    try {
+      sendProgress(10, "Fetching student data...");
+ 
+      const preview = await previewPromotion(programId, yearToPromote, academicYearName);
+      const program = await Program.findById(programId).lean();
+
+      const academicYearDocForSession = await AcademicYear.findOne({
+        year: academicYearName,
+      }).lean();
+
+      const sessionExamType: "ORDINARY" | "SUPPLEMENTARY" =
+        academicYearDocForSession?.session === "SUPPLEMENTARY"
+          ? "SUPPLEMENTARY"
+          : "ORDINARY";
+ 
+      const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+ 
+      sendProgress(30, "Fetching marks for all students...");
+ 
+      // Fetch students by history too (includes promoted students)
+      const studentsByHistory = await Student.find({
+        program: programId,
+        $or: [
+          { currentYearOfStudy: yearToPromote },
+          { "academicHistory.yearOfStudy": yearToPromote },
+        ],
+      }).lean();
+ 
+      const previewIds = new Set(
+        [...preview.eligible, ...preview.blocked].map((s) =>
+          (s.id || s._id)?.toString()
+        )
+      );
+      const historyOnly = studentsByHistory.filter(
+        (s) => !previewIds.has(s._id.toString())
+      );
+      const allStudents = [...preview.eligible, ...preview.blocked, ...historyOnly];
+      const studentIds  = allStudents
+        .map((s) => (s._id || s.id)?.toString())
+        .filter(Boolean);
+ 
+      sendProgress(50, "Loading mark records...");
+ 
+      const [detailedMarks, directMarks] = await Promise.all([
+        Mark.find({ student: { $in: studentIds } })
+          .populate({ path: "programUnit", populate: { path: "unit", select: "code name" } })
+          .lean(),
+        MarkDirect.find({ student: { $in: studentIds } })
+          .populate({ path: "programUnit", populate: { path: "unit", select: "code name" } })
+          .lean(),
+      ]);
+ 
+      const combinedMarks   = [...detailedMarks, ...directMarks];
+      const filteredMarks   = combinedMarks.filter(
+        (m: any) =>
+          m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote)
+      );
+ 
+      const offeredUnitsRaw = await ProgramUnit.find({
+        program:      programId,
+        requiredYear: yearToPromote,
+      })
+        .populate("unit")
+        .lean();
+
+        const institutionSettings = await InstitutionSettings.findOne({
+          institution: program?.institution,
+        }).lean();
+        
+        const passMark     = institutionSettings?.passMark     ?? 40;
+        const gradingScale = institutionSettings?.gradingScale ?? [];  
+ 
+      const offeredUnits = offeredUnitsRaw.map((pu: any) => ({
+        code: pu.unit?.code || "N/A",
+        name: pu.unit?.name || "N/A",
+      }));
+ 
+      sendProgress(70, "Generating Consolidated Mark Sheet...");
+ 
+      const excelData: ConsolidatedData = {
+        programName: program?.name || "Program",
+        academicYear: academicYearName,
+        yearOfStudy: yearToPromote,
+        session: sessionExamType, // ← add
+        students: allStudents,
+        marks: filteredMarks,
+        offeredUnits,
+        logoBuffer,
+        institutionId: program?.institution?.toString() || "",
+        programId: programId,
+        passMark, // ← add
+        gradingScale, // ← add
+      };
+
+ 
+      const xlsxBuffer = await generateConsolidatedMarkSheet(excelData);
+ 
+      sendProgress(95, "Preparing download...");
+ 
+      // Encode the Excel file directly as base64 (no ZIP needed for single file)
+      const base64 = xlsxBuffer.toString("base64");
+      res.write(`data: ${JSON.stringify({ percent: 100, message: "Complete!", file: base64 })}\n\n`);
+      res.end();
+    } catch (err) {
+      console.error("CMS Generation Error:", err);
+      res.write(`data: ${JSON.stringify({ error: "Failed to generate CMS" })}\n\n`);
+      res.end();
+    }
+  })
+);
+ 
+
 router.post(
   "/:studentId",
   requireAuth,
@@ -182,90 +361,112 @@ router.post(
     const result = await promoteStudent(studentId);
 
     if (!result.success) {
-      return res.status(400).json({
-        error: "Promotion Denied",
-        message: result.message,
-        details: result.details,
-      });
+      return res.status(400).json({error: "Promotion Denied", message: result.message, details: result.details});
     }
 
-    await logAudit(req, {
-      action: "individual_student_promoted",
-      targetUser: studentId as any,
-      details: { message: result.message },
-    });
+    await logAudit(req, { action: "individual_student_promoted", targetUser: studentId as any, details: { message: result.message }});
 
     res.json(result);
   }),
 );
 
-
-
-// download-notices-progress
+// POST /promote/undo/:studentId
 router.post(
-  "/download-notices-progress",
+  "/undo/:studentId",
   requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { programId, yearToPromote, academicYearName } = req.body;
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-
-    const sendProgress = (percent: number, message: string, file?: string) => {
-      res.write(`data: ${JSON.stringify({ percent, message, file })}\n\n`);
-    };
-
-    try {
-      sendProgress(5, "Analyzing exam records...");
-      const preview = await previewPromotion( programId, yearToPromote, academicYearName );
-      const program = await Program.findById(programId).lean();
-
-      const logoPath = path.join(  __dirname, "../../public/institutionLogoExcel.png", );
-      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
-
-      const zip = new AdmZip();
-      const students = preview.blocked;
-
-      for (let i = 0; i < students.length; i++) {
-        const student = students[i];
-
-        const statusText = (student.status || "").toUpperCase();
-        const hasSpecialReason = student.reasons?.some((r: string) => r.toUpperCase().includes("SPECIAL"));
-
-        const isSpecialCase = statusText.includes("SPECIAL") || hasSpecialReason;
-
-        let docBuffer: Buffer;
-        let fileName: string;
-
-        if (isSpecialCase) {
-          docBuffer = await generateSpecialExamNotice(student, { programName: program?.name || "Program", academicYear: academicYearName, logoBuffer });
-          fileName = `SPECIAL_NOTICE_${student.regNo}.docx`;
-        } else {
-          docBuffer = await generateIneligibilityNotice(student, { programName: program?.name || "Program", academicYear: academicYearName, yearOfStudy: yearToPromote, logoBuffer });
-          fileName = `FAIL_NOTICE_${student.regNo}.docx`;
-        }
-
-        zip.addFile(fileName, docBuffer);
-
-        if (i % 5 === 0 || i === students.length - 1) {
-          const percent = Math.floor((i / students.length) * 85) + 10;
-          sendProgress( percent, `Processing ${i + 1} of ${students.length}: ${student.regNo}`);
-        }
-      }
-
-      sendProgress(95, "Packing ZIP archive...");
-      const zipBase64 = zip.toBuffer().toString("base64");
-      sendProgress(100, "Complete!", zipBase64);
-      res.end();
-    } catch (err: any) {
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
-      res.end();
+    const { studentId } = req.params;
+ 
+    const result = await undoPromotion(studentId);
+ 
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+      });
     }
-  }),
+ 
+    await logAudit(req, {
+      action:     "promotion_reversed",
+      targetUser: studentId as any,
+      details: {
+        message:      result.message,
+        previousYear: result.previousYear,
+        restoredYear: result.restoredYear,
+      },
+    });
+ 
+    res.json(result);
+  })
 );
 
+
+
+// download-notices-progress
+// router.post(
+//   "/download-notices-progress",
+//   requireAuth,
+//   requireRole("coordinator"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { programId, yearToPromote, academicYearName } = req.body;
+
+//     res.setHeader("Content-Type", "text/event-stream");
+//     res.setHeader("Cache-Control", "no-cache");
+//     res.setHeader("Connection", "keep-alive");
+
+//     const sendProgress = (percent: number, message: string, file?: string) => {
+//       res.write(`data: ${JSON.stringify({ percent, message, file })}\n\n`);
+//     };
+
+//     try {
+//       sendProgress(5, "Analyzing exam records...");
+//       const preview = await previewPromotion( programId, yearToPromote, academicYearName );
+//       const program = await Program.findById(programId).lean();
+
+//       const logoPath = path.join(  __dirname, "../../public/institutionLogoExcel.png", );
+//       const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+
+//       const zip = new AdmZip();
+//       const students = preview.blocked;
+
+//       for (let i = 0; i < students.length; i++) {
+//         const student = students[i];
+
+//         const statusText = (student.status || "").toUpperCase();
+//         const hasSpecialReason = student.reasons?.some((r: string) => r.toUpperCase().includes("SPECIAL"));
+
+//         const isSpecialCase = statusText.includes("SPECIAL") || hasSpecialReason;
+
+//         let docBuffer: Buffer;
+//         let fileName: string;
+
+//         if (isSpecialCase) {
+//           docBuffer = await generateSpecialExamNotice(student, { programName: program?.name || "Program", academicYear: academicYearName, logoBuffer });
+//           fileName = `SPECIAL_NOTICE_${student.regNo}.docx`;
+//         } else {
+//           docBuffer = await generateIneligibilityNotice(student, { programName: program?.name || "Program", academicYear: academicYearName, yearOfStudy: yearToPromote, logoBuffer });
+//           fileName = `FAIL_NOTICE_${student.regNo}.docx`;
+//         }
+
+//         zip.addFile(fileName, docBuffer);
+
+//         if (i % 5 === 0 || i === students.length - 1) {
+//           const percent = Math.floor((i / students.length) * 85) + 10;
+//           sendProgress( percent, `Processing ${i + 1} of ${students.length}: ${student.regNo}`);
+//         }
+//       }
+
+//       sendProgress(95, "Packing ZIP archive...");
+//       const zipBase64 = zip.toBuffer().toString("base64");
+//       sendProgress(100, "Complete!", zipBase64);
+//       res.end();
+//     } catch (err: any) {
+//       res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+//       res.end();
+//     }
+//   }),
+// );
 
 
 // download-transcripts-progress

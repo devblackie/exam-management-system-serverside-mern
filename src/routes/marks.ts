@@ -15,6 +15,8 @@ import Unit from "../models/Unit";
 import { generateDirectScoresheetTemplate } from "../utils/directTemplate";
 import { importDirectMarksFromBuffer } from "../services/directMarksImporter";
 import AcademicYear from "../models/AcademicYear";
+import Mark from "../models/Mark";
+import MarkDirect from "../models/MarkDirect";
 
 const router = Router();
 
@@ -197,6 +199,107 @@ router.get(
 })
 );
 
+router.get(
+  "/upload-stats",
+  requireAuth,
+  requireRole("coordinator", "admin"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const institutionId = req.user.institution;
+ 
+    // ── Fetch all marks for this institution ─────────────────────────────
+    const [detailedRaw, directRaw] = await Promise.all([
+      Mark.find({ institution: institutionId, deletedAt: null })
+        .populate({ path: "programUnit", populate: [{ path: "unit", select: "code name" }, { path: "program", select: "name code" }] })
+        .populate("academicYear", "year session")
+        .populate("student", "regNo name")
+        .sort({ createdAt: -1 })
+        .lean(),
+ 
+      MarkDirect.find({ institution: institutionId, deletedAt: null })
+        .populate({ path: "programUnit", populate: [{ path: "unit", select: "code name" }, { path: "program", select: "name code" }] })
+        .populate("academicYear", "year session")
+        .populate("student", "regNo name")
+        .sort({ createdAt: -1 })
+        .lean(),
+    ]);
+ 
+    // ── Shape a normalised record ────────────────────────────────────────
+    interface MarkEntry {
+      _id:          string;
+      source:       "detailed" | "direct";
+      regNo:        string;
+      studentName:  string;
+      unitCode:     string;
+      unitName:     string;
+      programName:  string;
+      programCode:  string;
+      agreedMark:   number;
+      attempt:      string;
+      isSpecial:    boolean;
+      academicYear: string;
+      session:      string;
+      uploadedAt:   Date;
+    }
+ 
+    const shape = (m: any, source: "detailed" | "direct"): MarkEntry => ({
+      _id:         m._id.toString(),
+      source,
+      regNo:       (m.student as any)?.regNo   || "N/A",
+      studentName: (m.student as any)?.name    || "N/A",
+      unitCode:    (m.programUnit as any)?.unit?.code   || "N/A",
+      unitName:    (m.programUnit as any)?.unit?.name   || "N/A",
+      programName: (m.programUnit as any)?.program?.name || "N/A",
+      programCode: (m.programUnit as any)?.program?.code || "N/A",
+      agreedMark:  m.agreedMark ?? 0,
+      attempt:     m.attempt ?? "1st",
+      isSpecial:   m.isSpecial ?? false,
+      academicYear:(m.academicYear as any)?.year    || "Unknown",
+      session:     (m.academicYear as any)?.session || "ORDINARY",
+      uploadedAt:  m.uploadedAt ?? m.createdAt,
+    });
+ 
+    const allEntries: MarkEntry[] = [
+      ...detailedRaw.map((m) => shape(m, "detailed")),
+      ...directRaw.map((m)   => shape(m, "direct")),
+    ];
+ 
+    // ── Group by: academicYear → session → programCode → entries ─────────
+    const grouped: Record<
+      string,                              // academic year  e.g. "2016/2017"
+      Record<
+        string,                            // session  e.g. "ORDINARY"
+        Record<
+          string,                          // program code  e.g. "E024"
+          { programName: string; entries: MarkEntry[] }
+        >
+      >
+    > = {};
+ 
+    for (const entry of allEntries) {
+      const yr  = entry.academicYear;
+      const ses = entry.session;
+      const pc  = entry.programCode;
+ 
+      if (!grouped[yr])        grouped[yr]        = {};
+      if (!grouped[yr][ses])   grouped[yr][ses]   = {};
+      if (!grouped[yr][ses][pc]) {
+        grouped[yr][ses][pc] = { programName: entry.programName, entries: [] };
+      }
+      grouped[yr][ses][pc].entries.push(entry);
+    }
+ 
+    // ── Build summary counts ──────────────────────────────────────────────
+    const summary = {
+      totalRecords:   allEntries.length,
+      detailed:       detailedRaw.length,
+      direct:         directRaw.length,
+      academicYears:  Object.keys(grouped).sort().reverse(),
+    };
+ 
+    res.json({ summary, grouped });
+  }),
+);
+
 // Route: POST marks/upload
 router.post(
   "/upload",
@@ -222,11 +325,11 @@ router.post(
       // 2. Logic Switch based on Column E content
       if (columnEHeader.includes("CA TOTAL")) {
         // This is the simplified "Direct" template
-        console.log("[Upload] Detected Direct Entry Template");
+        // console.log("[Upload] Detected Direct Entry Template");
         result = await importDirectMarksFromBuffer(req.file.buffer, req.file.originalname, req);
       } else {
         // Default to the original detailed logic
-        console.log("[Upload] Detected Detailed Breakdown Template");
+        // console.log("[Upload] Detected Detailed Breakdown Template");
         result = await importMarksFromBuffer(req.file.buffer, req.file.originalname, req);
       }
 
@@ -289,7 +392,7 @@ router.post(
 //   })
 // );
 
-// Add to src/routes/marks.ts
+
 
 
 

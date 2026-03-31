@@ -1,3 +1,4 @@
+// serverside/src/routes/programUnits.ts
 import { Response, Router } from "express";
 import ProgramUnit from "../models/ProgramUnit";
 import Mark from "../models/Mark";
@@ -7,6 +8,18 @@ import type { AuthenticatedRequest } from "../middleware/auth";
 import mongoose from "mongoose";
 
 const router = Router();
+
+// GET /program-units/stats
+router.get(
+  "/stats",
+  requireAuth,
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const count = await ProgramUnit.countDocuments({
+      institution: req.user.institution,
+    });
+    res.json({ totalUnits: count });
+  })
+);
 
 // --- POST /program-units: Link a Unit to a Program (Curriculum Definition) ---
 router.post(

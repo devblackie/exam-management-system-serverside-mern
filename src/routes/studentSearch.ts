@@ -121,9 +121,20 @@ router.get(
           _id: dm._id,
           academicYear: dm.academicYear, // Keep as object for frontend display
           semester: semesterStr,
-          unit: { code: pUnit.unit?.code || "N/A", name: pUnit.unit?.name || "N/A"},
-          totalMark: mark, agreedMark: mark, grade: matchedScale ? matchedScale.grade : "E",
-          status: dm.attempt?.toUpperCase() === "SPECIAL" ? "SPECIAL" : mark >= settings.passMark ? "PASS" : "FAIL",
+          unit: {
+            code: pUnit.unit?.code || "N/A",
+            name: pUnit.unit?.name || "N/A",
+          },
+          totalMark: mark,
+          agreedMark: mark,
+          grade: matchedScale ? matchedScale.grade : "E",
+          // status: dm.attempt?.toUpperCase() === "SPECIAL" ? "SPECIAL" : mark >= settings.passMark ? "PASS" : "FAIL",
+          status: (() => {
+            if (dm.attempt === "special") return "SPECIAL";
+            if (dm.attempt === "supplementary") return "SUPPLEMENTARY";
+            if (dm.attempt === "re-take") return "RETAKE";
+            return mark >= settings.passMark ? "PASS" : "SUPPLEMENTARY";
+          })(),
         });
       }
     });
