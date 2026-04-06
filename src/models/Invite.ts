@@ -1,7 +1,8 @@
-import { Schema, model, Document } from "mongoose";
+import mongoose, { Schema, model, Document } from "mongoose";
 
 export interface IInvite extends Document {
-  name: string;
+    institution:           mongoose.Types.ObjectId;
+    name: string;
   email: string;
   token: string;
   role: "coordinator" | "lecturer";
@@ -12,6 +13,8 @@ export interface IInvite extends Document {
 
 const inviteSchema = new Schema<IInvite>(
   {
+        institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true },
+    
     name: { type: String, required: true },
     email: { type: String, required: true },
     token: { type: String, required: true, unique: true },

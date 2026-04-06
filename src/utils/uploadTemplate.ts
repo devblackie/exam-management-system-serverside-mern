@@ -37,20 +37,7 @@ import MarkDirect from "../models/MarkDirect";
     const settings = await InstitutionSettings.findOne({ institution: program?.institution });
     if (!settings) throw new Error("Institution settings missing.");
 
-    // // Exclude anyone who is deregistered, discontinued, or graduated.
-    // const forbiddenStatuses = [ "deregistered", "discontinued", "graduated", "deferred", "academic leave" ];
-
-    // // 2. Fetch All Active Students initially
-    // let eligibleStudents = await Student.find({
-    //   program: programId,
-    //   currentYearOfStudy: yearOfStudy,
-    //   status: {
-    //     $in: ["active", "repeat", "on_leave", "stayout"], // Must be one of these
-    //     $nin: forbiddenStatuses.map((s) => new RegExp(`^${s}$`, "i")),
-    //   },
-    // }).populate("admissionAcademicYear").sort({ regNo: 1 }).lean();
-
-    // ---------added patch ----------
+   
     const EXCLUDED_FROM_SCORESHEET = [
       "deregistered",
       "discontinued",
@@ -69,62 +56,7 @@ import MarkDirect from "../models/MarkDirect";
       .sort({ regNo: 1 })
       .lean());
 
-      // ---------- added patch end ------
-
-
-
-    // --- 2. AUDIT-BASED FILTERING (The "Agnes" Shield) ---
-    // const unitCode = unit?.code?.toUpperCase() || "";
-    // const filteredList = [];
-
-    // // Dynamic Previous Year Calculation (e.g., "2017/2018" -> "2016/2017")
-    // const [startYear] = academicYear.year.split("/").map(Number);
-    // const previousYearStr = `${startYear - 1}/${startYear}`;
-
-    // // console.log(`[ScoresheetGen] Auditing ${eligibleStudents.length} students. Context: ${academicYear.year}. Previous: ${previousYearStr}`);
-
-    // for (const student of eligibleStudents) {
-    //   // 1. Resolve Admission Year (Handle populated vs ID)
-    //   const admissionYearObj = student.admissionAcademicYear;
-    //   const admissionYearStr = typeof admissionYearObj === "object" && "year" in admissionYearObj ? (admissionYearObj as any).year : ""; // If not populated, we might need a fallback or pre-populate it
-
-    //   const [admStart] = admissionYearStr ? admissionYearStr.split("/").map(Number) : [0];
-
-    //   // 2. THE SHIELD: If student was admitted BEFORE or DURING the previous year, check their history.
-    //   // For Agnes (Adm: 2016), and Current: 2017, Previous: 2016. admStart (2016) <= 2016 is TRUE.
-    //   const shouldHaveHistory = admStart > 0 && admStart <= startYear - 1;
-
-    //   if (shouldHaveHistory) {
-    //     const historyAudit = await calculateStudentStatus( student._id, programId, previousYearStr, 1 );
-
-    //     if ( historyAudit.status === "DEREGISTERED" || historyAudit.status === "DISCONTINUED" )
-    //      {
-    //       console.warn(`[ScoresheetGen] EXCLUDING ${student.regNo}: Found terminal status [${historyAudit.status}] in ${previousYearStr}`);
-    //       continue;
-    //     }
-    //   }
-
-    //   // 3. Current Year Progress Audit
-    //   const auditResult = await calculateStudentStatus( student._id, programId, academicYear.year, yearOfStudy );
-
-    //   // If they are DEREGISTERED in the CURRENT session results, exclude them
-    //   if (auditResult.status === "DEREGISTERED") {
-    //     console.warn(`[ScoresheetGen] EXCLUDING ${student.regNo}: Engine returned DEREGISTERED for current context.`);
-    //     continue;
-    //   }
-
-    //   // 4. Session Filtering (Ordinary vs Supp)
-    //   if (academicYear?.session === "SUPPLEMENTARY") {
-    //     const hasReason =
-    //       auditResult.failedList.some((f) => f.displayName.startsWith(unitCode)) ||
-    //       auditResult.specialList.some((s) => s.displayName.startsWith(unitCode)) || 
-    //       auditResult.incompleteList.some((i) => i.startsWith(unitCode));
-
-    //     if (hasReason) filteredList.push(student);
-    //   } else filteredList.push(student);      
-    // }
-
-    // eligibleStudents = filteredList;
+      
 
     const ADMIN_GATE_STATUSES = new Set([
       "deregistered",
@@ -185,62 +117,7 @@ import MarkDirect from "../models/MarkDirect";
         }
         eligibleStudents = filteredList;
       }
-      // } else {
-      //   // ── ORDINARY: include all active/repeat students — no engine call needed ──
-      //   // A fresh cohort with zero marks is valid for ORDINARY session.
-      //   // The "Agnes shield" (previous year deregistration check) is a lightweight
-      //   // DB check, not a full engine call.
-      //   const [startYear] = (academicYear.year || "2024/2025").split("/").map(Number);
-      //   const previousYearStr = `${startYear - 1}/${startYear}`;
-
-      //   const filteredList: typeof eligibleStudents = [];
-      //   for (const student of eligibleStudents) {
-      //     const admYearObj = student.admissionAcademicYear as any;
-      //     const admYearStr =
-      //       typeof admYearObj === "object" && admYearObj?.year
-      //         ? admYearObj.year
-      //         : "";
-      //     const [admStart] = admYearStr ? admYearStr.split("/").map(Number) : [0];
-
-      //     // Only run the audit for students admitted BEFORE the current session
-      //     // (they should have history — check for terminal status in prior year)
-      //     if (admStart > 0 && admStart < startYear) {
-      //       // Quick DB check: is this student deregistered/discontinued already?
-      //       if (ADMIN_GATE_STATUSES.has(student.status)) continue;
-
-      //       // Check prior year marks for deregistration (6+ absences)
-      //       // We do a COUNT, not a full engine call
-      //       const priorYearDoc = await AcademicYear.findOne({
-      //         year: previousYearStr,
-      //       }).lean();
-      //       if (priorYearDoc) {
-      //         const [dCount, dDirectCount] = await Promise.all([
-      //           Mark.countDocuments({
-      //             student: student._id,
-      //             academicYear: priorYearDoc._id,
-      //           }),
-      //           MarkDirect.countDocuments({
-      //             student: student._id,
-      //             academicYear: priorYearDoc._id,
-      //           }),
-      //         ]);
-      //         // If student has NO marks at all in prior year AND they were admitted then,
-      //         // they are likely deregistered — skip them
-      //         const totalPriorMarks = dCount + dDirectCount;
-      //         const curriculum = await ProgramUnit.countDocuments({
-      //           program: programId,
-      //           requiredYear: yearOfStudy - 1 > 0 ? yearOfStudy - 1 : 1,
-      //         });
-      //         // Deregistered heuristic: 0 marks when curriculum > 0 in prior year
-      //         if (totalPriorMarks === 0 && curriculum > 0 && yearOfStudy > 1)
-      //           continue;
-      //       }
-      //     }
-
-      //     filteredList.push(student);
-      //   }
-      //   eligibleStudents = filteredList;
-      // }
+  
     } else {
       // ORDINARY: exclude students who are terminal in a prior year.
       // No engine call — just a cheap DB check for prior-year marks.

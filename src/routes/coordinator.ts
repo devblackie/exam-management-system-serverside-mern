@@ -202,11 +202,7 @@ router.get(
 
 
     res.json({
-      student: {
-        name: student.name,
-        regNo: student.regNo,
-        program: student.program,
-      },
+      student: { name: student.name, regNo: student.regNo, program: student.program },
       results: grades.map(g => {
           const grade = g as unknown as PopulatedFinalGrade;
           

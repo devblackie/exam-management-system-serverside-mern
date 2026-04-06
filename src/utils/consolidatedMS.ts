@@ -4,42 +4,23 @@ import config from "../config/config";
 import InstitutionSettings from "../models/InstitutionSettings";
 import { resolveStudentStatus } from "./studentStatusResolver";
 import { calculateStudentStatus } from "../services/statusEngine";
-import { getAttemptLabel } from "./academicRules";
+import { buildDisplayRegNo, getAttemptLabel } from "./academicRules";
 import mongoose from "mongoose";
-
-
 
 interface OfferedUnit { code: string; name: string }
 
 interface StudentRow {
-    sId:    string;
-    regNo:  string;
-    name:   string;
-    status: string;
+    sId: string; regNo: string; name: string; status: string;
     academicHistory?: Array<{ yearOfStudy: number; isRepeatYear?: boolean; academicYear?: string }>;
-    academicLeavePeriod?: { type?: string };
-    marks: Map<string, number | "INC" | "C">; // unitCode → value
-    attempt:   string;
-    totalUnits: number;
-    total:     number | "-";
-    mean:      number | "-";
-    recomm:    string;
-    matters:   string;
+    academicLeavePeriod?: { type?: string }; marks: Map<string, number | "INC" | "C">; // unitCode → value
+    attempt: string; totalUnits: number; total: number | "-"; mean: number | "-"; recomm: string; matters: string;
   }
 
 export interface ConsolidatedData {
-    programName:   string;
-    programId:     string;
-    academicYear:  string;
-    yearOfStudy:   number;
-    session:       "ORDINARY" | "SUPPLEMENTARY" | "CLOSED";
-    students:      Array<Record<string, unknown>>;
-    marks:         Array<Record<string, unknown>>;
-    offeredUnits:  OfferedUnit[];
-    logoBuffer:    any;
-    institutionId: string;
-    passMark:      number;
-    gradingScale:  Array<{ min: number; grade: string }>;
+    programName: string; programId: string; academicYear: string; yearOfStudy: number;
+    session: "ORDINARY" | "SUPPLEMENTARY" | "CLOSED"; students: Array<Record<string, unknown>>;
+    marks: Array<Record<string, unknown>>; offeredUnits: OfferedUnit[]; logoBuffer: any;
+    institutionId: string; passMark: number; gradingScale:  Array<{ min: number; grade: string }>;
   }
 
 export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Promise<Buffer> => {
@@ -72,9 +53,7 @@ export const generateConsolidatedMarkSheet = async ( data: ConsolidatedData): Pr
   };
 
   const examPhaseLabel =
-    data.session === "SUPPLEMENTARY"
-      ? "SUPPLEMENTARY AND SPECIAL EXAMINATION RESULTS"
-      : "ORDINARY EXAMINATION RESULTS";
+    data.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY AND SPECIAL EXAMINATION RESULTS" : "ORDINARY EXAMINATION RESULTS";
 
   const yrTxt = ["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH"][yearOfStudy - 1] || `${yearOfStudy}TH`;
   setCenteredHeader(4, `${config.instName}`);
@@ -557,11 +536,7 @@ for (const student of sortedStudents) {
     // Active / repeat / stayout — run the engine
     try {
       audit = await calculateStudentStatus(
-        sId,
-        programId,
-        academicYear,
-        yearOfStudy,
-        { forPromotion: true },
+        sId, programId, academicYear, yearOfStudy, { forPromotion: true },
       );
     } catch (err: any) {
       console.error(
@@ -569,21 +544,9 @@ for (const student of sortedStudents) {
         err.message,
       );
       audit = {
-        status: "SESSION IN PROGRESS",
-        variant: "info" as const,
-        details: "Engine error",
-        weightedMean: "0.00",
-        passedList: [],
-        failedList: [],
-        specialList: [],
-        missingList: [],
-        incompleteList: [],
-        summary: {
-          totalExpected: offeredUnits.length,
-          passed: 0,
-          failed: 0,
-          missing: 0,
-        },
+        status: "SESSION IN PROGRESS", variant: "info" as const, details: "Engine error", weightedMean: "0.00",
+        passedList: [], failedList: [], specialList: [], missingList: [], incompleteList: [],
+        summary: { totalExpected: offeredUnits.length, passed: 0, failed: 0, missing: 0 },
       };
     }
   }
@@ -593,41 +556,95 @@ for (const student of sortedStudents) {
     (m: any) => (m.student?._id?.toString() || m.student?.toString()) === sId,
   );
 
-  const attemptNotation = (() => {
-    const st = studentStatusRaw.toLowerCase();
-    if (st === "deferred") return "DEFERRED";
-    if (st === "on_leave") return "A/SO";
+  // const attemptNotation = (() => {
+  //   const st = studentStatusRaw.toLowerCase();
+  //   if (st === "deferred") return "DEFERRED";
+  //   if (st === "on_leave") return "A/SO";
+  //   if (st === "discontinued") return "DISC.";
+  //   if (st === "deregistered") return "DEREG.";
+  //   if (st === "repeat") return "A/RA1";
+
+  //   const attemptTypes = studentMarks.map((m: any) =>
+  //     (m.attempt || "1st").toLowerCase(),
+  //   );
+
+  //   if (attemptTypes.length === 0) {
+  //     const hasRepeatHistory = ((student as any).academicHistory || []).some(
+  //       (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy,
+  //     );
+  //     return hasRepeatHistory ? "A/RA1" : "B/S";
+  //   }
+  //   if (attemptTypes.every((a: string) => a === "1st" || a === "special")) {
+  //     const hasRepeatHistory = ((student as any).academicHistory || []).some(
+  //       (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy,
+  //     );
+  //     return hasRepeatHistory ? "A/RA1" : "B/S";
+  //   }
+  //   if (attemptTypes.includes("re-take")) return "A/CF";
+  //   if (attemptTypes.includes("supplementary")) return "A/S";
+  //   return "B/S";
+  // })();
+
+  const buildAttemptNotation = (
+    studentStatusRaw: string,
+    studentQualifier: string,
+    studentMarks:     any[],
+    yearOfStudy:      number,
+    academicHistory:  any[],
+  ): string => {
+    const st = studentStatusRaw.toLowerCase().replace(/_/g, " ");
+   
+    // Administrative statuses (preview objects use display labels)
+    if (st === "deferred" || st === "deferment") return "DEF";
+    if (st === "on leave" || st === "on_leave" || st === "academic leave")  return "A/L";
     if (st === "discontinued") return "DISC.";
     if (st === "deregistered") return "DEREG.";
+   
+    // Repeat year — sits full ordinary again (B/S, marked out of 100%)
     if (st === "repeat") return "A/RA1";
-
-    const attemptTypes = studentMarks.map((m: any) =>
-      (m.attempt || "1st").toLowerCase(),
-    );
-
+   
+    // Carry-forward student — retaking CF units this year
+    if (studentQualifier && studentQualifier.includes("C")) {
+      // e.g. RP1C → in CMS attempt column show RP1C
+      return studentQualifier; // "RP1C", "RP2C"
+    }
+   
+    // Repeat unit (ENG.16b)
+    if (studentQualifier && studentQualifier.startsWith("RPU")) {
+      return studentQualifier; // "RPU1", "RPU2"
+    }
+   
+    // Re-admission
+    if (studentQualifier && studentQualifier.startsWith("RA")) {
+      return studentQualifier; // "RA1", "RA2"
+    }
+   
+    // Derive from marks
+    const attemptTypes = studentMarks.map((m: any) => (m.attempt || "1st").toLowerCase());
+   
     if (attemptTypes.length === 0) {
-      const hasRepeatHistory = ((student as any).academicHistory || []).some(
-        (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy,
+      const hasRepeatHistory = (academicHistory || []).some(
+        (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy
       );
       return hasRepeatHistory ? "A/RA1" : "B/S";
     }
+   
     if (attemptTypes.every((a: string) => a === "1st" || a === "special")) {
-      const hasRepeatHistory = ((student as any).academicHistory || []).some(
-        (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy,
+      const hasRepeatHistory = (academicHistory || []).some(
+        (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy
       );
       return hasRepeatHistory ? "A/RA1" : "B/S";
     }
-    if (attemptTypes.includes("re-take")) return "A/CF";
+   
+    if (attemptTypes.includes("re-take"))       return studentQualifier.includes("C") ? studentQualifier : "A/CF";
     if (attemptTypes.includes("supplementary")) return "A/S";
+   
     return "B/S";
-  })();
+  };
 
   // ── Display name ───────────────────────────────────────────────────────
   const hasReturnHistory = ((student as any).statusHistory || []).some(
-    (h: any) =>
-      h.status === "ACTIVE" &&
-      (h.previousStatus === "ACADEMIC LEAVE" ||
-        h.previousStatus === "DEFERMENT"),
+    (h: any) => h.status === "ACTIVE" && (h.previousStatus === "ACADEMIC LEAVE" || h.previousStatus === "DEFERMENT"),
   );
   const repeatCount = ((student as any).academicHistory || []).filter(
     (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy,
@@ -641,12 +658,20 @@ for (const student of sortedStudents) {
     .join("")
     .toUpperCase();
 
-  const rowData: any[] = [
-    currentIndex + 1,
-    (student as any).regNo || "",
-    finalDisplayName,
-    attemptNotation,
-  ];
+  // const rowData: any[] = [
+  //   currentIndex + 1,
+  //   (student as any).regNo || "",
+  //   finalDisplayName,
+  //   attemptNotation,
+  // ];
+
+    const displayRegNo = buildDisplayRegNo((student as any).regNo || "", (student as any).qualifierSuffix || "" );
+      const rowData: any[] = [
+        currentIndex + 1,
+        displayRegNo,         // ← qualifier-suffixed reg number
+        finalDisplayName,
+        buildAttemptNotation,
+      ];
 
   // ── Unit marks ─────────────────────────────────────────────────────────
   const resolvedStatus = resolveStudentStatus(student as any);
@@ -827,15 +852,9 @@ for (const student of sortedStudents) {
       cell.protection = { locked: false };
       const txt = (cell.value?.toString() || "").toUpperCase();
       if (
-        txt.includes("ACADEMIC LEAVE") ||
-        txt.includes("FINANCIAL") ||
-        txt.includes("COMPASSIONATE")
+        txt.includes("ACADEMIC LEAVE") || txt.includes("FINANCIAL") || txt.includes("COMPASSIONATE")
       ) {
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFFFFF00" },
-        };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" }};
       }
     }
 
@@ -844,11 +863,7 @@ for (const student of sortedStudents) {
       cell.alignment = { horizontal: "left", vertical: "middle" };
       const txt = (cell.value?.toString() || "").toUpperCase();
       if (txt.includes("FINANCIAL") || txt.includes("COMPASSIONATE")) {
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFFFFF00" },
-        };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" }};
         cell.font = { bold: true, size: 8, name: fontName };
       }
     }
@@ -860,29 +875,14 @@ for (const student of sortedStudents) {
     if (colNum >= 5 && colNum < tuColIdx) {
       const val = cell.value?.toString() || "";
       if (resolvedStatus.isLocked) {
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFFFC7CE" },
-        };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" }};
       } else if (val === "INC" || val.endsWith("C")) {
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFFFFF00" },
-        };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" }};
       } else if (typeof cell.value === "number" && cell.value < passMark) {
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFFFC7CE" },
-        };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" }};
         cell.font = {
           color: { argb: "FF9C0006" },
-          bold: true,
-          size: 8,
-          name: fontName,
-        };
+          bold: true, size: 8, name: fontName};
       }
     }
   });
