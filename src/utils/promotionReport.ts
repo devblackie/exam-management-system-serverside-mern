@@ -4,6 +4,7 @@ import {
   TableLayoutType, AlignmentType, HeadingLevel, BorderStyle, ImageRun, VerticalAlign,
 } from "docx";
 import config from "../config/config";
+import { AwardListEntry } from "../services/graduationEngine";
 
 export interface PromotionData {
   programName: string;  academicYear: string;  yearOfStudy: number;  
@@ -42,15 +43,30 @@ const formatStudentName = (fullName: string): string => {
 function createDocHeader(logo: any, program: string, year: string, ordinal: string, listType: string, examType:  "ORDINARY" | "SUPPLEMENTARY" = "ORDINARY"): Paragraph[] {
  
   // Title line changes based on exam type
-  const examTitle = examType === "SUPPLEMENTARY" ? "SUPPLEMENTARY AND SPECIAL EXAMINATION RESULTS" : "ORDINARY EXAMINATION RESULTS";
+  // const examTitle = examType === "SUPPLEMENTARY" ? "SUPPLEMENTARY AND SPECIAL EXAMINATION RESULTS" : "ORDINARY EXAMINATION RESULTS";
  
+  // For Award Lists → Do NOT show "ORDINARY EXAMINATION RESULTS"
+  const isAwardList = listType.toUpperCase().includes("AWARD LIST");
+  
+  const examTitle = isAwardList 
+    ? ""  : (examType === "SUPPLEMENTARY" ? "SUPPLEMENTARY AND SPECIAL EXAMINATION RESULTS" : "ORDINARY EXAMINATION RESULTS");
+
   return [
     ...(logo && logo.length > 0 ? [ new Paragraph({ alignment: AlignmentType.CENTER, children: [ new ImageRun({ data: logo, transformation: { width: 120, height: 70 }, type: "png"})] })] : []),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [ new TextRun({ text: config.instName.toUpperCase(), bold: true, size: 23 }) ]}),
     new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: config.schoolName.toUpperCase(), bold: true, size: 23 }) ]}),
     new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: config.departmentName.toUpperCase(), bold: true, size: 23 }) ]}),
-    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `PROGRAMME: ${program.toUpperCase()}`, bold: true, size: 23 }) ]}),
+    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `PROGRAM: ${program.toUpperCase()}`, bold: true, size: 23 }) ]}),
     new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `${year} ACADEMIC YEAR ${examTitle}`, bold: true, size: 23 }) ]}),
+    ...(examTitle
+      ? [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 40, after: 40 },
+            children: [new TextRun({ text: examTitle, bold: true, size: 24 })],
+          }),
+        ]
+      : []),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [new TextRun({ text: `${ordinal} Year`, bold: true, size: 23 }) ]}),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [new TextRun({ text: listType, bold: true, size: 23, underline: {} }) ]}),
   ];
@@ -274,67 +290,6 @@ function createPassTable(students: any[], cellMargin: any) {
   });
 }
 
-// export const generateSpecialExamsDoc = async (
-//   data: PromotionData, 
-//   groundType: "Financial" | "Compassionate"
-// ): Promise<Buffer> => {
-//   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
-  
-//   // Re-filter here to ensure the count is accurate for this specific document
-//   const list = blocked.filter(s => 
-//     s.status.includes("SPEC") && 
-//     (groundType === "Financial" 
-//       ? s.remarks?.toLowerCase().includes("financial") 
-//       : s.remarks?.toLowerCase().match(/compassionate|medical/))
-//   );
-
-//   const count = list.length;
-//   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
-//   const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
-
-//   const doc = new Document({
-//     sections: [{
-//       children: [
-//         ...createDocHeader(logoBuffer, programName, academicYear, currentYearOrdinal, `SPECIAL EXAMINATIONS (${groundType.toUpperCase()} GROUNDS)`),
-//         new Paragraph({
-//           alignment: AlignmentType.JUSTIFIED,
-//           spacing: { before: 400, after: 300 },
-//           children: [
-//             new TextRun({ text: `The following `, size: 22 }),
-//             new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
-//             new TextRun({ text: `candidate(s) have special examinations, on `, size: 22 }),
-//             new TextRun({ text: `${groundType} Grounds `, bold: true, size: 22 }),
-//             new TextRun({ text: `in the unit(s) indicated against their names during the `, size: 22 }),
-//             new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
-//             new TextRun({ text: `Academic Year, `, size: 22 }),
-//             new TextRun({ text: `${currentYearOrdinal} Year `, size: 22 }),
-//             new TextRun({ text: `Examinations for the `, size: 22 }),
-//             new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
-//             new TextRun({ text: `The ${config.schoolName} Board of Examiners upholds the decision of the Dean’s Committee. `, size: 22 }),                         
-//           ],
-//         }),
-//         createStandardUnitDetailTable(list, cellMargin, "SPECIAL"),
-//         ...createDocFooter(),
-//       ],
-//     }],
-//   });
-//   return await Packer.toBuffer(doc);
-// };
-
-// ── PASTE THIS into serverside/src/utils/promotionReport.ts ──────────────────
-// Replace the entire generateSpecialExamsDoc function.
-//
-// ROOT CAUSE of empty special list:
-//   The old function re-filtered `blocked` by s.remarks.includes("financial").
-//   This ignored the `specialGrounds` field set in previewPromotion.
-//   If a student's remarks field was blank or said "Administrative", they vanished.
-//
-// FIX: Use specialGrounds (which we now always set) for filtering here too.
-//   Also use the passed-in `list` parameter from promote.ts rather than re-filtering.
-//   The list IS already correctly filtered before this function is called —
-//   so we just use it directly and only re-count for the document text.
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const generateSpecialExamsDoc = async (
   data:       PromotionData,
   groundType: "Financial" | "Compassionate" | "Other",
@@ -426,14 +381,6 @@ export const generateSpecialExamsDoc = async (
 
   return await Packer.toBuffer(doc);
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// createSpecialUnitDetailTable
-// Builds the Reg No / Name / Unit Code / Unit Name table for special exams.
-// Uses s.reasons which contains strings like:
-//   "CCS 2101: Introduction to Computer Programming (SPECIAL)"
-//   "SMA 1109: Geometry and Linear Algebra (SPECIAL)"
-// ─────────────────────────────────────────────────────────────────────────────
 
 function createSpecialUnitDetailTable(students: any[], cellMargin: any): Table {
   const headerRow = new TableRow({
@@ -613,25 +560,6 @@ export const generateIncompleteListDoc = async (data: PromotionData): Promise<Bu
   });
   return await Packer.toBuffer(doc);
 };
-
-// function createDocHeader(   logo: any,   program: string,   year: string,   ordinal: string,   type: string, ) {
-//   return [
-//     ...(logo && logo.length > 0 ? [
-//           new Paragraph({
-//             alignment: AlignmentType.CENTER,
-//             children: [ new ImageRun({ data: logo, transformation: { width: 120, height: 70 }, type: "png", }), ],
-//           }),
-//         ] : []),
-//     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [ new TextRun({ text: config.instName.toUpperCase(), bold: true, size: 23 })] }),
-//     new Paragraph({ alignment: AlignmentType.CENTER, children: [ new TextRun({ text: config.schoolName.toUpperCase(), bold: true, size: 23 })] }),
-//     new Paragraph({ alignment: AlignmentType.CENTER, children: [ new TextRun({ text: config.departmentName.toUpperCase(), bold: true, size: 23 })] }),
-//     new Paragraph({ alignment: AlignmentType.CENTER, children: [ new TextRun({ text: `PROGRAM: ${program.toUpperCase()}`, bold: true, size: 23 })] }),
-//     new Paragraph({ alignment: AlignmentType.CENTER, children: [ new TextRun({ text: "ORDINARY EXAMINATION RESULTS", bold: true, size: 23 })] }),
-//     new Paragraph({ alignment: AlignmentType.CENTER, children: [ new TextRun({ text: `${year} ACADEMIC YEAR`, bold: true, size: 23 })] }),
-//     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [ new TextRun({ text: `${ordinal} Year `, bold: true, size: 23 })] }),     
-//     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [ new TextRun({ text: type, bold: true, size: 23, underline: {} })] }),    
-//   ];
-// }
 
 function createDocFooter() {
     return [
@@ -1033,33 +961,154 @@ function createStandardUnitDetailTable(students: any[], cellMargin: any, filterK
     }, rows });
 }
 
-// graduation-list
-export const generateAwardListDoc = async ( data: PromotionData ): Promise<Buffer> => {
-  const { programName, academicYear, eligible, logoBuffer } = data;
+export const generateAwardListDoc = async (data: {
+  programName: string;
+  academicYear: string;
+  yearOfStudy: number;
+  logoBuffer: Buffer;
+  awardList: AwardListEntry[];
+}): Promise<Buffer> => {
+  const { programName, academicYear, logoBuffer, awardList } = data;
 
-  const doc = new Document({
-    sections: [
-      {
+  if (awardList.length === 0) {
+    const doc = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new TextRun({
+                  text: `No eligible graduates found for ${programName} — ${academicYear}.`,
+                  bold: true,
+                  size: 24,
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    return Packer.toBuffer(doc);
+  }
+
+  const cellMargin = { top: 60, bottom: 60, left: 100, right: 100 };
+
+  const classOrder = [
+    "FIRST CLASS HONOURS",
+    "SECOND CLASS HONOURS (UPPER DIVISION)",
+    "SECOND CLASS HONOURS (LOWER DIVISION)",
+    "PASS",
+  ];
+
+  const byClass = new Map<string, AwardListEntry[]>();
+  classOrder.forEach((c) => byClass.set(c, []));
+  awardList.forEach((s) => {
+    const key = classOrder.includes(s.classification)
+      ? s.classification
+      : "PASS";
+    byClass.get(key)!.push(s);
+  });
+
+  const sections: any[] = [
+    ...createDocHeader(
+      logoBuffer,
+      programName,
+      academicYear,
+      "Final Year",
+      "AWARD LIST",
+    ),
+
+    new Paragraph({
+      alignment: AlignmentType.JUSTIFIED,
+      spacing: { before: 300, after: 400 },
+      children: [
+        new TextRun({
+          text: `The following ${awardList.length} candidate(s) have satisfied the Board of Examiners in all prescribed units. The Board of Examiners recommends that they be `,
+          size: 22,
+        }),
+        new TextRun({
+          text: `AWARDED THE DEGREE OF ${programName.toUpperCase()}.`,
+          bold: true,
+          size: 22,
+        }),
+      ],
+    }),
+  ];
+
+  let globalCounter = 1;
+
+  for (const cls of classOrder) {
+    const group = byClass.get(cls) || [];
+    if (group.length === 0) continue;
+
+    sections.push(
+      new Paragraph({
+        spacing: { before: 400, after: 150 },
         children: [
-          ...createDocHeader( logoBuffer, programName, academicYear, "Final", "AWARD LIST" ),
-          new Paragraph({
-            alignment: AlignmentType.JUSTIFIED,
-            spacing: { before: 400, after: 300 },
+          new TextRun({ text: cls, bold: true, size: 24, underline: {} }),
+        ],
+      }),
+    );
+
+    const headerRow = new TableRow({
+      children: ["S/No.", "Reg. No.", "Name", "WAA (%)"].map(
+        (h) =>
+          new TableCell({
+            margins: cellMargin,
             children: [
-              new TextRun({
-                text: `The following candidates satisfied the Board of Examiners in all the prescribed units for the four/five years of study. The Board of Examiners recommends that they be `,
-                size: 22,
+              new Paragraph({
+                children: [new TextRun({ text: h, bold: true, size: 20 })],
               }),
-              new TextRun({ text: `AWARDED THE DEGREE OF ${programName.toUpperCase()}.`, bold: true, size: 22 }),
             ],
           }),
-          createAwardTable(eligible),
-          ...createDocFooter(),
-        ],
-      },
-    ],
-  });
-  return await Packer.toBuffer(doc);
+      ),
+    });
+
+    const dataRows = group.map(
+      (s) =>
+        new TableRow({
+          children: [
+            new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [new TextRun({ text: String(globalCounter++), size: 20 }) ]}) ]}),
+            new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: s.regNo, size: 20 })] }) ] }),
+            new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [new TextRun({ text: formatStudentName(s.name), size: 20 })] })] }),
+            new TableCell({ margins: cellMargin, children: [ new Paragraph({ children: [new TextRun({ text: s.waa.toFixed(2), size: 20 })]}) ]}),
+          ],
+        }),
+    );
+
+    sections.push(
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: {
+          top: { style: BorderStyle.NONE },
+          bottom: { style: BorderStyle.NONE },
+          left: { style: BorderStyle.NONE },
+          right: { style: BorderStyle.NONE },
+          insideHorizontal: { style: BorderStyle.NONE },
+          insideVertical: { style: BorderStyle.NONE },
+        },
+        rows: [headerRow, ...dataRows],
+      }),
+    );
+  }
+
+  sections.push(
+    new Paragraph({
+      spacing: { before: 500 },
+      children: [
+        new TextRun({
+          text: `TOTAL: ${awardList.length} CANDIDATES`,
+          bold: true,
+          size: 22,
+        }),
+      ],
+    }),
+    ...createDocFooter(),
+  );
+
+  const doc = new Document({ sections: [{ children: sections }] });
+  return Packer.toBuffer(doc);
 };
 
 function createAwardTable(students: any[]) {
@@ -1087,37 +1136,130 @@ function createAwardTable(students: any[]) {
   });
 }
 
-
-export const generateSimpleNameListDoc = async (data: PromotionData): Promise<Buffer> => {
-  const { eligible, programName, academicYear } = data;
+export const generateSimpleAwardListDoc = async (data: {
+  programName: string;
+  academicYear: string;
+  yearOfStudy: number;
+  logoBuffer: Buffer;
+  awardList: AwardListEntry[];
+}): Promise<Buffer> => {
+  const { programName, academicYear, logoBuffer, awardList } = data;
+  const cellMargin = { top: 50, bottom: 50, left: 100, right: 100 };
 
   const doc = new Document({
     sections: [{
       children: [
+        ...createDocHeader(logoBuffer, programName, academicYear, "Final Year", "AWARD LIST"),
+
         new Paragraph({
-          text: `${programName.toUpperCase()} - ${academicYear} NAME LIST`,
-          heading: HeadingLevel.HEADING_1,
-          alignment: AlignmentType.CENTER,
-        }),
-        new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          rows: [
-            new TableRow({ children: ["S/No", "Reg No.", "Full Name"].map((h) => new TableCell({ children: [ new Paragraph({ children: [new TextRun({ text: h, bold: true })] }) ] }))}),
-            ...eligible.map((s, i) => new TableRow({
-              children: [
-                new TableCell({ children: [new Paragraph({ text: (i + 1).toString() })] }),
-                new TableCell({ children: [new Paragraph({ text: s.regNo })] }),
-                new TableCell({ children: [new Paragraph({ text: s.name.toUpperCase() })] }),
-              ],
-            })),
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { before: 400, after: 300 },
+          children: [
+            new TextRun({ text: "The following ", size: 22 }),
+            new TextRun({ text: `${numberToWords(awardList.length)} (${awardList.length}) `, bold: true, size: 22 }),
+            new TextRun({ text: "candidate(s) have satisfied the Board of Examiners in all prescribed units. The Board recommends they be ", size: 22 }),
+            new TextRun({ text: `AWARDED THE DEGREE OF ${programName.toUpperCase()}.`, bold: true, size: 22 }),
           ],
         }),
+
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: {
+            top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
+            left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
+            insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
+          },
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({ width: { size: 8, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "S/No.", bold: true, size: 20 })] })] }),
+                new TableCell({ width: { size: 27, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "Reg. No.", bold: true, size: 20 })] })] }),
+                new TableCell({ width: { size: 65, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "Name", bold: true, size: 20 })] })] }),
+              ],
+            }),
+            ...awardList.map((s, i) =>
+              new TableRow({
+                children: [
+                  new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: String(i + 1), size: 20 })] })] }),
+                  new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: s.regNo, size: 20 })] })] }),
+                  new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: formatStudentName(s.name), size: 20 })] })] }),
+                ],
+              })
+            ),
+          ],
+        }),
+
+        ...createDocFooter(),
       ],
     }],
   });
 
-  return await Packer.toBuffer(doc);
+  return Packer.toBuffer(doc);
 };
+
+
+// export const generateSimpleAwardListDoc = async (
+//   data: {
+//     programName:  string;
+//     academicYear: string;
+//     yearOfStudy:  number;
+//     logoBuffer:   Buffer;
+//     awardList:    AwardListEntry[];
+//   },
+// ): Promise<Buffer> => {
+//   const { programName, academicYear, logoBuffer, awardList } = data;
+//   const cellMargin = { top: 50, bottom: 50, left: 100, right: 100 };
+ 
+//   const doc = new Document({
+//     sections: [{
+//       children: [
+//         ...createDocHeader(logoBuffer, programName, academicYear, "Final", "AWARD LIST"),
+ 
+//         new Paragraph({
+//           alignment: AlignmentType.JUSTIFIED,
+//           spacing:   { before: 400, after: 300 },
+//           children: [
+//             new TextRun({ text: "The following ", size: 22 }),
+//             new TextRun({ text: `${numberToWords(awardList.length)} (${awardList.length}) `, bold: true, size: 22 }),
+//             new TextRun({ text: "candidate(s) have satisfied the Board of Examiners in all prescribed units. The Board recommends they be AWARDED THE DEGREE OF ", size: 22 }),
+//             new TextRun({ text: `${programName.toUpperCase()}.`, bold: true, size: 22 }),
+//           ],
+//         }),
+ 
+//         new Table({
+//           width: { size: 100, type: WidthType.PERCENTAGE },
+//           borders: {
+//             top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
+//             left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
+//             insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
+//           },
+//           rows: [
+//             new TableRow({
+//               children: [
+//                 new TableCell({ width: { size: 8, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "S/No.", bold: true, size: 18 })] })] }),
+//                 new TableCell({ width: { size: 27, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "Reg. No.", bold: true, size: 18 })] })] }),
+//                 new TableCell({ width: { size: 65, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "Name", bold: true, size: 18 })] })] }),
+//               ],
+//             }),
+//             ...awardList.map((s, i) =>
+//               new TableRow({
+//                 children: [
+//                   new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: String(i + 1), size: 18 })] })] }),
+//                   new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: s.regNo, size: 18 })] })] }),
+//                   new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: formatStudentName(s.name), size: 18 })] })] }),
+//                 ],
+//               }),
+//             ),
+//           ],
+//         }),
+ 
+//         ...createDocFooter(),
+//       ],
+//     }],
+//   });
+ 
+//   return Packer.toBuffer(doc);
+// };
 
 //  ---- Deferment Block -----
 export const generateDefermentDoc = async (

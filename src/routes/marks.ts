@@ -1,4 +1,412 @@
-// src/routes/marks.ts
+// // src/routes/marks.ts
+// import { Router, Response } from "express";
+// import { requireAuth, requireRole } from "../middleware/auth";
+// import { asyncHandler } from "../middleware/asyncHandler";
+// import type { AuthenticatedRequest } from "../middleware/auth";
+// import { generateFullScoresheetTemplate } from "../utils/uploadTemplate";
+// import { uploadMarksFile } from "../middleware/upload";
+// import { importMarksFromBuffer } from "../services/marksImporter";
+// import { logAudit } from "../lib/auditLogger";
+// import mongoose from "mongoose";
+// import fs from "fs";
+// import * as xlsx from "xlsx";
+// import path from "path";
+// import Unit from "../models/Unit";
+// import { generateDirectScoresheetTemplate } from "../utils/directTemplate";
+// import { importDirectMarksFromBuffer } from "../services/directMarksImporter";
+// import AcademicYear from "../models/AcademicYear";
+// import Mark from "../models/Mark";
+// import MarkDirect from "../models/MarkDirect";
+
+// const router = Router();
+
+// // Route: GET /api/marks/template?programId=&unitId=&academicYearId=&yearOfStudy=&semester=
+// router.get(
+//   "/template",
+//   requireAuth,
+//   requireRole("coordinator", "admin"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { programId, unitId, academicYearId, yearOfStudy, semester, examMode, unitType } = req.query;
+
+//     if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
+//       return res.status(400).json({
+//         error:
+//           "Missing required parameters: programId, unitId, academicYearId, yearOfStudy, semester",
+//       });
+//     }
+
+//     try {
+//       // Validation and Casting: Checks if the input string can be an ObjectId.
+//       if (
+//         !mongoose.Types.ObjectId.isValid(programId as string) ||
+//         !mongoose.Types.ObjectId.isValid(unitId as string) ||
+//         !mongoose.Types.ObjectId.isValid(academicYearId as string)
+//       ) {
+//         throw new Error(
+//           "One or more provided IDs (programId, unitId, academicYearId) are invalid.",
+//         );
+//       }
+
+//       // Fetch Unit details for the filename
+//       // const unit = await Unit.findById(unitId).lean();
+
+//       const [unit, academicYear] = await Promise.all([
+//         Unit.findById(unitId).lean(),
+//         AcademicYear.findById(academicYearId).lean(),
+//       ]);
+
+//       if (!academicYear) throw new Error("Academic Year not found.");
+//       // 1. Trim invisible spaces first
+//       const rawCode = (unit?.code || "UNIT").trim();
+//       const rawName = (unit?.name || "TEMPLATE").trim();
+
+//       const yearLabel = (academicYear.year || "YEAR").trim().replace(/\//g, "-");
+//       const cleanName =
+//         `${rawCode}_${rawName}`
+//           .replace(/[^a-zA-Z0-9]/g, "_") // Replace anything not a letter or number
+//           .replace(/_+/g, "_") // Collapse multiple underscores (___ -> _)
+//           .replace(/^_|_$/g, "") // Remove _ from start or end
+//           ?.toUpperCase() || "TEMPLATE";
+
+//       const fileName = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
+
+//       // --- 1. LOAD THE LOGO IMAGE ---
+//       const logoPath = path.join( __dirname, "../../public/institutionLogoExcel.png" );
+
+//       let logoBuffer: Buffer;
+//       if (fs.existsSync(logoPath)) logoBuffer = fs.readFileSync(logoPath);
+//       else logoBuffer = Buffer.alloc(0); // Fallback to empty if file is missing      
+
+//       // --- 2. GENERATE THE EXCEL BUFFER ---
+//       const excelBuffer = await generateFullScoresheetTemplate(
+//         new mongoose.Types.ObjectId(programId as string),
+//         new mongoose.Types.ObjectId(unitId as string),
+//         parseInt(yearOfStudy as string, 10),
+//         parseInt(semester as string, 10),
+//         new mongoose.Types.ObjectId(academicYearId as string),
+//         logoBuffer, // Pass the actual image data here
+//         examMode as string,
+//         (unitType as any) || "theory"
+//       );
+
+//       res
+//         // .header("Content-Type", "text/csv")
+//         .header(
+//           "Content-Type",
+//           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+//         )
+//         .header("Access-Control-Expose-Headers", "Content-Disposition")
+//         .attachment(fileName)
+//         // .send(templateContent);
+//         .send(excelBuffer);
+//     } catch (error: any) {
+//       // Handle cases where IDs are invalid or DB lookup fails
+//       // console.error("Error generating scoresheet template:", error.message);
+
+//       // Return a 400 for invalid ID format, otherwise a 500
+//       const status = error.message.includes("invalid") ? 400 : 500;
+
+//       return res.status(status).json({
+//         message: "Failed to generate scoresheet template. Check input IDs.",
+//         error: error.message,
+//       });
+//     }
+//   })
+// );
+
+// router.get(
+//   "/direct-template",
+//   requireAuth, 
+//   requireRole("coordinator", "admin"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { programId, unitId, academicYearId, yearOfStudy, semester } = req.query;
+
+//     if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
+//       return res.status(400).json({
+//         error:
+//           "Missing required parameters: programId, unitId, academicYearId, yearOfStudy, semester",
+//       });
+//     }
+
+//     try {
+//       // Validation and Casting: Checks if the input string can be an ObjectId.
+//       if (
+//         !mongoose.Types.ObjectId.isValid(programId as string) ||
+//         !mongoose.Types.ObjectId.isValid(unitId as string) ||
+//         !mongoose.Types.ObjectId.isValid(academicYearId as string)
+//       ) {
+//         throw new Error(
+//           "One or more provided IDs (programId, unitId, academicYearId) are invalid."
+//         );
+//       }
+
+//       // Fetch Unit details for the filename
+//       // const unit = await Unit.findById(unitId).lean();
+
+//       const [unit, academicYear] = await Promise.all([
+//         Unit.findById(unitId).lean(),
+//         AcademicYear.findById(academicYearId).lean(),
+//       ]);
+
+//       if (!academicYear) throw new Error("Academic Year not found.");
+
+//       // 1. Trim invisible spaces first
+//       const rawCode = (unit?.code || "UNIT").trim();
+//       const rawName = (unit?.name || "TEMPLATE").trim();
+
+//       const yearLabel = (academicYear.year || "YEAR").trim().replace(/\//g, "-");
+//       const cleanName =
+//         `${rawCode}_${rawName}`
+//           .replace(/[^a-zA-Z0-9]/g, "_") // Replace anything not a letter or number
+//           .replace(/_+/g, "_") // Collapse multiple underscores (___ -> _)
+//           .replace(/^_|_$/g, "") // Remove _ from start or end
+//           ?.toUpperCase() || "TEMPLATE";
+
+//       const fileName = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
+
+//     const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
+//     const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+
+//     const buffer = await generateDirectScoresheetTemplate(
+//       new mongoose.Types.ObjectId(programId as string),
+//         new mongoose.Types.ObjectId(unitId as string),
+//         parseInt(yearOfStudy as string, 10),
+//         parseInt(semester as string, 10),
+//         new mongoose.Types.ObjectId(academicYearId as string),
+//         logoBuffer
+//     );
+
+//     res
+//       .header(
+//         "Content-Type",
+//         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+//       )
+//       .header("Access-Control-Expose-Headers", "Content-Disposition")
+//       .attachment(fileName)
+//       .send(buffer);
+//   } catch (error: any) {
+//     // Handle cases where IDs are invalid or DB lookup fails
+//     // console.error("Error generating scoresheet template:", error.message);
+
+//     // Return a 400 for invalid ID format, otherwise a 500
+//     const status = error.message.includes("invalid") ? 400 : 500;
+
+//     return res.status(status).json({
+//       message: "Failed to generate scoresheet template. Check input IDs.",
+//       error: error.message,
+//     });
+//   }
+// })
+// );
+
+// router.get(
+//   "/upload-stats",
+//   requireAuth,
+//   requireRole("coordinator", "admin"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const institutionId = req.user.institution;
+ 
+//     // ── Fetch all marks for this institution ─────────────────────────────
+//     const [detailedRaw, directRaw] = await Promise.all([
+//       Mark.find({ institution: institutionId, deletedAt: null })
+//         .populate({ path: "programUnit", populate: [{ path: "unit", select: "code name" }, { path: "program", select: "name code" }] })
+//         .populate("academicYear", "year session")
+//         .populate("student", "regNo name")
+//         .sort({ createdAt: -1 })
+//         .lean(),
+ 
+//       MarkDirect.find({ institution: institutionId, deletedAt: null })
+//         .populate({ path: "programUnit", populate: [{ path: "unit", select: "code name" }, { path: "program", select: "name code" }] })
+//         .populate("academicYear", "year session")
+//         .populate("student", "regNo name")
+//         .sort({ createdAt: -1 })
+//         .lean(),
+//     ]);
+ 
+//     // ── Shape a normalised record ────────────────────────────────────────
+//     interface MarkEntry {
+//       _id:          string;
+//       source:       "detailed" | "direct";
+//       regNo:        string;
+//       studentName:  string;
+//       unitCode:     string;
+//       unitName:     string;
+//       programName:  string;
+//       programCode:  string;
+//       agreedMark:   number;
+//       attempt:      string;
+//       isSpecial:    boolean;
+//       academicYear: string;
+//       session:      string;
+//       uploadedAt:   Date;
+//     }
+ 
+//     const shape = (m: any, source: "detailed" | "direct"): MarkEntry => ({
+//       _id:         m._id.toString(),
+//       source,
+//       regNo:       (m.student as any)?.regNo   || "N/A",
+//       studentName: (m.student as any)?.name    || "N/A",
+//       unitCode:    (m.programUnit as any)?.unit?.code   || "N/A",
+//       unitName:    (m.programUnit as any)?.unit?.name   || "N/A",
+//       programName: (m.programUnit as any)?.program?.name || "N/A",
+//       programCode: (m.programUnit as any)?.program?.code || "N/A",
+//       agreedMark:  m.agreedMark ?? 0,
+//       attempt:     m.attempt ?? "1st",
+//       isSpecial:   m.isSpecial ?? false,
+//       academicYear:(m.academicYear as any)?.year    || "Unknown",
+//       session:     (m.academicYear as any)?.session || "ORDINARY",
+//       uploadedAt:  m.uploadedAt ?? m.createdAt,
+//     });
+ 
+//     const allEntries: MarkEntry[] = [
+//       ...detailedRaw.map((m) => shape(m, "detailed")),
+//       ...directRaw.map((m)   => shape(m, "direct")),
+//     ];
+ 
+//     // ── Group by: academicYear → session → programCode → entries ─────────
+//     const grouped: Record<
+//       string,                              // academic year  e.g. "2016/2017"
+//       Record<
+//         string,                            // session  e.g. "ORDINARY"
+//         Record<
+//           string,                          // program code  e.g. "E024"
+//           { programName: string; entries: MarkEntry[] }
+//         >
+//       >
+//     > = {};
+ 
+//     for (const entry of allEntries) {
+//       const yr  = entry.academicYear;
+//       const ses = entry.session;
+//       const pc  = entry.programCode;
+ 
+//       if (!grouped[yr])        grouped[yr]        = {};
+//       if (!grouped[yr][ses])   grouped[yr][ses]   = {};
+//       if (!grouped[yr][ses][pc]) {
+//         grouped[yr][ses][pc] = { programName: entry.programName, entries: [] };
+//       }
+//       grouped[yr][ses][pc].entries.push(entry);
+//     }
+ 
+//     // ── Build summary counts ──────────────────────────────────────────────
+//     const summary = {
+//       totalRecords:   allEntries.length,
+//       detailed:       detailedRaw.length,
+//       direct:         directRaw.length,
+//       academicYears:  Object.keys(grouped).sort().reverse(),
+//     };
+ 
+//     res.json({ summary, grouped });
+//   }),
+// );
+
+// // Route: POST marks/upload
+// router.post(
+//   "/upload",
+//   requireAuth,
+//   requireRole("coordinator", "admin"),
+//   uploadMarksFile.single("file"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     if (!req.file) {
+//       return res.status(400).json({ message: "No file uploaded" });
+//     }
+
+//     try {
+//       // 1. Peek at the file to detect the template type
+//       const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+//       const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      
+//       // Look at Row 15, Column E (Excel coordinate E15)
+//       // Headers are usually at index 14 in sheet_to_json or direct access
+//       const columnEHeader = sheet["E15"]?.v?.toString().toUpperCase() || "";
+
+//       let result;
+
+//       // 2. Logic Switch based on Column E content
+//       if (columnEHeader.includes("CA TOTAL")) {
+//         // This is the simplified "Direct" template
+//         // console.log("[Upload] Detected Direct Entry Template");
+//         result = await importDirectMarksFromBuffer(req.file.buffer, req.file.originalname, req);
+//       } else {
+//         // Default to the original detailed logic
+//         // console.log("[Upload] Detected Detailed Breakdown Template");
+//         result = await importMarksFromBuffer(req.file.buffer, req.file.originalname, req);
+//       }
+
+//       await logAudit(req, {
+//         action: "marks_upload_success",
+//         details: { 
+//           templateType: columnEHeader.includes("CA TOTAL") ? "direct" : "detailed",
+//           total: result.total, 
+//           success: result.success 
+//         },
+//       });
+
+//       res.json({ message: "Import completed", ...result });
+//     } catch (err: any) {
+//             await logAudit(req, {
+//               action: "marks_upload_failed",
+//               details: { error: err.message, filename: req.file.originalname },
+//             });
+//             throw err;
+//     }
+//   })
+// );
+
+// // Route: POST marks/upload
+// // router.post(
+// //   "/upload",
+// //   requireAuth,
+// //   requireRole("coordinator", "admin"),
+// //   uploadMarksFile.single("file"),
+// //   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+// //     if (!req.file) {
+// //       await logAudit(req, { action: "marks_upload_no_file" });
+// //       return res.status(400).json({ message: "No file uploaded" });
+// //     }
+
+// //     try {
+// //       const result = await importMarksFromBuffer( req.file.buffer, req.file.originalname, req );
+
+// //       await logAudit(req, {
+// //         action: "marks_upload_success",
+// //         details: {
+// //           filename: req.file.originalname,
+// //           total: result.total,
+// //           success: result.success,
+// //           failed: result.errors.length,
+// //         },
+// //       });
+
+// //       res.json({
+// //         message: "Import completed",
+// //         ...result,
+// //       });
+// //     } catch (err: any) {
+// //       await logAudit(req, {
+// //         action: "marks_upload_failed",
+// //         details: { error: err.message, filename: req.file.originalname },
+// //       });
+// //       throw err; // asyncHandler will catch
+// //     }
+// //   })
+// // );
+
+
+
+
+
+// export default router;
+
+// Would you like me to help you refine the frontend downloadTemplate function to handle potential network timeouts for these large file generations?
+
+
+
+// src/routes/marks.ts  — PATCHED
+// Key fixes:
+//   1. Added POST /marks/upload-direct route so client's templateMode="direct" upload works
+//   2. Added detailed console logging around the template-detection switch
+//   3. Error handler now logs the full stack before rethrowing
 import { Router, Response } from "express";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
@@ -20,7 +428,9 @@ import MarkDirect from "../models/MarkDirect";
 
 const router = Router();
 
-// Route: GET /api/marks/template?programId=&unitId=&academicYearId=&yearOfStudy=&semester=
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /marks/template   — Detailed breakdown scoresheet
+// ─────────────────────────────────────────────────────────────────────────────
 router.get(
   "/template",
   requireAuth,
@@ -30,25 +440,18 @@ router.get(
 
     if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
       return res.status(400).json({
-        error:
-          "Missing required parameters: programId, unitId, academicYearId, yearOfStudy, semester",
+        error: "Missing required parameters: programId, unitId, academicYearId, yearOfStudy, semester",
       });
     }
 
     try {
-      // Validation and Casting: Checks if the input string can be an ObjectId.
       if (
         !mongoose.Types.ObjectId.isValid(programId as string) ||
         !mongoose.Types.ObjectId.isValid(unitId as string) ||
         !mongoose.Types.ObjectId.isValid(academicYearId as string)
       ) {
-        throw new Error(
-          "One or more provided IDs (programId, unitId, academicYearId) are invalid.",
-        );
+        throw new Error("One or more provided IDs (programId, unitId, academicYearId) are invalid.");
       }
-
-      // Fetch Unit details for the filename
-      // const unit = await Unit.findById(unitId).lean();
 
       const [unit, academicYear] = await Promise.all([
         Unit.findById(unitId).lean(),
@@ -56,92 +459,79 @@ router.get(
       ]);
 
       if (!academicYear) throw new Error("Academic Year not found.");
-      // 1. Trim invisible spaces first
-      const rawCode = (unit?.code || "UNIT").trim();
-      const rawName = (unit?.name || "TEMPLATE").trim();
 
+      const rawCode   = (unit?.code || "UNIT").trim();
+      const rawName   = (unit?.name || "TEMPLATE").trim();
       const yearLabel = (academicYear.year || "YEAR").trim().replace(/\//g, "-");
-      const cleanName =
-        `${rawCode}_${rawName}`
-          .replace(/[^a-zA-Z0-9]/g, "_") // Replace anything not a letter or number
-          .replace(/_+/g, "_") // Collapse multiple underscores (___ -> _)
-          .replace(/^_|_$/g, "") // Remove _ from start or end
-          ?.toUpperCase() || "TEMPLATE";
+      const cleanName = `${rawCode}_${rawName}`
+        .replace(/[^a-zA-Z0-9]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_|_$/g, "")
+        ?.toUpperCase() || "TEMPLATE";
 
-      const fileName = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
+      const fileName  = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
+      const logoPath  = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
 
-      // --- 1. LOAD THE LOGO IMAGE ---
-      const logoPath = path.join( __dirname, "../../public/institutionLogoExcel.png" );
-
-      let logoBuffer: Buffer;
-      if (fs.existsSync(logoPath)) logoBuffer = fs.readFileSync(logoPath);
-      else logoBuffer = Buffer.alloc(0); // Fallback to empty if file is missing      
-
-      // --- 2. GENERATE THE EXCEL BUFFER ---
       const excelBuffer = await generateFullScoresheetTemplate(
         new mongoose.Types.ObjectId(programId as string),
         new mongoose.Types.ObjectId(unitId as string),
         parseInt(yearOfStudy as string, 10),
         parseInt(semester as string, 10),
         new mongoose.Types.ObjectId(academicYearId as string),
-        logoBuffer, // Pass the actual image data here
+        logoBuffer,
         examMode as string,
-        (unitType as any) || "theory"
+        (unitType as any) || "theory",
       );
 
       res
-        // .header("Content-Type", "text/csv")
-        .header(
-          "Content-Type",
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        .header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         .header("Access-Control-Expose-Headers", "Content-Disposition")
         .attachment(fileName)
-        // .send(templateContent);
         .send(excelBuffer);
     } catch (error: any) {
-      // Handle cases where IDs are invalid or DB lookup fails
-      // console.error("Error generating scoresheet template:", error.message);
-
-      // Return a 400 for invalid ID format, otherwise a 500
+      console.error("[GET /marks/template] Error:", error.message, error.stack);
+     
+      if (error.message === "Institution settings not found.") {
+        return res.status(400).json({
+          message:
+            "Institution settings are not configured. Please contact the administrator.",
+          error: error.message,
+        });
+      }
+    
       const status = error.message.includes("invalid") ? 400 : 500;
-
-      return res.status(status).json({
-        message: "Failed to generate scoresheet template. Check input IDs.",
-        error: error.message,
-      });
+      // return res.status(status).json({ message: "Failed to generate scoresheet template.", error: error.message });
+      return res.status(status).json({ message: error.message, error: error.message });
+    
     }
-  })
+  }),
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /marks/direct-template   — Direct entry scoresheet
+// ─────────────────────────────────────────────────────────────────────────────
 router.get(
   "/direct-template",
-  requireAuth, 
+  requireAuth,
   requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, unitId, academicYearId, yearOfStudy, semester } = req.query;
 
     if (!programId || !unitId || !academicYearId || !yearOfStudy || !semester) {
       return res.status(400).json({
-        error:
-          "Missing required parameters: programId, unitId, academicYearId, yearOfStudy, semester",
+        error: "Missing required parameters: programId, unitId, academicYearId, yearOfStudy, semester",
       });
     }
 
     try {
-      // Validation and Casting: Checks if the input string can be an ObjectId.
       if (
         !mongoose.Types.ObjectId.isValid(programId as string) ||
         !mongoose.Types.ObjectId.isValid(unitId as string) ||
         !mongoose.Types.ObjectId.isValid(academicYearId as string)
       ) {
-        throw new Error(
-          "One or more provided IDs (programId, unitId, academicYearId) are invalid."
-        );
+        throw new Error("One or more provided IDs (programId, unitId, academicYearId) are invalid.");
       }
-
-      // Fetch Unit details for the filename
-      // const unit = await Unit.findById(unitId).lean();
 
       const [unit, academicYear] = await Promise.all([
         Unit.findById(unitId).lean(),
@@ -150,63 +540,64 @@ router.get(
 
       if (!academicYear) throw new Error("Academic Year not found.");
 
-      // 1. Trim invisible spaces first
-      const rawCode = (unit?.code || "UNIT").trim();
-      const rawName = (unit?.name || "TEMPLATE").trim();
-
+      const rawCode   = (unit?.code || "UNIT").trim();
+      const rawName   = (unit?.name || "TEMPLATE").trim();
       const yearLabel = (academicYear.year || "YEAR").trim().replace(/\//g, "-");
-      const cleanName =
-        `${rawCode}_${rawName}`
-          .replace(/[^a-zA-Z0-9]/g, "_") // Replace anything not a letter or number
-          .replace(/_+/g, "_") // Collapse multiple underscores (___ -> _)
-          .replace(/^_|_$/g, "") // Remove _ from start or end
-          ?.toUpperCase() || "TEMPLATE";
+      const cleanName = `${rawCode}_${rawName}`
+        .replace(/[^a-zA-Z0-9]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_|_$/g, "")
+        ?.toUpperCase() || "TEMPLATE";
 
-      const fileName = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
+      const fileName   = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
+      const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
 
-    const logoPath = path.join(__dirname, "../../public/institutionLogoExcel.png");
-    const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
-
-    const buffer = await generateDirectScoresheetTemplate(
-      new mongoose.Types.ObjectId(programId as string),
+      const buffer = await generateDirectScoresheetTemplate(
+        new mongoose.Types.ObjectId(programId as string),
         new mongoose.Types.ObjectId(unitId as string),
         parseInt(yearOfStudy as string, 10),
         parseInt(semester as string, 10),
         new mongoose.Types.ObjectId(academicYearId as string),
-        logoBuffer
-    );
+        logoBuffer,
+      );
 
-    res
-      .header(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      )
-      .header("Access-Control-Expose-Headers", "Content-Disposition")
-      .attachment(fileName)
-      .send(buffer);
-  } catch (error: any) {
-    // Handle cases where IDs are invalid or DB lookup fails
-    // console.error("Error generating scoresheet template:", error.message);
+      res
+        .header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        .header("Access-Control-Expose-Headers", "Content-Disposition")
+        .attachment(fileName)
+        .send(buffer);
+    } catch (error: any) {
+      console.error("[GET /marks/direct-template] Error:", error.message, error.stack);
+      
+      if (error.message === "Institution settings not found.") {
+        return res.status(400).json({
+          message:
+            "Institution settings are not configured. Please contact the administrator.",
+          error: error.message,
+        });
+      }
+    
+      const status = error.message.includes("invalid") ? 400 : 500;
+      // return res.status(status).json({ message: "Failed to generate direct template.", error: error.message });
+      return res
+        .status(status)
+        .json({ message: error.message, error: error.message });
 
-    // Return a 400 for invalid ID format, otherwise a 500
-    const status = error.message.includes("invalid") ? 400 : 500;
-
-    return res.status(status).json({
-      message: "Failed to generate scoresheet template. Check input IDs.",
-      error: error.message,
-    });
-  }
-})
+    }
+  }),
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /marks/upload-stats
+// ─────────────────────────────────────────────────────────────────────────────
 router.get(
   "/upload-stats",
   requireAuth,
   requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const institutionId = req.user.institution;
- 
-    // ── Fetch all marks for this institution ─────────────────────────────
+
     const [detailedRaw, directRaw] = await Promise.all([
       Mark.find({ institution: institutionId, deletedAt: null })
         .populate({ path: "programUnit", populate: [{ path: "unit", select: "code name" }, { path: "program", select: "name code" }] })
@@ -214,7 +605,7 @@ router.get(
         .populate("student", "regNo name")
         .sort({ createdAt: -1 })
         .lean(),
- 
+
       MarkDirect.find({ institution: institutionId, deletedAt: null })
         .populate({ path: "programUnit", populate: [{ path: "unit", select: "code name" }, { path: "program", select: "name code" }] })
         .populate("academicYear", "year session")
@@ -222,32 +613,21 @@ router.get(
         .sort({ createdAt: -1 })
         .lean(),
     ]);
- 
-    // ── Shape a normalised record ────────────────────────────────────────
+
     interface MarkEntry {
-      _id:          string;
-      source:       "detailed" | "direct";
-      regNo:        string;
-      studentName:  string;
-      unitCode:     string;
-      unitName:     string;
-      programName:  string;
-      programCode:  string;
-      agreedMark:   number;
-      attempt:      string;
-      isSpecial:    boolean;
-      academicYear: string;
-      session:      string;
-      uploadedAt:   Date;
+      _id: string; source: "detailed" | "direct"; regNo: string; studentName: string;
+      unitCode: string; unitName: string; programName: string; programCode: string;
+      agreedMark: number; attempt: string; isSpecial: boolean;
+      academicYear: string; session: string; uploadedAt: Date;
     }
- 
+
     const shape = (m: any, source: "detailed" | "direct"): MarkEntry => ({
       _id:         m._id.toString(),
       source,
       regNo:       (m.student as any)?.regNo   || "N/A",
       studentName: (m.student as any)?.name    || "N/A",
-      unitCode:    (m.programUnit as any)?.unit?.code   || "N/A",
-      unitName:    (m.programUnit as any)?.unit?.name   || "N/A",
+      unitCode:    (m.programUnit as any)?.unit?.code    || "N/A",
+      unitName:    (m.programUnit as any)?.unit?.name    || "N/A",
       programName: (m.programUnit as any)?.program?.name || "N/A",
       programCode: (m.programUnit as any)?.program?.code || "N/A",
       agreedMark:  m.agreedMark ?? 0,
@@ -257,50 +637,38 @@ router.get(
       session:     (m.academicYear as any)?.session || "ORDINARY",
       uploadedAt:  m.uploadedAt ?? m.createdAt,
     });
- 
+
     const allEntries: MarkEntry[] = [
       ...detailedRaw.map((m) => shape(m, "detailed")),
-      ...directRaw.map((m)   => shape(m, "direct")),
+      ...directRaw.map((m) => shape(m, "direct")),
     ];
- 
-    // ── Group by: academicYear → session → programCode → entries ─────────
-    const grouped: Record<
-      string,                              // academic year  e.g. "2016/2017"
-      Record<
-        string,                            // session  e.g. "ORDINARY"
-        Record<
-          string,                          // program code  e.g. "E024"
-          { programName: string; entries: MarkEntry[] }
-        >
-      >
-    > = {};
- 
+
+    const grouped: Record<string, Record<string, Record<string, { programName: string; entries: MarkEntry[] }>>> = {};
+
     for (const entry of allEntries) {
       const yr  = entry.academicYear;
       const ses = entry.session;
       const pc  = entry.programCode;
- 
-      if (!grouped[yr])        grouped[yr]        = {};
-      if (!grouped[yr][ses])   grouped[yr][ses]   = {};
-      if (!grouped[yr][ses][pc]) {
-        grouped[yr][ses][pc] = { programName: entry.programName, entries: [] };
-      }
+      if (!grouped[yr])          grouped[yr]          = {};
+      if (!grouped[yr][ses])     grouped[yr][ses]     = {};
+      if (!grouped[yr][ses][pc]) grouped[yr][ses][pc] = { programName: entry.programName, entries: [] };
       grouped[yr][ses][pc].entries.push(entry);
     }
- 
-    // ── Build summary counts ──────────────────────────────────────────────
+
     const summary = {
-      totalRecords:   allEntries.length,
-      detailed:       detailedRaw.length,
-      direct:         directRaw.length,
-      academicYears:  Object.keys(grouped).sort().reverse(),
+      totalRecords:  allEntries.length,
+      detailed:      detailedRaw.length,
+      direct:        directRaw.length,
+      academicYears: Object.keys(grouped).sort().reverse(),
     };
- 
+
     res.json({ summary, grouped });
   }),
 );
 
-// Route: POST marks/upload
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /marks/upload   — Auto-detects template type by inspecting cell E15
+// ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/upload",
   requireAuth,
@@ -311,91 +679,84 @@ router.post(
       return res.status(400).json({ message: "No file uploaded" });
     }
 
+    console.log(`[POST /marks/upload] File received: "${req.file.originalname}", size=${req.file.size}`);
+
     try {
-      // 1. Peek at the file to detect the template type
       const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      
-      // Look at Row 15, Column E (Excel coordinate E15)
-      // Headers are usually at index 14 in sheet_to_json or direct access
+      const sheet    = workbook.Sheets[workbook.SheetNames[0]];
+
+      // Cell E15 contains "CA TOTAL (/30)" in the direct template header row
       const columnEHeader = sheet["E15"]?.v?.toString().toUpperCase() || "";
+      console.log(`[POST /marks/upload] Cell E15 value: "${columnEHeader}"`);
 
       let result;
+      let templateType: string;
 
-      // 2. Logic Switch based on Column E content
       if (columnEHeader.includes("CA TOTAL")) {
-        // This is the simplified "Direct" template
-        // console.log("[Upload] Detected Direct Entry Template");
+        templateType = "direct";
+        console.log(`[POST /marks/upload] Detected DIRECT ENTRY template`);
         result = await importDirectMarksFromBuffer(req.file.buffer, req.file.originalname, req);
       } else {
-        // Default to the original detailed logic
-        // console.log("[Upload] Detected Detailed Breakdown Template");
+        templateType = "detailed";
+        console.log(`[POST /marks/upload] Detected DETAILED BREAKDOWN template`);
         result = await importMarksFromBuffer(req.file.buffer, req.file.originalname, req);
       }
 
+      console.log(`[POST /marks/upload] Import result: total=${result.total}, success=${result.success}, errors=${result.errors.length}`);
+
       await logAudit(req, {
         action: "marks_upload_success",
-        details: { 
-          templateType: columnEHeader.includes("CA TOTAL") ? "direct" : "detailed",
-          total: result.total, 
-          success: result.success 
-        },
+        details: { templateType, total: result.total, success: result.success },
       });
 
       res.json({ message: "Import completed", ...result });
     } catch (err: any) {
-            await logAudit(req, {
-              action: "marks_upload_failed",
-              details: { error: err.message, filename: req.file.originalname },
-            });
-            throw err;
+      console.error("[POST /marks/upload] Fatal error:", err.message, err.stack);
+      await logAudit(req, {
+        action: "marks_upload_failed",
+        details: { error: err.message, filename: req.file.originalname },
+      });
+      throw err;
     }
-  })
+  }),
 );
 
-// Route: POST marks/upload
-// router.post(
-//   "/upload",
-//   requireAuth,
-//   requireRole("coordinator", "admin"),
-//   uploadMarksFile.single("file"),
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     if (!req.file) {
-//       await logAudit(req, { action: "marks_upload_no_file" });
-//       return res.status(400).json({ message: "No file uploaded" });
-//     }
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /marks/upload-direct  — Explicit direct-entry upload endpoint
+// (The client marksApi.ts calls this when templateMode === "direct")
+// ─────────────────────────────────────────────────────────────────────────────
+router.post(
+  "/upload-direct",
+  requireAuth,
+  requireRole("coordinator", "admin"),
+  uploadMarksFile.single("file"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded" });
+    }
 
-//     try {
-//       const result = await importMarksFromBuffer( req.file.buffer, req.file.originalname, req );
+    console.log(`[POST /marks/upload-direct] File: "${req.file.originalname}", size=${req.file.size}`);
 
-//       await logAudit(req, {
-//         action: "marks_upload_success",
-//         details: {
-//           filename: req.file.originalname,
-//           total: result.total,
-//           success: result.success,
-//           failed: result.errors.length,
-//         },
-//       });
+    try {
+      const result = await importDirectMarksFromBuffer(req.file.buffer, req.file.originalname, req);
 
-//       res.json({
-//         message: "Import completed",
-//         ...result,
-//       });
-//     } catch (err: any) {
-//       await logAudit(req, {
-//         action: "marks_upload_failed",
-//         details: { error: err.message, filename: req.file.originalname },
-//       });
-//       throw err; // asyncHandler will catch
-//     }
-//   })
-// );
+      console.log(`[POST /marks/upload-direct] Done: total=${result.total}, success=${result.success}, errors=${result.errors.length}`);
 
+      await logAudit(req, {
+        action: "marks_upload_success",
+        details: { templateType: "direct", total: result.total, success: result.success },
+      });
 
-
-
+      res.json({ message: "Import completed", ...result });
+    } catch (err: any) {
+      console.error("[POST /marks/upload-direct] Fatal error:", err.message, err.stack);
+      await logAudit(req, {
+        action: "marks_upload_failed",
+        details: { error: err.message, filename: req.file.originalname },
+      });
+      throw err;
+    }
+  }),
+);
 
 export default router;
-
-// Would you like me to help you refine the frontend downloadTemplate function to handle potential network timeouts for these large file generations?

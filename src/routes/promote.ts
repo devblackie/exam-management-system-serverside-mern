@@ -12,6 +12,7 @@ import {
   generateIncompleteListDoc,
   generateCarryForwardDoc,
   generateDefermentDoc,
+  generateAwardListDoc,
 } from "../utils/promotionReport";
 import fs from "fs";
 import path from "path";
@@ -348,6 +349,144 @@ router.post(
       res.end();
     }
   })
+);
+
+// // GET /promote/award-list?programId=xxx&academicYear=optional
+// // Returns JSON array of eligible graduates, sorted by classification then WAA.
+// router.get(
+//   "/award-list",
+//   requireAuth,
+//   requireRole("coordinator"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { programId, academicYear } = req.query;
+//     if (!programId) return res.status(400).json({ error: "programId is required" });
+ 
+//     const { generateAwardList } = await import("../services/graduationEngine");
+//     const list = await generateAwardList(programId as string, academicYear as string | undefined);
+ 
+//     res.json({ success: true, count: list.length, data: list });
+//   }),
+// );
+ 
+// // GET /promote/award-list-doc?programId=xxx&academicYear=optional
+// // Streams a Word document containing only eligible graduates.
+// router.get(
+//   "/award-list-doc",
+//   requireAuth,
+//   requireRole("coordinator"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { programId, academicYear } = req.query;
+//     if (!programId) return res.status(400).json({ error: "programId is required" });
+ 
+//     const { generateAwardList } = await import("../services/graduationEngine");
+//     const list = await generateAwardList(programId as string, academicYear as string | undefined);
+ 
+//     if (list.length === 0) {
+//       return res.status(404).json({ error: "No eligible graduates found for this program." });
+//     }
+ 
+//     const program    = await Program.findById(programId).lean();
+//     const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
+//     const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+ 
+//     // Build the PromotionData shape expected by generateAwardListDoc
+//     const wordData: any = {
+//       programName: program?.name || "Program",
+//       academicYear: (academicYear as string) || new Date().getFullYear().toString(),
+//       yearOfStudy: 0, // not used in the award list template
+//       eligible: list.map((s) => ({
+//         regNo:          s.regNo,
+//         name:           s.name,
+//         classification: s.classification,
+//         waa:            s.waa,
+//       })),
+//       blocked:    [],
+//       logoBuffer,
+//       examType:   "ORDINARY" as const,
+//     };
+ 
+//     const buffer = await generateAwardListDoc(wordData);
+ 
+//     const cleanYear  = ((academicYear as string) || "").replace(/\//g, "_");
+//     const progCode   = (program as any)?.code || "PROG";
+//     const fileName   = `Award_List_${progCode}_${cleanYear}.docx`.replace(/\s+/g, "_");
+ 
+//     res
+//       .header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+//       .header("Content-Disposition", `attachment; filename="${fileName}"`)
+//       .send(buffer);
+//   }),
+// );
+
+// GET /promote/award-list?programId=xxx&academicYear=optional
+// Returns JSON array of eligible graduates for the frontend preview.
+router.get(
+  "/award-list",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, academicYear } = req.query;
+    if (!programId) return res.status(400).json({ error: "programId is required" });
+ 
+    const { generateAwardList } = await import("../services/graduationEngine");
+    const list = await generateAwardList(
+      programId as string,
+      academicYear as string | undefined,
+    );
+ 
+    res.json({ success: true, count: list.length, data: list });
+  }),
+);
+ 
+// GET /promote/award-list-doc?programId=xxx&academicYear=optional&variant=simple|classified
+//   variant=simple     → plain list (S/N, Reg No., Name) — no WAA shown
+//   variant=classified → grouped by class with WAA column (default)
+router.get(
+  "/award-list-doc",
+  requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, academicYear, variant = "classified" } = req.query;
+    if (!programId) return res.status(400).json({ error: "programId is required" });
+ 
+    const { generateAwardList }      = await import("../services/graduationEngine");
+    const { generateAwardListDoc, generateSimpleAwardListDoc } = await import("../utils/promotionReport");
+ 
+    const list = await generateAwardList(
+      programId as string,
+      academicYear as string | undefined,
+    );
+ 
+    if (list.length === 0) {
+      return res.status(404).json({ error: "No eligible graduates found." });
+    }
+ 
+    const program    = await Program.findById(programId).lean();
+    const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
+    const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+ 
+    const docData = {
+      programName:  (program as any)?.name || "Program",
+      academicYear: (academicYear as string) || new Date().getFullYear().toString(),
+      yearOfStudy:  (program as any)?.durationYears || 5,
+      logoBuffer,
+      awardList:    list,
+    };
+ 
+    const buffer = (variant === "simple")
+      ? await generateSimpleAwardListDoc(docData)
+      : await generateAwardListDoc(docData);
+ 
+    const cleanYear = ((academicYear as string) || "ALL").replace(/\//g, "_");
+    const progCode  = (program as any)?.code || "PROG";
+    const label     = variant === "simple" ? "SIMPLE" : "CLASSIFIED";
+    const fileName  = `Award_List_${progCode}_${cleanYear}_${label}.docx`.replace(/\s+/g, "_");
+ 
+    res
+      .header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+      .header("Content-Disposition", `attachment; filename="${fileName}"`)
+      .send(buffer);
+  }),
 );
  
 
