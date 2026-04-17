@@ -7,11 +7,7 @@ const getTransporter = () =>
     host: config.emailHot || "smtp.gmail.com",
     port: Number(config.emailPot) || 587,
     secure: false,
-    auth: {
-    //   user: process.env.SMTP_USER,
-      user: config.emailUser,
-      pass: config.emailPass,
-    },
+    auth: {user: config.emailUser, pass: config.emailPass},
   });
 
 export const sendOTPEmail = async (
@@ -23,9 +19,7 @@ export const sendOTPEmail = async (
   const transporter = getTransporter();
 
   const subject =
-    purpose === "login"
-      ? "Your login verification code"
-      : "Verify your registration";
+    purpose === "login" ? "Your login verification code" : "Verify your registration";
 
   const fromName = config.appName || "EMS Academic System";
 
@@ -51,7 +45,7 @@ export const sendOTPEmail = async (
             <td style="padding:36px 40px 24px;text-align:center;">
               <div style="display:inline-block;width:48px;height:48px;background:#c9a227;
                           border-radius:12px;line-height:48px;font-size:24px;">
-                🔐
+                
               </div>
               <h1 style="color:#c9a227;font-size:13px;letter-spacing:4px;
                          text-transform:uppercase;margin:16px 0 0;font-weight:400;">
@@ -93,7 +87,7 @@ export const sendOTPEmail = async (
                        text-align:center;">
               <p style="color:#3a5a4a;font-size:11px;letter-spacing:2px;
                         text-transform:uppercase;margin:0;">
-                Academic Management System · Secured
+                Exams Management System · Secured
               </p>
             </td>
           </tr>

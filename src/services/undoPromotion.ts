@@ -1,6 +1,5 @@
 // serverside/src/services/undoPromotion.ts
 
-import mongoose from "mongoose";
 import Student from "../models/Student";
 import Mark from "../models/Mark";
 import MarkDirect from "../models/MarkDirect";

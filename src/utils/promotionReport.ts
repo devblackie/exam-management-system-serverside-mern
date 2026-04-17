@@ -1,8 +1,5 @@
 // serverside/src/utils/promotionReport.ts
-import {
-  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType,
-  TableLayoutType, AlignmentType, HeadingLevel, BorderStyle, ImageRun, VerticalAlign,
-} from "docx";
+import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, TableLayoutType, AlignmentType, HeadingLevel, BorderStyle, ImageRun, VerticalAlign} from "docx";
 import config from "../config/config";
 import { AwardListEntry } from "../services/graduationEngine";
 
@@ -42,10 +39,6 @@ const formatStudentName = (fullName: string): string => {
 
 function createDocHeader(logo: any, program: string, year: string, ordinal: string, listType: string, examType:  "ORDINARY" | "SUPPLEMENTARY" = "ORDINARY"): Paragraph[] {
  
-  // Title line changes based on exam type
-  // const examTitle = examType === "SUPPLEMENTARY" ? "SUPPLEMENTARY AND SPECIAL EXAMINATION RESULTS" : "ORDINARY EXAMINATION RESULTS";
- 
-  // For Award Lists → Do NOT show "ORDINARY EXAMINATION RESULTS"
   const isAwardList = listType.toUpperCase().includes("AWARD LIST");
   
   const examTitle = isAwardList 
@@ -57,18 +50,18 @@ function createDocHeader(logo: any, program: string, year: string, ordinal: stri
     new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: config.schoolName.toUpperCase(), bold: true, size: 23 }) ]}),
     new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: config.departmentName.toUpperCase(), bold: true, size: 23 }) ]}),
     new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `PROGRAM: ${program.toUpperCase()}`, bold: true, size: 23 }) ]}),
-    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `${year} ACADEMIC YEAR ${examTitle}`, bold: true, size: 23 }) ]}),
-    ...(examTitle
-      ? [
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            spacing: { before: 40, after: 40 },
-            children: [new TextRun({ text: examTitle, bold: true, size: 24 })],
-          }),
-        ]
-      : []),
+    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `${year} ACADEMIC YEAR`, bold: true, size: 23 }) ]}),
+    ...(examTitle ? [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 40, after: 40 }, children: [new TextRun({ text: examTitle, bold: true, size: 24 })] })] : []),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [new TextRun({ text: `${ordinal} Year`, bold: true, size: 23 }) ]}),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 }, children: [new TextRun({ text: listType, bold: true, size: 23, underline: {} }) ]}),
+  ];
+}
+
+function createDocFooter() {
+  return [
+      new Paragraph({ spacing: { before: 900 }, children: [new TextRun({ text: `APPROVED BY THE BOARD OF EXAMINERS, ${config.schoolName.toUpperCase()}`, bold: true, size: 18 })] }),
+      new Paragraph({ spacing: { before: 400 }, children: [new TextRun({ text: "SIGNED: __________________________\t\tDATE: _______________", bold: true })] }),
+      new Paragraph({ children: [new TextRun({ text: `\tDEAN, ${config.schoolName.toUpperCase()}`, size: 18 })] }),
   ];
 }
 
@@ -258,10 +251,7 @@ export const generateEligibleSummaryDoc = async ( data: any ): Promise<Buffer> =
 
 function createPassTable(students: any[], cellMargin: any) {
   const headerRow = new TableRow({
-    children: [
-      { text: "S/No.", width: 5 },
-      { text: "REG. NO.", width: 30 }, { text: "NAME", width: 65 }
-    ].map(
+    children: [{ text: "S/No.", width: 5 }, { text: "REG. NO.", width: 30 }, { text: "NAME", width: 65 }].map(
       (col) =>
         new TableCell({
           width: { size: col.width, type: WidthType.PERCENTAGE },
@@ -560,14 +550,6 @@ export const generateIncompleteListDoc = async (data: PromotionData): Promise<Bu
   });
   return await Packer.toBuffer(doc);
 };
-
-function createDocFooter() {
-    return [
-        new Paragraph({ spacing: { before: 900 }, children: [new TextRun({ text: `APPROVED BY THE BOARD OF EXAMINERS, ${config.schoolName.toUpperCase()}`, bold: true, size: 18 })] }),
-        new Paragraph({ spacing: { before: 400 }, children: [new TextRun({ text: "SIGNED: __________________________\t\tDATE: _______________", bold: true })] }),
-        new Paragraph({ children: [new TextRun({ text: `\tDEAN, ${config.schoolName.toUpperCase()}`, size: 18 })] }),
-    ];
-}
 
 // ---- StayOut and Repeat Year Block ----
 
@@ -901,11 +883,7 @@ function createStandardUnitDetailTable(students: any[], cellMargin: any, filterK
       const lowerR = r.toLowerCase();
 
       // 1. FILTER OUT RULE TAGS: Ignore strings that start with your ENG rules
-      const isRuleTag =
-        lowerR.startsWith("eng") ||
-        lowerR.includes("failures >") ||
-        lowerR.includes("failures >=") ||
-        lowerR.includes("mean <");
+      const isRuleTag = lowerR.startsWith("eng") || lowerR.includes("failures >") || lowerR.includes("failures >=") || lowerR.includes("mean <");
       if (isRuleTag) return false;
 
       // 2. Keyword Filtering (e.g.,
@@ -1197,74 +1175,8 @@ export const generateSimpleAwardListDoc = async (data: {
   return Packer.toBuffer(doc);
 };
 
-
-// export const generateSimpleAwardListDoc = async (
-//   data: {
-//     programName:  string;
-//     academicYear: string;
-//     yearOfStudy:  number;
-//     logoBuffer:   Buffer;
-//     awardList:    AwardListEntry[];
-//   },
-// ): Promise<Buffer> => {
-//   const { programName, academicYear, logoBuffer, awardList } = data;
-//   const cellMargin = { top: 50, bottom: 50, left: 100, right: 100 };
- 
-//   const doc = new Document({
-//     sections: [{
-//       children: [
-//         ...createDocHeader(logoBuffer, programName, academicYear, "Final", "AWARD LIST"),
- 
-//         new Paragraph({
-//           alignment: AlignmentType.JUSTIFIED,
-//           spacing:   { before: 400, after: 300 },
-//           children: [
-//             new TextRun({ text: "The following ", size: 22 }),
-//             new TextRun({ text: `${numberToWords(awardList.length)} (${awardList.length}) `, bold: true, size: 22 }),
-//             new TextRun({ text: "candidate(s) have satisfied the Board of Examiners in all prescribed units. The Board recommends they be AWARDED THE DEGREE OF ", size: 22 }),
-//             new TextRun({ text: `${programName.toUpperCase()}.`, bold: true, size: 22 }),
-//           ],
-//         }),
- 
-//         new Table({
-//           width: { size: 100, type: WidthType.PERCENTAGE },
-//           borders: {
-//             top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
-//             left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
-//             insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
-//           },
-//           rows: [
-//             new TableRow({
-//               children: [
-//                 new TableCell({ width: { size: 8, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "S/No.", bold: true, size: 18 })] })] }),
-//                 new TableCell({ width: { size: 27, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "Reg. No.", bold: true, size: 18 })] })] }),
-//                 new TableCell({ width: { size: 65, type: WidthType.PERCENTAGE }, margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: "Name", bold: true, size: 18 })] })] }),
-//               ],
-//             }),
-//             ...awardList.map((s, i) =>
-//               new TableRow({
-//                 children: [
-//                   new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: String(i + 1), size: 18 })] })] }),
-//                   new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: s.regNo, size: 18 })] })] }),
-//                   new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: formatStudentName(s.name), size: 18 })] })] }),
-//                 ],
-//               }),
-//             ),
-//           ],
-//         }),
- 
-//         ...createDocFooter(),
-//       ],
-//     }],
-//   });
- 
-//   return Packer.toBuffer(doc);
-// };
-
 //  ---- Deferment Block -----
-export const generateDefermentDoc = async (
-  data: PromotionData
-): Promise<Buffer> => {
+export const generateDefermentDoc = async (data: PromotionData): Promise<Buffer> => {
   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
 
   const list = blocked.filter((s) => s.status === "DEFERMENT");

@@ -24,12 +24,7 @@ export async function importMarksFromBuffer(
   const institutionId = req.user.institution;
   if (!institutionId) throw new Error("Coordinator not linked to institution");
 
-  const result: ImportResult = {
-    total: 0,
-    success: 0,
-    errors: [],
-    warnings: [],
-  };
+  const result: ImportResult = {total: 0, success: 0, errors: [], warnings: []};
 
   try {
     const workbook = xlsx.read(buffer, { type: "buffer" });
@@ -54,10 +49,7 @@ export async function importMarksFromBuffer(
     }
 
     // 2. Parse Rows
-    const rawRows = xlsx.utils.sheet_to_json<any[]>(sheet, {
-      header: 1,
-      range: 16,
-    });
+    const rawRows = xlsx.utils.sheet_to_json<any[]>(sheet, {header: 1, range: 16});
 
     // 3. Pre-fetch shared data
     const academicYearDoc = await AcademicYear.findOne({
@@ -70,13 +62,9 @@ export async function importMarksFromBuffer(
 
     // Optimization: Pre-fetch all units for the institution
     const programUnits = await ProgramUnit.find({ institution: institutionId })
-      .populate("unit")
-      .lean();
+      .populate("unit").lean();
     const programUnitMap = new Map(
-      programUnits.map((pu: any) => [
-        `${pu.program.toString()}_${pu.unit.code.toUpperCase()}`,
-        pu,
-      ]),
+      programUnits.map((pu: any) => [`${pu.program.toString()}_${pu.unit.code.toUpperCase()}`, pu]),
     );
 
     // 4. Processing Mapping (A=0, B=1, C=2...)
@@ -92,18 +80,13 @@ export async function importMarksFromBuffer(
 
       try {
         await session.withTransaction(async () => {
-          const student = await Student.findOne({
-            regNo,
-            institution: institutionId,
-          }).lean();
+          const student = await Student.findOne({regNo, institution: institutionId}).lean();
           if (!student) throw new Error(`Student ${regNo} not found.`);
 
           const programUnitKey = `${student.program.toString()}_${unitCode}`;
           const programUnit = programUnitMap.get(programUnitKey);
           if (!programUnit)
-            throw new Error(
-              `Unit ${unitCode} not linked to student's program.`,
-            );
+            throw new Error(`Unit ${unitCode} not linked to student's program.`);
 
           // --- FIX: SMART ATTEMPT DETECTION ---
           // Removing the pre-find (Mark.find) lookup as it might be causing issues
@@ -167,20 +150,13 @@ export async function importMarksFromBuffer(
 
           // --- FIX: Use findOneAndUpdate for atomic upsert ---
           const mark = await Mark.findOneAndUpdate(
-            {
-              student: student._id,
-              programUnit: programUnit._id,
-              academicYear: academicYearDoc._id,
-            },
+            { student: student._id, programUnit: programUnit._id, academicYear: academicYearDoc._id},
             markData,
             { upsert: true, new: true, session, runValidators: true },
           );
 
           // Trigger the final grade calculation
-          await computeFinalGrade({
-            markId: mark._id as Types.ObjectId,
-            session,
-          });
+          await computeFinalGrade({markId: mark._id as Types.ObjectId, session});
         });
         result.success++;
       } catch (rowErr: any) {

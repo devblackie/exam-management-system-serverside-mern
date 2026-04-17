@@ -6,16 +6,13 @@ import type { AuthenticatedRequest } from "../middleware/auth";
 import { bulkPromoteClass, calculateStudentStatus, previewPromotion, promoteStudent } from "../services/statusEngine";
 import Program from "../models/Program";
 import {
-  generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibilityNotice,   PromotionData,
+  generatePromotionWordDoc, generateEligibleSummaryDoc, generateIneligibilityNotice, PromotionData,
   generateSpecialExamNotice, generateStudentTranscript, generateSupplementaryExamsDoc, generateSpecialExamsDoc,
   generateStayoutExamsDoc, generateAcademicLeaveDoc, generateDeregistrationDoc, generateDiscontinuationDoc, generateRepeatYearDoc,
-  generateIncompleteListDoc,
-  generateCarryForwardDoc,
-  generateDefermentDoc,
-  generateAwardListDoc,
+  generateIncompleteListDoc, generateCarryForwardDoc, generateDefermentDoc, generateAwardListDoc,
 } from "../utils/promotionReport";
 import fs from "fs";
-import path from "path";
+import path from "path"
 import AdmZip from "adm-zip";
 import Student from "../models/Student";
 import { logAudit } from "../lib/auditLogger";
@@ -30,8 +27,7 @@ import InstitutionSettings from "../models/InstitutionSettings";
 const router = Router();
 
 // preview-promotion
-router.post( 
-  "/preview-promotion", requireAuth, requireRole("coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+router.post("/preview-promotion", requireAuth, requireRole("coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, yearToPromote, academicYearName } = req.body;
     if (!programId || !yearToPromote || !academicYearName) return res.status(400).json({ error: "Missing parameters" });
     const previewData = await previewPromotion( programId, yearToPromote, academicYearName );
@@ -40,8 +36,7 @@ router.post(
 );
 
 // bulk-promote
-router.post(
-  "/bulk-promote", requireAuth, requireRole("coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+router.post( "/bulk-promote", requireAuth, requireRole("coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, yearToPromote, academicYearName } = req.body;
     if (!programId || !yearToPromote || !academicYearName) return res.status(400).json({ error: "Missing required promotion parameters" }); 
 
@@ -62,6 +57,10 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       // 1. Fetch Basic Data
       const preview = await previewPromotion( programId, yearToPromote, academicYearName );
       const program = await Program.findById(programId).lean();
+
+      const academicYearDoc = await AcademicYear.findOne({year: academicYearName}).lean();
+      const targetAcadYearId = (academicYearDoc as any)?._id?.toString();
+
       const academicYearDocForSession = await AcademicYear.findOne({year: academicYearName}).lean();
       const institutionSettings = await InstitutionSettings.findOne({institution: program?.institution}).lean();
 
@@ -86,7 +85,13 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       // Merge them: Direct marks often take precedence if duplicates exist
       const combinedMarks = [...detailedMarks, ...directMarks];
       // Filter marks strictly for the Year of Study being promoted
-      const filteredMarks = combinedMarks.filter((m: any) => { return m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote);});
+      // const filteredMarks = combinedMarks.filter((m: any) => { return m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote);});
+
+      const filteredMarks = combinedMarks.filter((m: any) => {
+        const rightYear = m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote);
+        const rightCohort = !targetAcadYearId || (m.academicYear?.toString() === targetAcadYearId);
+        return rightYear && rightCohort;
+      });
       const offeredUnitsRaw = await ProgramUnit.find({ program: programId, requiredYear: yearToPromote }).populate("unit").lean();
       const offeredUnits = offeredUnitsRaw.map((pu: any) => ({ code: pu.unit?.code || "N/A", name: pu.unit?.name || "N/A" }));
 
@@ -98,8 +103,18 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
 
       const studentsByHistory = await Student.find({
         program: programId,
-        $or: [{ currentYearOfStudy: yearToPromote }, { "academicHistory.yearOfStudy": yearToPromote }]}).lean();
-
+        status: {
+          $nin: ["graduated", "graduand", "discontinued", "deregistered"],
+        }, // ← KEY FIX
+        $or: [
+          { currentYearOfStudy: yearToPromote },
+          {
+            academicHistory: {
+              $elemMatch: { yearOfStudy: yearToPromote, academicYear: academicYearName },
+            },
+          },
+        ],
+      }).lean();
       // Deduplicate — preview already has blocked (on_leave, deferred etc).
       // Merge so every student who ever touched this year is on the CMS.
       const previewIds = new Set([...preview.eligible, ...preview.blocked].map((s) => (s.id || s._id)?.toString()));
@@ -223,216 +238,229 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
 );
 
 // POST /promote/download-cms
+// router.post("/download-cms", requireAuth,
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { programId, yearToPromote, academicYearName } = req.body;
+ 
+//     // Stream progress events to the client
+//     res.setHeader("Content-Type", "text/event-stream");
+//     res.setHeader("Cache-Control", "no-cache");
+//     res.setHeader("Connection", "keep-alive");
+ 
+//     const sendProgress = (percent: number, message: string, file?: string) => {
+//       const data = JSON.stringify({ percent, message, file });
+//       res.write(`data: ${data}\n\n`);
+//     };
+ 
+//     try {
+//       sendProgress(10, "Fetching student data...");
+ 
+//       const preview = await previewPromotion(programId, yearToPromote, academicYearName);
+//       const program = await Program.findById(programId).lean();
+
+//       const academicYearDocForSession = await AcademicYear.findOne({year: academicYearName}).lean();
+
+//       const sessionExamType: "ORDINARY" | "SUPPLEMENTARY" =
+//         academicYearDocForSession?.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY" : "ORDINARY";
+ 
+//       const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
+//       const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+ 
+//       sendProgress(30, "Fetching marks for all students...");
+ 
+//       // Fetch students by history too (includes promoted students)
+//       const studentsByHistory = await Student.find({
+//         program: programId,
+//         $or: [
+//           { currentYearOfStudy: yearToPromote },
+//           { "academicHistory.yearOfStudy": yearToPromote },
+//         ],
+//       }).lean();
+ 
+//       const previewIds = new Set([...preview.eligible, ...preview.blocked].map((s) => (s.id || s._id)?.toString()));
+//       const historyOnly = studentsByHistory.filter((s) => !previewIds.has(s._id.toString()));
+//       const allStudents = [...preview.eligible, ...preview.blocked, ...historyOnly];
+//       const studentIds  = allStudents.map((s) => (s._id || s.id)?.toString()).filter(Boolean);
+ 
+//       sendProgress(50, "Loading mark records...");
+ 
+//       const [detailedMarks, directMarks] = await Promise.all([
+//         Mark.find({ student: { $in: studentIds } })
+//           .populate({ path: "programUnit", populate: { path: "unit", select: "code name" } })
+//           .lean(),
+//         MarkDirect.find({ student: { $in: studentIds } })
+//           .populate({ path: "programUnit", populate: { path: "unit", select: "code name" } })
+//           .lean(),
+//       ]);
+ 
+//       const combinedMarks   = [...detailedMarks, ...directMarks];
+//       const filteredMarks   = combinedMarks.filter(
+//         (m: any) =>
+//           m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote)
+//       );
+ 
+//       const offeredUnitsRaw = await ProgramUnit.find({program: programId, requiredYear: yearToPromote})
+//         .populate("unit").lean();
+
+//         const institutionSettings = await InstitutionSettings.findOne({institution: program?.institution}).lean();        
+//         const passMark     = institutionSettings?.passMark     ?? 40;
+//         const gradingScale = institutionSettings?.gradingScale ?? [];  
+ 
+//       const offeredUnits = offeredUnitsRaw.map((pu: any) => ({code: pu.unit?.code || "N/A", name: pu.unit?.name || "N/A"}));
+ 
+//       sendProgress(70, "Generating Consolidated Mark Sheet...");
+ 
+//       const excelData: ConsolidatedData = {
+//         programName: program?.name || "Program",
+//         academicYear: academicYearName,
+//         yearOfStudy: yearToPromote,
+//         session: sessionExamType, // ← add
+//         students: allStudents,
+//         marks: filteredMarks,
+//         offeredUnits,
+//         logoBuffer,
+//         institutionId: program?.institution?.toString() || "",
+//         programId: programId,
+//         passMark, // ← add
+//         gradingScale, // ← add
+//       };
+ 
+//       const xlsxBuffer = await generateConsolidatedMarkSheet(excelData);
+ 
+//       sendProgress(95, "Preparing download...");
+ 
+//       // Encode the Excel file directly as base64 (no ZIP needed for single file)
+//       const base64 = xlsxBuffer.toString("base64");
+//       res.write(`data: ${JSON.stringify({ percent: 100, message: "Complete!", file: base64 })}\n\n`);
+//       res.end();
+//     } catch (err) {
+//       console.error("CMS Generation Error:", err);
+//       res.write(`data: ${JSON.stringify({ error: "Failed to generate CMS" })}\n\n`);
+//       res.end();
+//     }
+//   })
+// );
+
 router.post(
   "/download-cms",
   requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, yearToPromote, academicYearName } = req.body;
- 
-    // Stream progress events to the client
+
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
- 
+
     const sendProgress = (percent: number, message: string, file?: string) => {
-      const data = JSON.stringify({ percent, message, file });
-      res.write(`data: ${data}\n\n`);
+      res.write(`data: ${JSON.stringify({ percent, message, file })}\n\n`);
     };
- 
+
     try {
       sendProgress(10, "Fetching student data...");
- 
+
       const preview = await previewPromotion(programId, yearToPromote, academicYearName);
       const program = await Program.findById(programId).lean();
 
-      const academicYearDocForSession = await AcademicYear.findOne({
-        year: academicYearName,
-      }).lean();
+      // ── Academic year document (for session type AND mark filtering) ──────
+      const academicYearDoc = await AcademicYear.findOne({year: academicYearName}).lean();
+      const targetAcadYearId = (academicYearDoc as any)?._id?.toString();
 
       const sessionExamType: "ORDINARY" | "SUPPLEMENTARY" =
-        academicYearDocForSession?.session === "SUPPLEMENTARY"
-          ? "SUPPLEMENTARY"
-          : "ORDINARY";
- 
-      const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
+        (academicYearDoc as any)?.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY" : "ORDINARY";
+
+      const logoPath = path.join( __dirname, "../../public/institutionLogoExcel.png");
       const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
- 
-      sendProgress(30, "Fetching marks for all students...");
- 
-      // Fetch students by history too (includes promoted students)
+
+      sendProgress(30, "Fetching marks for current cohort...");
+
+      // ── KEY FIX 1: Exclude graduated/discontinued students and restrict to
+      //    students whose Year N history entry matches THIS academic year.
+      //    This prevents 2016-intake graduates from appearing in 2017/2018 CMS.
       const studentsByHistory = await Student.find({
         program: programId,
+        status: {
+          $nin: ["graduated", "graduand", "discontinued", "deregistered"],
+        },
         $or: [
+          // Currently enrolled in this year
           { currentYearOfStudy: yearToPromote },
-          { "academicHistory.yearOfStudy": yearToPromote },
+          // Has a history record for this specific year AND cohort
+          {
+            academicHistory: {
+              $elemMatch: { yearOfStudy: yearToPromote, academicYear: academicYearName },
+            },
+          },
         ],
       }).lean();
- 
-      const previewIds = new Set(
-        [...preview.eligible, ...preview.blocked].map((s) =>
-          (s.id || s._id)?.toString()
-        )
-      );
-      const historyOnly = studentsByHistory.filter(
-        (s) => !previewIds.has(s._id.toString())
-      );
-      const allStudents = [...preview.eligible, ...preview.blocked, ...historyOnly];
-      const studentIds  = allStudents
-        .map((s) => (s._id || s.id)?.toString())
-        .filter(Boolean);
- 
+
+      const previewIds = new Set([...preview.eligible, ...preview.blocked].map((s) => (s.id || s._id)?.toString()));
+      const historyOnly = studentsByHistory.filter((s) => !previewIds.has(s._id.toString()));
+      const allStudents = [ ...preview.eligible, ...preview.blocked, ...historyOnly];
+      const studentIds = allStudents.map((s) => (s._id || (s as any).id)?.toString()).filter(Boolean);
+
       sendProgress(50, "Loading mark records...");
- 
+
       const [detailedMarks, directMarks] = await Promise.all([
         Mark.find({ student: { $in: studentIds } })
-          .populate({ path: "programUnit", populate: { path: "unit", select: "code name" } })
+          .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
           .lean(),
         MarkDirect.find({ student: { $in: studentIds } })
-          .populate({ path: "programUnit", populate: { path: "unit", select: "code name" } })
+          .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
           .lean(),
       ]);
- 
-      const combinedMarks   = [...detailedMarks, ...directMarks];
-      const filteredMarks   = combinedMarks.filter(
-        (m: any) =>
-          m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote)
-      );
- 
-      const offeredUnitsRaw = await ProgramUnit.find({
-        program:      programId,
-        requiredYear: yearToPromote,
-      })
-        .populate("unit")
-        .lean();
 
-        const institutionSettings = await InstitutionSettings.findOne({
-          institution: program?.institution,
-        }).lean();
-        
-        const passMark     = institutionSettings?.passMark     ?? 40;
-        const gradingScale = institutionSettings?.gradingScale ?? [];  
- 
-      const offeredUnits = offeredUnitsRaw.map((pu: any) => ({
-        code: pu.unit?.code || "N/A",
-        name: pu.unit?.name || "N/A",
-      }));
- 
+      const combinedMarks = [...detailedMarks, ...directMarks];
+
+      const filteredMarks = combinedMarks.filter((m: any) => {
+        const rightYear = m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote);
+        const rightCohort = 
+          !targetAcadYearId || m.academicYear?.toString() === targetAcadYearId || m.academicYear?._id?.toString() === targetAcadYearId;
+        return rightYear && rightCohort;
+      });
+
+      const institutionSettings = await InstitutionSettings.findOne({
+        institution: (program as any)?.institution,
+      }).lean();
+      const passMark = (institutionSettings as any)?.passMark ?? 40;
+      const gradingScale = (institutionSettings as any)?.gradingScale ?? [];
+      const offeredUnitsRaw = await ProgramUnit.find({program: programId, requiredYear: yearToPromote}).populate("unit").lean();
+      const offeredUnits = offeredUnitsRaw.map((pu: any) => ({code: pu.unit?.code || "N/A", name: pu.unit?.name || "N/A"}));
+
       sendProgress(70, "Generating Consolidated Mark Sheet...");
- 
+
       const excelData: ConsolidatedData = {
-        programName: program?.name || "Program",
-        academicYear: academicYearName,
-        yearOfStudy: yearToPromote,
-        session: sessionExamType, // ← add
-        students: allStudents,
-        marks: filteredMarks,
-        offeredUnits,
-        logoBuffer,
-        institutionId: program?.institution?.toString() || "",
-        programId: programId,
-        passMark, // ← add
-        gradingScale, // ← add
+        programName: (program as any)?.name || "Program",
+        academicYear: academicYearName, yearOfStudy: yearToPromote,
+        session: sessionExamType, students: allStudents,
+        marks: filteredMarks, offeredUnits, logoBuffer,
+        institutionId: (program as any)?.institution?.toString() || "",
+        programId, passMark, gradingScale,
       };
 
- 
       const xlsxBuffer = await generateConsolidatedMarkSheet(excelData);
- 
+
       sendProgress(95, "Preparing download...");
- 
-      // Encode the Excel file directly as base64 (no ZIP needed for single file)
+
       const base64 = xlsxBuffer.toString("base64");
       res.write(`data: ${JSON.stringify({ percent: 100, message: "Complete!", file: base64 })}\n\n`);
       res.end();
-    } catch (err) {
+    } catch (err: any) {
       console.error("CMS Generation Error:", err);
       res.write(`data: ${JSON.stringify({ error: "Failed to generate CMS" })}\n\n`);
       res.end();
     }
-  })
+  }),
 );
-
-// // GET /promote/award-list?programId=xxx&academicYear=optional
-// // Returns JSON array of eligible graduates, sorted by classification then WAA.
-// router.get(
-//   "/award-list",
-//   requireAuth,
-//   requireRole("coordinator"),
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     const { programId, academicYear } = req.query;
-//     if (!programId) return res.status(400).json({ error: "programId is required" });
- 
-//     const { generateAwardList } = await import("../services/graduationEngine");
-//     const list = await generateAwardList(programId as string, academicYear as string | undefined);
- 
-//     res.json({ success: true, count: list.length, data: list });
-//   }),
-// );
- 
-// // GET /promote/award-list-doc?programId=xxx&academicYear=optional
-// // Streams a Word document containing only eligible graduates.
-// router.get(
-//   "/award-list-doc",
-//   requireAuth,
-//   requireRole("coordinator"),
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     const { programId, academicYear } = req.query;
-//     if (!programId) return res.status(400).json({ error: "programId is required" });
- 
-//     const { generateAwardList } = await import("../services/graduationEngine");
-//     const list = await generateAwardList(programId as string, academicYear as string | undefined);
- 
-//     if (list.length === 0) {
-//       return res.status(404).json({ error: "No eligible graduates found for this program." });
-//     }
- 
-//     const program    = await Program.findById(programId).lean();
-//     const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
-//     const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
- 
-//     // Build the PromotionData shape expected by generateAwardListDoc
-//     const wordData: any = {
-//       programName: program?.name || "Program",
-//       academicYear: (academicYear as string) || new Date().getFullYear().toString(),
-//       yearOfStudy: 0, // not used in the award list template
-//       eligible: list.map((s) => ({
-//         regNo:          s.regNo,
-//         name:           s.name,
-//         classification: s.classification,
-//         waa:            s.waa,
-//       })),
-//       blocked:    [],
-//       logoBuffer,
-//       examType:   "ORDINARY" as const,
-//     };
- 
-//     const buffer = await generateAwardListDoc(wordData);
- 
-//     const cleanYear  = ((academicYear as string) || "").replace(/\//g, "_");
-//     const progCode   = (program as any)?.code || "PROG";
-//     const fileName   = `Award_List_${progCode}_${cleanYear}.docx`.replace(/\s+/g, "_");
- 
-//     res
-//       .header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-//       .header("Content-Disposition", `attachment; filename="${fileName}"`)
-//       .send(buffer);
-//   }),
-// );
 
 // GET /promote/award-list?programId=xxx&academicYear=optional
 // Returns JSON array of eligible graduates for the frontend preview.
-router.get(
-  "/award-list",
-  requireAuth,
-  requireRole("coordinator"),
+router.get("/award-list", requireAuth, requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, academicYear } = req.query;
     if (!programId) return res.status(400).json({ error: "programId is required" });
  
     const { generateAwardList } = await import("../services/graduationEngine");
-    const list = await generateAwardList(
-      programId as string,
-      academicYear as string | undefined,
-    );
+    const list = await generateAwardList(programId as string, academicYear as string | undefined);
  
     res.json({ success: true, count: list.length, data: list });
   }),
@@ -441,10 +469,7 @@ router.get(
 // GET /promote/award-list-doc?programId=xxx&academicYear=optional&variant=simple|classified
 //   variant=simple     → plain list (S/N, Reg No., Name) — no WAA shown
 //   variant=classified → grouped by class with WAA column (default)
-router.get(
-  "/award-list-doc",
-  requireAuth,
-  requireRole("coordinator"),
+router.get("/award-list-doc", requireAuth, requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, academicYear, variant = "classified" } = req.query;
     if (!programId) return res.status(400).json({ error: "programId is required" });
@@ -452,10 +477,7 @@ router.get(
     const { generateAwardList }      = await import("../services/graduationEngine");
     const { generateAwardListDoc, generateSimpleAwardListDoc } = await import("../utils/promotionReport");
  
-    const list = await generateAwardList(
-      programId as string,
-      academicYear as string | undefined,
-    );
+    const list = await generateAwardList(programId as string, academicYear as string | undefined);
  
     if (list.length === 0) {
       return res.status(404).json({ error: "No eligible graduates found." });
@@ -473,10 +495,7 @@ router.get(
       awardList:    list,
     };
  
-    const buffer = (variant === "simple")
-      ? await generateSimpleAwardListDoc(docData)
-      : await generateAwardListDoc(docData);
- 
+    const buffer = (variant === "simple") ? await generateSimpleAwardListDoc(docData) : await generateAwardListDoc(docData);
     const cleanYear = ((academicYear as string) || "ALL").replace(/\//g, "_");
     const progCode  = (program as any)?.code || "PROG";
     const label     = variant === "simple" ? "SIMPLE" : "CLASSIFIED";
@@ -487,53 +506,83 @@ router.get(
       .header("Content-Disposition", `attachment; filename="${fileName}"`)
       .send(buffer);
   }),
-);
- 
+); 
 
-router.post(
-  "/:studentId",
-  requireAuth,
-  requireRole("coordinator"),
+// POST /promote/download-journey-cms
+// Generates the multi-year Student Journey CMS workbook for the Board.
+router.post("/download-journey-cms", requireAuth,
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { programId, academicYearName } = req.body;
+    if (!programId) return res.status(400).json({ error: "programId is required" });
+ 
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+ 
+    const send = (percent: number, message: string, file?: string) =>
+      res.write(`data: ${JSON.stringify({ percent, message, file })}\n\n`);
+ 
+    try {
+      send(10, "Loading student data...");
+ 
+      const program    = await Program.findById(programId).lean() as any;
+      const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+ 
+      send(30, "Building academic histories...");
+ 
+      const { generateJourneyCMS } = await import("../utils/journeyCMS");
+ 
+      send(60, "Generating journey workbook...");
+ 
+      const buffer = await generateJourneyCMS({
+        programId,
+        programName:  program?.name || "Program",
+        academicYear: academicYearName || new Date().getFullYear().toString(),
+        logoBuffer,
+        institutionId: program?.institution?.toString() || "",
+      });
+ 
+      send(95, "Preparing download...");
+ 
+      const base64 = buffer.toString("base64");
+      res.write(`data: ${JSON.stringify({ percent: 100, message: "Complete!", file: base64 })}\n\n`);
+      res.end();
+    } catch (err: any) {
+      console.error("[Journey CMS] Error:", err.message, err.stack);
+      res.write(`data: ${JSON.stringify({ error: err.message || "Failed to generate Journey CMS" })}\n\n`);
+      res.end();
+    }
+  }),
+);
+
+router.post("/:studentId", requireAuth, requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { studentId } = req.params;
-
     const result = await promoteStudent(studentId);
 
-    if (!result.success) {
-      return res.status(400).json({error: "Promotion Denied", message: result.message, details: result.details});
-    }
+    if (!result.success) return res.status(400).json({error: "Promotion Denied", message: result.message, details: result.details});
 
     await logAudit(req, { action: "individual_student_promoted", targetUser: studentId as any, details: { message: result.message }});
-
     res.json(result);
   }),
 );
 
 // POST /promote/undo/:studentId
-router.post(
-  "/undo/:studentId",
-  requireAuth,
-  requireRole("coordinator"),
+router.post("/undo/:studentId", requireAuth, requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { studentId } = req.params;
  
     const result = await undoPromotion(studentId);
  
     if (!result.success) {
-      return res.status(400).json({
-        success: false,
-        message: result.message,
-      });
+      return res.status(400).json({ success: false, message: result.message });
     }
  
     await logAudit(req, {
       action:     "promotion_reversed",
       targetUser: studentId as any,
-      details: {
-        message:      result.message,
-        previousYear: result.previousYear,
-        restoredYear: result.restoredYear,
-      },
+      details: { message: result.message, previousYear: result.previousYear, restoredYear: result.restoredYear },
     });
  
     res.json(result);
@@ -541,10 +590,7 @@ router.post(
 );
 
 // promote individual student
-router.post(
-  "/:studentId",
-  requireAuth,
-  requireRole("coordinator"),
+router.post("/:studentId", requireAuth, requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { studentId } = req.params;
 
@@ -573,3 +619,21 @@ export default router;
 			
 
 																
+
+
+
+
+
+
+
+
+
+
+// CORRECT WORKFLOW FOR SUPP/SPECIAL SESSION:
+//   1. Set AcademicYear.session = "SUPPLEMENTARY" for 2017/2018
+//   2. Generate scoresheet → only failing students appear
+//   3. Upload supp marks
+//   4. POST /admin/backfill-direct-grades  ← CRITICAL: creates FinalGrade records
+//   5. Regenerate CMS → statuses update
+//   6. Promote eligible students
+// */

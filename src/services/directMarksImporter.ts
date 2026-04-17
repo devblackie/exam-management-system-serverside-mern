@@ -451,10 +451,246 @@
 
 
 
+// // last to be used as base for final version with enhanced logging and error handling, plus pre-fetching ProgramUnits to avoid per-row queries
+
+
+// // src/services/directMarksImporter.ts
+// import xlsx from "xlsx";
+// import mongoose from "mongoose";
+// import Student from "../models/Student";
+// import AcademicYear from "../models/AcademicYear";
+// import ProgramUnit from "../models/ProgramUnit";
+// import Unit from "../models/Unit";
+// import MarkDirect from "../models/MarkDirect";
+// import type { AuthenticatedRequest } from "../middleware/auth";
+
+// interface ImportResult { total: number; success: number; errors: string[]; warnings: string[] }
+
+// // Maps ALL attempt labels used in directTemplate.ts back to DB attempt strings.
+// // Column D values: B/S, A/S, Supp, SPEC, Special, RP1C, RP2C, A/CF,
+// //                  A/SO, A/SOS, RPU1, RPU2, A/RA1, RP1, RP2
+// function detectAttemptType(rawCell: any): string {
+//   const raw = (rawCell?.toString() || "").toLowerCase().trim();
+//   console.log(`[directImporter] detectAttemptType raw="${raw}"`);
+//   if (!raw)                                                           return "1st";
+//   if (raw === "a/s" || raw.startsWith("supp"))                       return "supplementary";
+//   if (raw === "spec" || raw.includes("special"))                     return "special";
+//   if (/rp\d+c/i.test(raw) || raw === "a/cf")                        return "re-take"; // carry forward
+//   if (raw === "a/so" || raw === "a/sos" || raw.includes("stayout")) return "re-take"; // stayout retake
+//   if (/rpu\d*/i.test(raw))                                           return "re-take"; // repeat unit
+//   if (raw === "b/s" || /a\/ra\d/i.test(raw) || /rp\d+(?!c)/i.test(raw)) return "1st"; // repeat year / re-admission
+//   return "1st";
+// }
+
+// export async function importDirectMarksFromBuffer(
+//   buffer: Buffer, filename: string, req: AuthenticatedRequest,
+// ): Promise<ImportResult> {
+//   const institutionId = req.user.institution;
+//   if (!institutionId) throw new Error("Coordinator not linked to institution");
+
+//   console.log(`[directImporter] Starting import. File: ${filename}, Institution: ${institutionId}`);
+
+//   const result: ImportResult = { total: 0, success: 0, errors: [], warnings: [] };
+//   const workbook = xlsx.read(buffer, { type: "buffer" });
+//   const sheetName = workbook.SheetNames[0];
+//   const sheet = workbook.Sheets[sheetName];
+
+//   console.log(`[directImporter] Sheet name: "${sheetName}"`);
+
+//   // directTemplate puts unit code at F12, year at C8
+//   const unitCodeRaw     = sheet["F12"]?.v;
+//   const yearTextRaw     = sheet["C8"]?.v;
+//   const unitCode        = unitCodeRaw?.toString().trim().toUpperCase();
+//   const yearText        = yearTextRaw?.toString() || "";
+//   const yearMatch       = yearText.match(/\d{4}\/\d{4}/);
+//   const academicYearStr = yearMatch ? yearMatch[0] : null;
+
+//   console.log(`[directImporter] Metadata — unitCode: "${unitCode}", yearText: "${yearText}", academicYearStr: "${academicYearStr}"`);
+
+//   if (!unitCode || !academicYearStr) {
+//     const msg = `Metadata missing. Unit code at F12: "${unitCode}", Academic year at C8: "${academicYearStr}". Check cells F12 and C8.`;
+//     console.error(`[directImporter] ${msg}`);
+//     throw new Error(msg);
+//   }
+
+//   // Look up the Unit document
+//   const unitDoc = await Unit.findOne({ code: unitCode }).lean();
+//   console.log(`[directImporter] Unit lookup for code="${unitCode}": ${unitDoc ? `found _id=${(unitDoc as any)._id}` : "NOT FOUND"}`);
+//   if (!unitDoc) throw new Error(`Unit "${unitCode}" not found in the database.`);
+
+//   // Look up the AcademicYear document
+//   const academicYearDoc = await AcademicYear.findOne({
+//     year: { $regex: new RegExp(`^${academicYearStr.replace("/", "\\/")}$`, "i") },
+//     institution: institutionId,
+//   }).lean();
+//   console.log(`[directImporter] AcademicYear lookup for "${academicYearStr}": ${academicYearDoc ? `found _id=${(academicYearDoc as any)._id}` : "NOT FOUND"}`);
+//   if (!academicYearDoc) throw new Error(`Academic Year "${academicYearStr}" not found for this institution.`);
+
+//   // Data starts at row 17 (range:15 means we skip first 15 rows, so index 0 = row 16, index 1 = row 17)
+//   const rawRows = xlsx.utils.sheet_to_json<any[]>(sheet, { header: 1, range: 15 });
+//   console.log(`[directImporter] Total raw rows parsed (from row 16 onward): ${rawRows.length}`);
+
+//   // Pre-fetch all ProgramUnits for this unit across all programs in the institution
+//   // to avoid per-row DB queries where possible
+//   const allProgramUnitsForUnit = await ProgramUnit.find({
+//     unit: (unitDoc as any)._id,
+//   }).lean();
+//   console.log(`[directImporter] ProgramUnits found for unit ${unitCode}: ${allProgramUnitsForUnit.length}`);
+
+//   for (const [index, row] of rawRows.entries()) {
+//     // Row index 0 = spreadsheet row 16 (header), index 1 = row 17 (first data row)
+//     // Skip the header row (index 0) and any row without a reg number
+//     const regNo = row[1]?.toString().trim().toUpperCase();
+//     if (!regNo || regNo === "REG. NO." || regNo === "REG NO") {
+//       console.log(`[directImporter] Row ${index + 16}: skipping (no regNo or header row)`);
+//       continue;
+//     }
+
+//     result.total++;
+//     const rowNum = index + 16;
+//     console.log(`[directImporter] Processing row ${rowNum}: regNo="${regNo}"`);
+
+//     const session = await mongoose.startSession();
+//     try {
+//       await session.withTransaction(async () => {
+//         // Find student
+//         const student = await Student.findOne({ regNo, institution: institutionId }).lean();
+//         if (!student) {
+//           throw new Error(`Student "${regNo}" not found for this institution`);
+//         }
+//         console.log(`[directImporter] Row ${rowNum}: student found _id=${(student as any)._id}, program=${(student as any).program}`);
+
+//         // Find the correct ProgramUnit: must belong to student's program AND reference our unit
+//         const programUnit = allProgramUnitsForUnit.find(
+//           (pu: any) => pu.program.toString() === (student as any).program.toString()
+//         );
+
+//         if (!programUnit) {
+//           // Fallback: query directly in case the pre-fetch missed it
+//           console.warn(`[directImporter] Row ${rowNum}: ProgramUnit not in pre-fetched list, querying directly...`);
+//           const directPU = await ProgramUnit.findOne({
+//             program: (student as any).program,
+//             unit: (unitDoc as any)._id,
+//           }).lean();
+
+//           if (!directPU) {
+//             throw new Error(
+//               `Unit "${unitCode}" is not linked to the curriculum for program of student "${regNo}" (programId: ${(student as any).program})`
+//             );
+//           }
+//           console.log(`[directImporter] Row ${rowNum}: ProgramUnit found via direct query: _id=${(directPU as any)._id}`);
+//           await upsertMark(directPU, student, row, rowNum, institutionId, academicYearDoc, unitDoc, req, session, result);
+//           return;
+//         }
+
+//         console.log(`[directImporter] Row ${rowNum}: ProgramUnit found _id=${(programUnit as any)._id}`);
+//         await upsertMark(programUnit, student, row, rowNum, institutionId, academicYearDoc, unitDoc, req, session, result);
+//       });
+
+//       result.success++;
+//       console.log(`[directImporter] Row ${rowNum}: SUCCESS`);
+//     } catch (err: any) {
+//       const msg = `Row ${rowNum} (${regNo}): ${err.message}`;
+//       console.error(`[directImporter] FAILED — ${msg}`, err.stack || "");
+//       result.errors.push(msg);
+//     } finally {
+//       await session.endSession();
+//     }
+//   }
+
+//   console.log(`[directImporter] Import complete. Total=${result.total}, Success=${result.success}, Errors=${result.errors.length}`);
+//   return result;
+// }
+
+// // ─── Helper: build markData and upsert ───────────────────────────────────────
+// async function upsertMark(
+//   programUnit: any,
+//   student: any,
+//   row: any[],
+//   rowNum: number,
+//   institutionId: any,
+//   academicYearDoc: any,
+//   unitDoc: any,
+//   req: AuthenticatedRequest,
+//   session: mongoose.ClientSession,
+//   result: ImportResult,
+// ): Promise<void> {
+//   // Column layout (directTemplate.ts):
+//   //  A=0  S/N    B=1  REG. NO.   C=2  NAME     D=3  ATTEMPT
+//   //  E=4  CA(/30) F=5 EXAM(/70)  G=6  INTERNAL H=7  EXTERNAL  I=8  AGREED  J=9  GRADE
+//   const attempt   = detectAttemptType(row[3]);
+//   const isSpecial = attempt === "special";
+//   const isSupp    = attempt === "supplementary";
+//   const isRetake  = attempt === "re-take";
+
+//   const caTotal30   = Number(row[4]) || 0;
+//   const examTotal70 = Number(row[5]) || 0;
+
+//   // Agreed mark: prefer explicit col I value, fall back to CA + Exam sum
+//   const rawAgreed = row[8];
+//   const agreedMark = (rawAgreed !== undefined && rawAgreed !== null && rawAgreed !== "")
+//     ? Number(rawAgreed)
+//     : caTotal30 + examTotal70;
+
+//   const externalRaw = row[7];
+//   const externalTotal100 = (externalRaw !== undefined && externalRaw !== null && externalRaw !== "")
+//     ? Number(externalRaw)
+//     : null;
+
+//   const isMissingCA = caTotal30 === 0 && !isSupp && !isSpecial;
+
+//   console.log(`[directImporter] Row ${rowNum}: attempt="${attempt}", CA=${caTotal30}, Exam=${examTotal70}, Agreed=${agreedMark}, isSpecial=${isSpecial}, isSupp=${isSupp}, isMissingCA=${isMissingCA}`);
+
+//   const markData = {
+//     institution:      institutionId,
+//     student:          student._id,
+//     programUnit:      programUnit._id,
+//     academicYear:     academicYearDoc._id,
+//     caTotal30,
+//     examTotal70,
+//     externalTotal100,
+//     agreedMark,
+//     attempt,
+//     isSpecial,
+//     isSupplementary:  isSupp,
+//     isRetake,
+//     isMissingCA,
+//     uploadedBy:       req.user._id,
+//     uploadedAt:       new Date(),
+//     deletedAt:        null,
+//   };
+
+//   const filter = {
+//     student:      student._id,
+//     programUnit:  programUnit._id,
+//     academicYear: academicYearDoc._id,
+//   };
+
+//   console.log(`[directImporter] Row ${rowNum}: upserting MarkDirect with filter:`, JSON.stringify(filter));
+
+//   await MarkDirect.findOneAndUpdate(
+//     filter,
+//     { $set: markData },
+//     { upsert: true, new: true, session },
+//   );
+// }
 
 
 
-// src/services/directMarksImporter.ts
+
+
+
+// serverside/src/services/directMarksImporter.ts
+// KEY FIX: After upserting a MarkDirect record, call computeFinalGrade()
+// so a FinalGrade document is created/updated for the student.
+// Without this, FinalGrade is empty for all direct-entry units, causing:
+//   - Journey CMS to show INC (no FinalGrade to read from)
+//   - WAA to compute as 0 (graduationEngine priority 3 reads FinalGrade only)
+//   - gradeCalculator WAA to be wrong (statusEngine reads FinalGrade)
+//
+// computeFinalGrade handles MarkDirect already — it checks both Mark and
+// MarkDirect when looking up by markId. We just need to pass the saved ID.
+
 import xlsx from "xlsx";
 import mongoose from "mongoose";
 import Student from "../models/Student";
@@ -462,23 +698,21 @@ import AcademicYear from "../models/AcademicYear";
 import ProgramUnit from "../models/ProgramUnit";
 import Unit from "../models/Unit";
 import MarkDirect from "../models/MarkDirect";
+import { computeFinalGrade } from "./gradeCalculator";
 import type { AuthenticatedRequest } from "../middleware/auth";
 
 interface ImportResult { total: number; success: number; errors: string[]; warnings: string[] }
 
 // Maps ALL attempt labels used in directTemplate.ts back to DB attempt strings.
-// Column D values: B/S, A/S, Supp, SPEC, Special, RP1C, RP2C, A/CF,
-//                  A/SO, A/SOS, RPU1, RPU2, A/RA1, RP1, RP2
 function detectAttemptType(rawCell: any): string {
   const raw = (rawCell?.toString() || "").toLowerCase().trim();
-  console.log(`[directImporter] detectAttemptType raw="${raw}"`);
   if (!raw)                                                           return "1st";
   if (raw === "a/s" || raw.startsWith("supp"))                       return "supplementary";
   if (raw === "spec" || raw.includes("special"))                     return "special";
-  if (/rp\d+c/i.test(raw) || raw === "a/cf")                        return "re-take"; // carry forward
-  if (raw === "a/so" || raw === "a/sos" || raw.includes("stayout")) return "re-take"; // stayout retake
-  if (/rpu\d*/i.test(raw))                                           return "re-take"; // repeat unit
-  if (raw === "b/s" || /a\/ra\d/i.test(raw) || /rp\d+(?!c)/i.test(raw)) return "1st"; // repeat year / re-admission
+  if (/rp\d+c/i.test(raw) || raw === "a/cf")                        return "re-take";
+  if (raw === "a/so" || raw === "a/sos" || raw.includes("stayout")) return "re-take";
+  if (/rpu\d*/i.test(raw))                                           return "re-take";
+  if (raw === "b/s" || /a\/ra\d/i.test(raw) || /rp\d+(?!c)/i.test(raw)) return "1st";
   return "1st";
 }
 
@@ -488,14 +722,12 @@ export async function importDirectMarksFromBuffer(
   const institutionId = req.user.institution;
   if (!institutionId) throw new Error("Coordinator not linked to institution");
 
-  console.log(`[directImporter] Starting import. File: ${filename}, Institution: ${institutionId}`);
+  // console.log(`[directImporter] Starting import. File: ${filename}`);
 
   const result: ImportResult = { total: 0, success: 0, errors: [], warnings: [] };
-  const workbook = xlsx.read(buffer, { type: "buffer" });
+  const workbook  = xlsx.read(buffer, { type: "buffer" });
   const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-
-  console.log(`[directImporter] Sheet name: "${sheetName}"`);
+  const sheet     = workbook.Sheets[sheetName];
 
   // directTemplate puts unit code at F12, year at C8
   const unitCodeRaw     = sheet["F12"]?.v;
@@ -505,119 +737,114 @@ export async function importDirectMarksFromBuffer(
   const yearMatch       = yearText.match(/\d{4}\/\d{4}/);
   const academicYearStr = yearMatch ? yearMatch[0] : null;
 
-  console.log(`[directImporter] Metadata — unitCode: "${unitCode}", yearText: "${yearText}", academicYearStr: "${academicYearStr}"`);
-
   if (!unitCode || !academicYearStr) {
-    const msg = `Metadata missing. Unit code at F12: "${unitCode}", Academic year at C8: "${academicYearStr}". Check cells F12 and C8.`;
-    console.error(`[directImporter] ${msg}`);
-    throw new Error(msg);
+    throw new Error(
+      `Metadata missing. Unit code at F12: "${unitCode}", Academic year at C8: "${academicYearStr}". Check cells F12 and C8.`,
+    );
   }
 
-  // Look up the Unit document
   const unitDoc = await Unit.findOne({ code: unitCode }).lean();
-  console.log(`[directImporter] Unit lookup for code="${unitCode}": ${unitDoc ? `found _id=${(unitDoc as any)._id}` : "NOT FOUND"}`);
   if (!unitDoc) throw new Error(`Unit "${unitCode}" not found in the database.`);
 
-  // Look up the AcademicYear document
   const academicYearDoc = await AcademicYear.findOne({
-    year: { $regex: new RegExp(`^${academicYearStr.replace("/", "\\/")}$`, "i") },
+    year:        { $regex: new RegExp(`^${academicYearStr.replace("/", "\\/")}$`, "i") },
     institution: institutionId,
   }).lean();
-  console.log(`[directImporter] AcademicYear lookup for "${academicYearStr}": ${academicYearDoc ? `found _id=${(academicYearDoc as any)._id}` : "NOT FOUND"}`);
   if (!academicYearDoc) throw new Error(`Academic Year "${academicYearStr}" not found for this institution.`);
 
-  // Data starts at row 17 (range:15 means we skip first 15 rows, so index 0 = row 16, index 1 = row 17)
   const rawRows = xlsx.utils.sheet_to_json<any[]>(sheet, { header: 1, range: 15 });
-  console.log(`[directImporter] Total raw rows parsed (from row 16 onward): ${rawRows.length}`);
 
-  // Pre-fetch all ProgramUnits for this unit across all programs in the institution
-  // to avoid per-row DB queries where possible
   const allProgramUnitsForUnit = await ProgramUnit.find({
     unit: (unitDoc as any)._id,
   }).lean();
-  console.log(`[directImporter] ProgramUnits found for unit ${unitCode}: ${allProgramUnitsForUnit.length}`);
 
   for (const [index, row] of rawRows.entries()) {
-    // Row index 0 = spreadsheet row 16 (header), index 1 = row 17 (first data row)
-    // Skip the header row (index 0) and any row without a reg number
     const regNo = row[1]?.toString().trim().toUpperCase();
-    if (!regNo || regNo === "REG. NO." || regNo === "REG NO") {
-      console.log(`[directImporter] Row ${index + 16}: skipping (no regNo or header row)`);
-      continue;
-    }
+    if (!regNo || regNo === "REG. NO." || regNo === "REG NO") continue;
 
     result.total++;
     const rowNum = index + 16;
-    console.log(`[directImporter] Processing row ${rowNum}: regNo="${regNo}"`);
 
     const session = await mongoose.startSession();
     try {
-      await session.withTransaction(async () => {
-        // Find student
-        const student = await Student.findOne({ regNo, institution: institutionId }).lean();
-        if (!student) {
-          throw new Error(`Student "${regNo}" not found for this institution`);
-        }
-        console.log(`[directImporter] Row ${rowNum}: student found _id=${(student as any)._id}, program=${(student as any).program}`);
+      let savedMarkId: mongoose.Types.ObjectId | null = null;
 
-        // Find the correct ProgramUnit: must belong to student's program AND reference our unit
-        const programUnit = allProgramUnitsForUnit.find(
-          (pu: any) => pu.program.toString() === (student as any).program.toString()
+      await session.withTransaction(async () => {
+        const student = await Student.findOne({ regNo, institution: institutionId }).lean();
+        if (!student) throw new Error(`Student "${regNo}" not found for this institution`);
+
+        let programUnit = allProgramUnitsForUnit.find(
+          (pu: any) => pu.program.toString() === (student as any).program.toString(),
         );
 
         if (!programUnit) {
-          // Fallback: query directly in case the pre-fetch missed it
-          console.warn(`[directImporter] Row ${rowNum}: ProgramUnit not in pre-fetched list, querying directly...`);
-          const directPU = await ProgramUnit.findOne({
+          programUnit = await ProgramUnit.findOne({
             program: (student as any).program,
-            unit: (unitDoc as any)._id,
-          }).lean();
-
-          if (!directPU) {
-            throw new Error(
-              `Unit "${unitCode}" is not linked to the curriculum for program of student "${regNo}" (programId: ${(student as any).program})`
-            );
-          }
-          console.log(`[directImporter] Row ${rowNum}: ProgramUnit found via direct query: _id=${(directPU as any)._id}`);
-          await upsertMark(directPU, student, row, rowNum, institutionId, academicYearDoc, unitDoc, req, session, result);
-          return;
+            unit:    (unitDoc as any)._id,
+          }).lean() as any;
         }
 
-        console.log(`[directImporter] Row ${rowNum}: ProgramUnit found _id=${(programUnit as any)._id}`);
-        await upsertMark(programUnit, student, row, rowNum, institutionId, academicYearDoc, unitDoc, req, session, result);
+        if (!programUnit) {
+          throw new Error(
+            `Unit "${unitCode}" is not linked to the curriculum for student "${regNo}"`,
+          );
+        }
+
+        const savedMark = await upsertMarkDirect(
+          programUnit, student, row, rowNum,
+          institutionId, academicYearDoc, req, session,
+        );
+
+        savedMarkId = savedMark._id as mongoose.Types.ObjectId;
       });
 
+      // ── Call computeFinalGrade OUTSIDE the transaction ─────────────────────
+      // computeFinalGrade opens its own session internally; nesting sessions
+      // can deadlock. We call it after the MarkDirect upsert commits.
+      if (savedMarkId) {
+        try {
+          await computeFinalGrade({ markId: savedMarkId });
+          // console.log(`[directImporter] Row ${rowNum}: FinalGrade computed for ${regNo}`);
+        } catch (gradeErr: any) {
+          // Non-fatal: mark was saved, grade calc failed (e.g. missing institution settings)
+          console.warn(
+            `[directImporter] Row ${rowNum}: FinalGrade calc failed for ${regNo}: ${gradeErr.message}`,
+          );
+          result.warnings.push(`Row ${rowNum} (${regNo}): grade calc — ${gradeErr.message}`);
+        }
+      }
+
       result.success++;
-      console.log(`[directImporter] Row ${rowNum}: SUCCESS`);
+      // console.log(`[directImporter] Row ${rowNum}: SUCCESS`);
     } catch (err: any) {
       const msg = `Row ${rowNum} (${regNo}): ${err.message}`;
-      console.error(`[directImporter] FAILED — ${msg}`, err.stack || "");
+      console.error(`[directImporter] FAILED — ${msg}`);
       result.errors.push(msg);
     } finally {
       await session.endSession();
     }
   }
 
-  console.log(`[directImporter] Import complete. Total=${result.total}, Success=${result.success}, Errors=${result.errors.length}`);
+  // console.log(`[directImporter] Done. Total=${result.total}, Success=${result.success}, Errors=${result.errors.length}`);
   return result;
 }
 
-// ─── Helper: build markData and upsert ───────────────────────────────────────
-async function upsertMark(
-  programUnit: any,
-  student: any,
-  row: any[],
-  rowNum: number,
-  institutionId: any,
+// ─── Helper: upsert the MarkDirect document ───────────────────────────────────
+// Returns the saved document so the caller can pass its _id to computeFinalGrade.
+
+async function upsertMarkDirect(
+  programUnit:    any,
+  student:        any,
+  row:            any[],
+  rowNum:         number,
+  institutionId:  any,
   academicYearDoc: any,
-  unitDoc: any,
-  req: AuthenticatedRequest,
-  session: mongoose.ClientSession,
-  result: ImportResult,
-): Promise<void> {
+  req:            AuthenticatedRequest,
+  session:        mongoose.ClientSession,
+): Promise<any> {
   // Column layout (directTemplate.ts):
-  //  A=0  S/N    B=1  REG. NO.   C=2  NAME     D=3  ATTEMPT
-  //  E=4  CA(/30) F=5 EXAM(/70)  G=6  INTERNAL H=7  EXTERNAL  I=8  AGREED  J=9  GRADE
+  //  A=0 S/N  B=1 REG.NO.  C=2 NAME  D=3 ATTEMPT
+  //  E=4 CA(/30)  F=5 EXAM(/70)  G=6 INTERNAL  H=7 EXTERNAL  I=8 AGREED  J=9 GRADE
   const attempt   = detectAttemptType(row[3]);
   const isSpecial = attempt === "special";
   const isSupp    = attempt === "supplementary";
@@ -626,51 +853,48 @@ async function upsertMark(
   const caTotal30   = Number(row[4]) || 0;
   const examTotal70 = Number(row[5]) || 0;
 
-  // Agreed mark: prefer explicit col I value, fall back to CA + Exam sum
-  const rawAgreed = row[8];
+  const rawAgreed  = row[8];
   const agreedMark = (rawAgreed !== undefined && rawAgreed !== null && rawAgreed !== "")
     ? Number(rawAgreed)
     : caTotal30 + examTotal70;
 
-  const externalRaw = row[7];
-  const externalTotal100 = (externalRaw !== undefined && externalRaw !== null && externalRaw !== "")
+  const externalRaw       = row[7];
+  const externalTotal100  = (externalRaw !== undefined && externalRaw !== null && externalRaw !== "")
     ? Number(externalRaw)
     : null;
 
   const isMissingCA = caTotal30 === 0 && !isSupp && !isSpecial;
 
-  console.log(`[directImporter] Row ${rowNum}: attempt="${attempt}", CA=${caTotal30}, Exam=${examTotal70}, Agreed=${agreedMark}, isSpecial=${isSpecial}, isSupp=${isSupp}, isMissingCA=${isMissingCA}`);
-
   const markData = {
-    institution:      institutionId,
-    student:          student._id,
-    programUnit:      programUnit._id,
-    academicYear:     academicYearDoc._id,
+    institution:     institutionId,
+    student:         (student as any)._id,
+    programUnit:     (programUnit as any)._id,
+    academicYear:    (academicYearDoc as any)._id,
     caTotal30,
     examTotal70,
     externalTotal100,
     agreedMark,
     attempt,
     isSpecial,
-    isSupplementary:  isSupp,
+    isSupplementary: isSupp,
     isRetake,
     isMissingCA,
-    uploadedBy:       req.user._id,
-    uploadedAt:       new Date(),
-    deletedAt:        null,
+    uploadedBy:      req.user._id,
+    uploadedAt:      new Date(),
+    deletedAt:       null,
   };
 
-  const filter = {
-    student:      student._id,
-    programUnit:  programUnit._id,
-    academicYear: academicYearDoc._id,
-  };
-
-  console.log(`[directImporter] Row ${rowNum}: upserting MarkDirect with filter:`, JSON.stringify(filter));
-
-  await MarkDirect.findOneAndUpdate(
-    filter,
+  const saved = await MarkDirect.findOneAndUpdate(
+    {
+      student:      (student as any)._id,
+      programUnit:  (programUnit as any)._id,
+      academicYear: (academicYearDoc as any)._id,
+    },
     { $set: markData },
     { upsert: true, new: true, session },
   );
+
+  // console.log(`[directImporter] Row ${rowNum}: MarkDirect upserted _id=${saved._id}` + ` attempt=${attempt} CA=${caTotal30} Exam=${examTotal70} Agreed=${agreedMark}`);
+
+  return saved;
 }

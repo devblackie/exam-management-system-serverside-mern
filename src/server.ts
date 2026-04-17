@@ -1,4 +1,8 @@
 // serverside/src/server.ts
+// Force reliable DNS resolver (fixes querySrv ETIMEOUT on Windows/Node 18+)
+// import dns from "node:dns";
+// dns.setServers(["8.8.8.8", "1.1.1.1", "8.8.4.4"]);
+
 import app from "./app";
 import connectDB from "./config/db";
 import config from "./config/config";
