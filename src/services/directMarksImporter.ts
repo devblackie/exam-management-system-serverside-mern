@@ -703,6 +703,13 @@ import type { AuthenticatedRequest } from "../middleware/auth";
 
 interface ImportResult { total: number; success: number; errors: string[]; warnings: string[] }
 
+function stripQualifier(rawRegNo: string): string {
+  // Match: slash + 4-digit year + qualifier suffix (letters + digits + optional S2)
+  // e.g.  /2017RP1  →  /2017
+  //        /2016RP1C →  /2016
+  return rawRegNo.replace(/(\/\d{4})[A-Z][A-Z0-9]*$/i, "$1");
+}
+
 // Maps ALL attempt labels used in directTemplate.ts back to DB attempt strings.
 function detectAttemptType(rawCell: any): string {
   const raw = (rawCell?.toString() || "").toLowerCase().trim();
@@ -759,8 +766,12 @@ export async function importDirectMarksFromBuffer(
   }).lean();
 
   for (const [index, row] of rawRows.entries()) {
-    const regNo = row[1]?.toString().trim().toUpperCase();
-    if (!regNo || regNo === "REG. NO." || regNo === "REG NO") continue;
+    // const regNo = row[1]?.toString().trim().toUpperCase();
+    // if (!regNo || regNo === "REG. NO." || regNo === "REG NO") continue;
+
+    const rawCell = row[1]?.toString().trim().toUpperCase();
+    if (!rawCell || rawCell === "REG. NO." || rawCell === "REG NO") continue;
+    const regNo = stripQualifier(rawCell);
 
     result.total++;
     const rowNum = index + 16;

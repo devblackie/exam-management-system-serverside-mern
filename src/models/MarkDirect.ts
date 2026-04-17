@@ -49,8 +49,21 @@ const schema = new Schema<IMarkDirect>({
 schema.index({ student: 1, programUnit: 1, academicYear: 1 }, { unique: true });
 schema.index({ student: 1, programUnit: 1, academicYear: 1, deletedAt: 1 });
 
+// schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
+//   if (!this.getQuery().deletedAt) {
+//     this.where({ deletedAt: null });
+//   }
+//   next();
+// });
+
 schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
-  if (!this.getQuery().deletedAt) {
+  // Check if the query is explicitly looking for deletedAt.
+  // If it's not looking for it, then append { deletedAt: null }
+  const query = this.getQuery();
+
+  // If the user has manually set deletedAt in the query (e.g. { deletedAt: { $ne: null } }),
+  // we do NOT want to overwrite it.
+  if (query.deletedAt === undefined) {
     this.where({ deletedAt: null });
   }
   next();

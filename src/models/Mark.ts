@@ -94,9 +94,22 @@ const schema = new Schema<IMark>(
 
 // Unique index must be on the combination of Student, ProgramUnit, and AcademicYear
 schema.index({ student: 1, programUnit: 1, academicYear: 1 }, { unique: true });
+// schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
+//   // If the query specifically searches for deletedAt, don't override it
+//   if (!this.getQuery().deletedAt) this.where({ deletedAt: null });
+//   next();
+// });
+
 schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
-  // If the query specifically searches for deletedAt, don't override it
-  if (!this.getQuery().deletedAt) this.where({ deletedAt: null });
+  // Check if the query is explicitly looking for deletedAt.
+  // If it's not looking for it, then append { deletedAt: null }
+  const query = this.getQuery();
+
+  // If the user has manually set deletedAt in the query (e.g. { deletedAt: { $ne: null } }),
+  // we do NOT want to overwrite it.
+  if (query.deletedAt === undefined) {
+    this.where({ deletedAt: null });
+  }
   next();
 });
 schema.index({ student: 1, academicYear: 1, programUnit: 1, deletedAt: 1 });

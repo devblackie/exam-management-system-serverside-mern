@@ -1,136 +1,4 @@
-// // src/routes/maintenance.ts
-// import express, { Response } from "express";
-// import mongoose from "mongoose";
-// import Student from "../models/Student";
-// import FinalGrade from "../models/FinalGrade";
-// import { AuthenticatedRequest, requireAuth, requireRole } from "../middleware/auth";
-// import { asyncHandler } from "../middleware/asyncHandler";
-// import Mark from "../models/Mark";
-// import Unit from "../models/Unit";
-// import AcademicYear from "../models/AcademicYear";
-// import ProgramUnit from "../models/ProgramUnit";
-// import { computeFinalGrade } from "../services/gradeCalculator";
-
-// const router = express.Router();
-
-// // 1. BULK SOFT DELETE
-// router.post(
-//   "/bulk-cleanup",
-//   requireAuth,
-//   requireRole("coordinator", "admin"),
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     const { unitCode, programId, academicYear } = req.body;
-//     // console.log(`[CLEANUP] Initiated by ${req.user.email}. Params:`, req.body);
-
-//     if (!academicYear) return res.status(400).json({ error: "Academic Year is required" });
-    
-//     // 1. Resolve IDs
-//     const yearDoc = await AcademicYear.findOne({ year: academicYear });
-//     const unitDoc = unitCode ? await Unit.findOne({ code: unitCode }) : null;
-
-//     if (!yearDoc) return res.status(404).json({ error: "Academic Year not found" });
-    
-
-//     // 2. Build Query
-//     let query: any = {
-//       academicYear: yearDoc._id,      
-//     };
-
-//     if (programId) {
-//       const studentIds = await Student.find({ program: programId }).distinct( "_id" );
-//       query.student = { $in: studentIds };
-//     }
-
-//     if (unitDoc) {
-//       const pUnits = await ProgramUnit.find({ unit: unitDoc._id }).distinct("_id" );
-//       query.programUnit = { $in: pUnits };
-//     }
-
-//     const marksToTrash = await Mark.find({ ...query, deletedAt: null });  
-//     const updateResult = await Mark.updateMany({ ...query, deletedAt: null }, { $set: { deletedAt: new Date() }});
-//     const gradeResult = await FinalGrade.deleteMany(query);
-
-//     res.json({
-//       count: updateResult.modifiedCount,
-//       message: `Successfully moved ${updateResult.modifiedCount} marks to trash and removed ${gradeResult.deletedCount} grades.`,
-//     });
-//   }),
-// );
-
-// // 2. GET TRASHED MARKS
-// router.get(
-//   "/trash-bin",
-//   requireAuth,
-//   requireRole("coordinator"),
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     // PASS THE CRITERIA DIRECTLY TO FIND()
-//     const trashed = await Mark.find({ deletedAt: { $ne: null } }) 
-//       .populate("student", "regNo name")
-//       .populate({ path: "programUnit", populate: { path: "unit", select: "code" }})
-//       .populate("academicYear", "year")
-//       .sort({ deletedAt: -1 })
-//       .limit(100);
-
-//     // console.log("Trashed marks found:", trashed.length);
-//     res.json(trashed);
-//   }),
-// );
-
-// // 3. RESTORE OR PERMANENT DELETE
-// router.post(
-//   "/trash-action",
-//   requireAuth,
-//   requireRole("coordinator"),
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     let { markIds, action } = req.body;                
-
-//     // Ensure markIds is an array
-//     if (!Array.isArray(markIds)) markIds = [markIds];
-    
-    
-//     // console.log(`[MAINTENANCE] Action: ${action}, IDs:`, markIds);
-//     if (action === "restore") {
-//       // console.log(`[MAINTENANCE] Restoring marks: ${markIds}`);
-//       // 1. Restore the marks
-//       const marks = await Mark.find({ _id: { $in: markIds }, deletedAt: { $ne: null }});
-//       // console.log(`[MAINTENANCE] Found ${marks.length} marks to restore.`);
-
-
-//       await Mark.updateMany({ _id: { $in: markIds } }, { $set: { deletedAt: null }});
-//       // console.log(`[MAINTENANCE] Mark documents updated to null deletedAt.`);
-
-//       // 2. RECALCULATE GRADES for those marks
-//       for (const mark of marks) await computeFinalGrade({ markId: mark._id as any})
-     
-//       return res.json({ message: "Marks restored and grades recalculated" });
-//     }
-
-//     if (action === "purge") {
-//       await Mark.deleteMany({ _id: { $in: markIds } });
-//       return res.json({ message: "Marks permanently deleted from database" });
-//     }
-
-//     res.status(400).json({ error: "Invalid action" });
-//   }),
-// );
-
-
-
-// export default router;
-
-
-
-
-
-
-
-
 // src/routes/maintenance.ts
-// Updated to include MarkDirect in all operations:
-//   - bulk-cleanup: soft-deletes both Mark and MarkDirect records
-//   - trash-bin: returns trashed records from both collections, tagged by source
-//   - trash-action restore: restores from the correct collection and recalculates FinalGrade
-//   - trash-action purge: permanently deletes from the correct collection
 
 import express, { Response } from "express";
 import Student from "../models/Student";
@@ -230,12 +98,11 @@ router.get(
 // we can route the action to the correct collection.
 // Format: markIds = [{ id: "...", source: "detailed" | "direct" }, ...]
 // For backwards compatibility, plain string IDs are treated as "detailed".
-router.post(
-  "/trash-action",
-  requireAuth,
+router.post( "/trash-action", requireAuth,
   requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     let { markIds, action } = req.body;
+    // console.log(`[DEBUG] Received action: ${action} for ${markIds.length} marks`);
 
     if (!Array.isArray(markIds)) markIds = [markIds];
 
@@ -243,6 +110,11 @@ router.post(
     const normalised: Array<{ id: string; source: "detailed" | "direct" }> = markIds.map(
       (entry: any) => {
         if (typeof entry === "string") return { id: entry, source: "detailed" as const };
+        if (!entry.source) {
+          console.warn(
+            `[DEBUG] Missing source for record: ${entry.id || entry._id}`,
+          );
+        }
         return { id: entry.id || entry._id, source: entry.source || "detailed" };
       },
     );
@@ -254,8 +126,14 @@ router.post(
     if (action === "restore") {
       // Restore detailed marks
       if (detailedIds.length > 0) {
-        const marks = await Mark.find({ _id: { $in: detailedIds }, deletedAt: { $ne: null } });
-        await Mark.updateMany({ _id: { $in: detailedIds } }, { $set: { deletedAt: null } });
+        const marks = await Mark.find({
+          _id: { $in: detailedIds },
+          deletedAt: { $ne: null },
+        });
+        // console.log(`[DEBUG] Found ${marks.length} detailed marks to restore`);
+
+        const updateRes = await Mark.updateMany({ _id: { $in: detailedIds } }, { $set: { deletedAt: null } });
+        // console.log(`[DEBUG] Detailed restore update result:`, updateRes);
         for (const mark of marks) {
           try {
             await computeFinalGrade({ markId: mark._id as any });
@@ -267,8 +145,14 @@ router.post(
 
       // Restore direct marks
       if (directIds.length > 0) {
-        const directMarks = await MarkDirect.find({ _id: { $in: directIds }, deletedAt: { $ne: null } });
-        await MarkDirect.updateMany({ _id: { $in: directIds } }, { $set: { deletedAt: null } });
+        const directMarks = await MarkDirect.find({ _id: { $in: directIds }, deletedAt: { $ne: null }});
+        // console.log(`[DEBUG] Found ${directMarks.length} direct marks to restore`);
+
+        const updateRes = await MarkDirect.updateMany(
+          { _id: { $in: directIds } },
+          { $set: { deletedAt: null } },
+        );
+        // console.log(`[DEBUG] Direct restore update result:`, updateRes);
         for (const mark of directMarks) {
           try {
             await computeFinalGrade({ markId: mark._id as any });
@@ -278,23 +162,21 @@ router.post(
         }
       }
 
-      console.log(`[maintenance] Restored: ${detailedIds.length} detailed, ${directIds.length} direct`);
+      // console.log(`[maintenance] Restored: ${detailedIds.length} detailed, ${directIds.length} direct`);
       return res.json({
-        message: `Restored ${detailedIds.length} detailed and ${directIds.length} direct marks. Grades recalculated.`,
-      });
+        message: `Restored ${detailedIds.length} detailed and ${directIds.length} direct marks. Grades recalculated.`});
     }
 
     // ── PURGE ────────────────────────────────────────────────────────────────
     if (action === "purge") {
+      // console.log(`[DEBUG] Purging IDs - Detailed: ${detailedIds.length}, Direct: ${directIds.length}`);
       const [detailedDel, directDel] = await Promise.all([
         detailedIds.length > 0 ? Mark.deleteMany({ _id: { $in: detailedIds } }) : Promise.resolve({ deletedCount: 0 }),
         directIds.length   > 0 ? MarkDirect.deleteMany({ _id: { $in: directIds } }) : Promise.resolve({ deletedCount: 0 }),
       ]);
-
-      console.log(`[maintenance] Purged: ${detailedDel.deletedCount} detailed, ${directDel.deletedCount} direct`);
-      return res.json({
-        message: `Permanently deleted ${detailedDel.deletedCount} detailed and ${directDel.deletedCount} direct marks.`,
-      });
+      // console.log(`[DEBUG] Purge results - Detailed: ${detailedDel.deletedCount}, Direct: ${directDel.deletedCount}`);
+      // console.log(`[maintenance] Purged: ${detailedDel.deletedCount} detailed, ${directDel.deletedCount} direct`);
+      return res.json({message: `Permanently deleted ${detailedDel.deletedCount} detailed and ${directDel.deletedCount} direct marks.`});
     }
 
     res.status(400).json({ error: "Invalid action. Use 'restore' or 'purge'." });
@@ -302,4 +184,7 @@ router.post(
 );
 
 export default router;
+
+
+
 

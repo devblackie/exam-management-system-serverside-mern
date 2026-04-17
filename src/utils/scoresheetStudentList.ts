@@ -28,24 +28,9 @@ export interface ScoresheetStudent {
   qualifierSuffix?: string;
 }
 
-const ATTEMPT = {
-  FIRST: "1st",
-  SUPPLEMENTARY: "Supp",
-  RETAKE: "Retake",
-  SPECIAL: "Special",
-  REPEAT_YEAR: "Repeat",
-  STAYOUT: "Retake",
-  CF: "Retake",
-};
+const ATTEMPT = {FIRST: "1st", SUPPLEMENTARY: "Supp", RETAKE: "Retake", SPECIAL: "Special", REPEAT_YEAR: "Repeat", STAYOUT: "Retake", CF: "Retake"};
 
-const EXCLUDED = [
-  "deregistered",
-  "discontinued",
-  "graduated",
-  "graduand",
-  "deferred",
-  "on_leave",
-];
+const EXCLUDED = ["deregistered", "discontinued", "graduated", "graduand", "deferred", "on_leave"];
 
 // ─── Helper: resolve the best status for a student on a specific unit ─────────
 // Returns the grade status ("PASS", "SUPPLEMENTARY", "SPECIAL", null)
@@ -57,42 +42,23 @@ async function _resolveUnitStatus(
   passMark: number,
 ): Promise<{ status: string | null; mark: any | null }> {
   // Priority 1: FinalGrade (most authoritative)
-  const fg = (await FinalGrade.findOne({
-    student: studentId,
-    programUnit: puId,
-  })
-    .sort({ createdAt: -1 })
-    .lean()) as any;
+  const fg = (await FinalGrade.findOne({student: studentId, programUnit: puId}).sort({ createdAt: -1 }).lean()) as any;
   if (fg) return { status: fg.status, mark: fg };
 
   // Priority 2: MarkDirect
-  const md = (await MarkDirect.findOne({
-    student: studentId,
-    programUnit: puId,
-  })
-    .sort({ createdAt: -1 })
-    .lean()) as any;
+  const md = (await MarkDirect.findOne({student: studentId, programUnit: puId}).sort({ createdAt: -1 }).lean()) as any;
   if (md) {
     const isSpecial = md.isSpecial || md.attempt === "special";
-    const status = isSpecial
-      ? "SPECIAL"
-      : (md.agreedMark ?? 0) >= passMark
-        ? "PASS"
-        : "SUPPLEMENTARY";
+    const status = isSpecial ? "SPECIAL" : (md.agreedMark ?? 0) >= passMark ? "PASS" : "SUPPLEMENTARY";
     return { status, mark: md };
   }
 
   // Priority 3: Mark (detailed breakdown)
   const dm = (await Mark.findOne({ student: studentId, programUnit: puId })
-    .sort({ createdAt: -1 })
-    .lean()) as any;
+    .sort({ createdAt: -1 }).lean()) as any;
   if (dm) {
     const isSpecial = dm.isSpecial || dm.attempt === "special";
-    const status = isSpecial
-      ? "SPECIAL"
-      : (dm.agreedMark ?? 0) >= passMark
-        ? "PASS"
-        : "SUPPLEMENTARY";
+    const status = isSpecial ? "SPECIAL" : (dm.agreedMark ?? 0) >= passMark ? "PASS" : "SUPPLEMENTARY";
     return { status, mark: dm };
   }
 
@@ -100,35 +66,20 @@ async function _resolveUnitStatus(
 }
 
 // ─── Helper: find a SPECIAL mark from ANY prior year for this unit ─────────────
-async function _findPriorSpecialMark(
-  studentId: string,
-  puId: string,
-): Promise<any | null> {
+async function _findPriorSpecialMark(studentId: string, puId: string): Promise<any | null> {
   const fg = (await FinalGrade.findOne({
-    student: studentId,
-    programUnit: puId,
-    status: "SPECIAL",
-  })
-    .sort({ createdAt: -1 })
-    .lean()) as any;
+    student: studentId, programUnit: puId, status: "SPECIAL",
+  }).sort({ createdAt: -1 }).lean()) as any;
   if (fg && (fg.caTotal30 ?? 0) > 0) return { ...fg, _source: "finalGrade" };
 
   const dm = (await Mark.findOne({
-    student: studentId,
-    programUnit: puId,
-    isSpecial: true,
-  })
-    .sort({ createdAt: -1 })
-    .lean()) as any;
+    student: studentId, programUnit: puId, isSpecial: true,
+  }).sort({ createdAt: -1 }).lean()) as any;
   if (dm && (dm.caTotal30 ?? 0) > 0) return { ...dm, _source: "detailed" };
 
   const md = (await MarkDirect.findOne({
-    student: studentId,
-    programUnit: puId,
-    attempt: "special",
-  })
-    .sort({ createdAt: -1 })
-    .lean()) as any;
+    student: studentId, programUnit: puId, attempt: "special",
+  }).sort({ createdAt: -1 }).lean()) as any;
   if (md && (md.caTotal30 ?? 0) > 0) return { ...md, _source: "direct" };
 
   return null;
@@ -136,40 +87,20 @@ async function _findPriorSpecialMark(
 
 // ─── Helper: derive attempt label + flags from a mark and student ─────────────
 function _flagsFromMark(
-  mark: any | null,
-  studentStatus: string,
-  priorSpecial: any | null,
+  mark: any | null, studentStatus: string, priorSpecial: any | null,
 ): Partial<ScoresheetStudent> & { attemptLabel: string } {
   if (!mark) {
     const isRepeat = studentStatus === "repeat";
-    return {
-      attemptLabel: isRepeat ? ATTEMPT.REPEAT_YEAR : ATTEMPT.FIRST,
-      isRepeatYear: isRepeat,
-    };
+    return { attemptLabel: isRepeat ? ATTEMPT.REPEAT_YEAR : ATTEMPT.FIRST, isRepeatYear: isRepeat};
   }
 
   const attempt = (mark.attempt || mark.attemptType || "1st").toLowerCase();
-  const isSpecial =
-    mark.isSpecial === true ||
-    attempt === "special" ||
-    mark.status === "SPECIAL" ||
-    mark.attemptType === "SPECIAL";
-  const isSupp =
-    attempt === "supplementary" ||
-    mark.status === "SUPPLEMENTARY" ||
-    mark.attemptType === "SUPPLEMENTARY";
-  const isRetake =
-    attempt === "re-take" ||
-    attempt === "retake" ||
-    mark.attemptType === "RETAKE";
+  const isSpecial = mark.isSpecial === true || attempt === "special" || mark.status === "SPECIAL" || mark.attemptType === "SPECIAL";
+  const isSupp = attempt === "supplementary" || mark.status === "SUPPLEMENTARY" || mark.attemptType === "SUPPLEMENTARY";
+  const isRetake = attempt === "re-take" || attempt === "retake" || mark.attemptType === "RETAKE";
 
   if (isSpecial) {
-    return {
-      attemptLabel: ATTEMPT.SPECIAL,
-      isSpecial: true,
-      isCarriedSpecial: priorSpecial != null,
-      prevMark: priorSpecial ?? mark,
-    };
+    return { attemptLabel: ATTEMPT.SPECIAL, isSpecial: true, isCarriedSpecial: priorSpecial != null, prevMark: priorSpecial ?? mark};
   }
   if (isSupp) return { attemptLabel: ATTEMPT.SUPPLEMENTARY, isSupp: true };
   if (isRetake) return { attemptLabel: ATTEMPT.RETAKE };
@@ -192,18 +123,9 @@ export const buildScoresheetStudentList = async (params: {
   session: "ORDINARY" | "SUPPLEMENTARY" | "CLOSED";
   passMark: number;
 }): Promise<ScoresheetStudent[]> => {
-  const {
-    programId,
-    programUnitId,
-    yearOfStudy,
-    academicYearId,
-    session,
-    passMark,
-  } = params;
+  const {programId, programUnitId, yearOfStudy, academicYearId, session, passMark} = params;
 
-  const academicYear = (await AcademicYear.findById(
-    academicYearId,
-  ).lean()) as any;
+  const academicYear = (await AcademicYear.findById(academicYearId).lean()) as any;
   if (!academicYear) throw new Error("Academic year not found");
 
   const result: ScoresheetStudent[] = [];
@@ -244,14 +166,8 @@ export const buildScoresheetStudentList = async (params: {
     //   (b) Repeat-year students re-sitting
     //   (c) Historical scoresheets (marks exist from past)
     const [detailedIds, directIds] = await Promise.all([
-      Mark.find({
-        programUnit: programUnitId,
-        academicYear: academicYearId,
-      }).distinct("student"),
-      MarkDirect.find({
-        programUnit: programUnitId,
-        academicYear: academicYearId,
-      }).distinct("student"),
+      Mark.find({programUnit: programUnitId, academicYear: academicYearId}).distinct("student"),
+      MarkDirect.find({programUnit: programUnitId, academicYear: academicYearId}).distinct("student"),
     ]);
 
     const allMarkedIds = [
@@ -263,31 +179,16 @@ export const buildScoresheetStudentList = async (params: {
 
     if (allMarkedIds.length > 0) {
       const studentsWithMarks = (await Student.find({
-        _id: { $in: allMarkedIds },
-        status: { $nin: EXCLUDED },
-      })
-        .sort({ regNo: 1 })
-        .lean()) as any[];
+        _id: { $in: allMarkedIds }, status: { $nin: EXCLUDED },
+      }).sort({ regNo: 1 }).lean()) as any[];
 
       for (const student of studentsWithMarks) {
-        const { mark } = await _resolveUnitStatus(
-          student._id.toString(),
-          programUnitId.toString(),
-          passMark,
-        );
+        const { mark } = await _resolveUnitStatus(student._id.toString(), programUnitId.toString(), passMark);
         const priorSpecial = mark?.isSpecial
-          ? await _findPriorSpecialMark(
-              student._id.toString(),
-              programUnitId.toString(),
-            )
+          ? await _findPriorSpecialMark(student._id.toString(), programUnitId.toString())
           : null;
         const flags = _flagsFromMark(mark, student.status, priorSpecial);
-        add(
-          student,
-          flags.attemptLabel,
-          flags,
-          flags.prevMark ?? mark ?? undefined,
-        );
+        add(student, flags.attemptLabel, flags, flags.prevMark ?? mark ?? undefined);
       }
     }
 
@@ -296,21 +197,14 @@ export const buildScoresheetStudentList = async (params: {
     // Covers first-sitters and deferred-special students.
     if (academicYear.isCurrent) {
       const currentStudents = (await Student.find({
-        program: programId,
-        currentYearOfStudy: yearOfStudy,
-        status: { $nin: EXCLUDED },
-        _id: { $nin: allMarkedIds },
-      })
-        .sort({ regNo: 1 })
-        .lean()) as any[];
+        program: programId, currentYearOfStudy: yearOfStudy, status: { $nin: EXCLUDED }, _id: { $nin: allMarkedIds },
+      }).sort({ regNo: 1 }).lean()) as any[];
 
       for (const student of currentStudents) {
         // ── KEY FIX: Check if this student already PASSED this unit in a
         //    prior academic year. If so, they do NOT need to sit it again.
         const { status: priorStatus } = await _resolveUnitStatus(
-          student._id.toString(),
-          programUnitId.toString(),
-          passMark,
+          student._id.toString(), programUnitId.toString(), passMark,
         );
 
         if (priorStatus === "PASS") {
@@ -320,8 +214,7 @@ export const buildScoresheetStudentList = async (params: {
 
         // Check for a deferred special (ENG.18c)
         const priorSpecial = await _findPriorSpecialMark(
-          student._id.toString(),
-          programUnitId.toString(),
+          student._id.toString(), programUnitId.toString(),
         );
 
         if (priorSpecial) {
@@ -330,8 +223,7 @@ export const buildScoresheetStudentList = async (params: {
             student,
             ATTEMPT.SPECIAL,
             {
-              isSpecial: true,
-              isCarriedSpecial: true,
+              isSpecial: true, isCarriedSpecial: true,
             },
             priorSpecial,
           );
@@ -353,8 +245,7 @@ export const buildScoresheetStudentList = async (params: {
     // getCarryForwardStudentsForUnit already filters by programUnitId.
     try {
       const cfStudents = await getCarryForwardStudentsForUnit(
-        programUnitId.toString(),
-        programId.toString(),
+        programUnitId.toString(), programId.toString(),
       );
       for (const { student } of cfStudents) {
         if (EXCLUDED.includes(student.status)) continue;
@@ -423,15 +314,12 @@ export const buildScoresheetStudentList = async (params: {
 
     if (candidateIds.size > 0) {
       const candidates = (await Student.find({
-        _id: { $in: [...candidateIds] },
-        status: { $nin: EXCLUDED },
+        _id: { $in: [...candidateIds] }, status: { $nin: EXCLUDED },
       })
-        .sort({ regNo: 1 })
-        .lean()) as any[];
+        .sort({ regNo: 1 }).lean()) as any[];
 
       const totalUnits = await ProgramUnit.countDocuments({
-        program: programId,
-        requiredYear: yearOfStudy,
+        program: programId, requiredYear: yearOfStudy,
       });
 
       for (const student of candidates) {
@@ -499,14 +387,9 @@ export const getExistingMarksForStudents = async (
 ): Promise<Map<string, any>> => {
   const [detailed, direct] = await Promise.all([
     Mark.find({ student: { $in: studentIds }, programUnit: programUnitId })
-      .sort({ createdAt: -1 })
-      .lean(),
-    MarkDirect.find({
-      student: { $in: studentIds },
-      programUnit: programUnitId,
-    })
-      .sort({ createdAt: -1 })
-      .lean(),
+      .sort({ createdAt: -1 }).lean(),
+    MarkDirect.find({ student: { $in: studentIds }, programUnit: programUnitId })
+      .sort({ createdAt: -1 }).lean(),
   ]);
 
   const map = new Map<string, any>();

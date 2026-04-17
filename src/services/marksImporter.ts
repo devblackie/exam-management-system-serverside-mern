@@ -16,6 +16,13 @@ interface ImportResult {
   warnings: string[];
 }
 
+function stripQualifier(rawRegNo: string): string {
+  // Match: slash + 4-digit year + qualifier suffix (letters + digits + optional S2)
+  // e.g.  /2017RP1  →  /2017
+  //        /2016RP1C →  /2016
+  return rawRegNo.replace(/(\/\d{4})[A-Z][A-Z0-9]*$/i, "$1");
+}
+
 export async function importMarksFromBuffer(
   buffer: Buffer,
   filename: string,
@@ -69,11 +76,16 @@ export async function importMarksFromBuffer(
 
     // 4. Processing Mapping (A=0, B=1, C=2...)
     for (const [index, row] of rawRows.entries()) {
-      const regNo = row[1]?.toString().trim().toUpperCase(); // Col B
-      const sn = row[0]; // Col A
+      // const regNo = row[1]?.toString().trim().toUpperCase(); // Col B
+      // const sn = row[0]; // Col A
 
-      if (!regNo || sn === "") continue;
+      // if (!regNo || sn === "") continue;
 
+      const rawCell = row[1]?.toString().trim().toUpperCase();
+      const sn = row[0];
+      if (!rawCell || sn === "") continue;
+      const regNo = stripQualifier(rawCell);
+      
       result.total++;
       const rowNum = index + 17;
       const session = await mongoose.startSession();
