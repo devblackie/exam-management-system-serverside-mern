@@ -266,7 +266,13 @@ function createPassTable(students: any[], cellMargin: any) {
       new TableRow({
         children: [ 
           new TableCell({ margins: cellMargin, children: [ new Paragraph({ spacing: { before: 0, after: 0 }, children: [new TextRun({ text: (index + 1).toString(), size: 20 })] })] }),
-          new TableCell({ margins: cellMargin, children: [ new Paragraph({ spacing: { before: 0, after: 0 },  children: [new TextRun({ text: s.regNo, size: 20 })], })] }),
+          // new TableCell({ margins: cellMargin, children: [ new Paragraph({ spacing: { before: 0, after: 0 },  children: [new TextRun({ text: s.regNo, size: 20 })], })] }),
+          new TableCell({ margins: cellMargin, children: [
+            new Paragraph({ spacing: { before: 0, after: 0 }, children: [
+              new TextRun({ text: s.regNo, size: 20 }),
+              ...(s.qualifierSuffix ? [new TextRun({ text: s.qualifierSuffix, size: 16, subScript: true, color: "000000" })] : []),
+            ] })
+          ] }),
           new TableCell({ margins: cellMargin, children: [ new Paragraph({ spacing: { before: 0, after: 0 }, children: [new TextRun({ text: formatStudentName(s.name), size: 20 })]})] })] }),
   );
 
@@ -479,45 +485,45 @@ function createSpecialUnitDetailTable(students: any[], cellMargin: any): Table {
   });
 }
 
-export const generateSupplementaryExamsDoc = async (data: PromotionData): Promise<Buffer> => {
-  const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
-  const suppCandidates = blocked.filter(s => s.status.includes("SUPP"));
-  const count = suppCandidates.length;
-  const currentYearOrdinal = getOrdinalYear(yearOfStudy);
-  const candidateCountWords = numberToWords(suppCandidates.length);
-  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
+// export const generateSupplementaryExamsDoc = async (data: PromotionData): Promise<Buffer> => {
+//   const { programName, academicYear, yearOfStudy, blocked, logoBuffer } = data;
+//   const suppCandidates = blocked.filter(s => s.status.includes("SUPP"));
+//   const count = suppCandidates.length;
+//   const currentYearOrdinal = getOrdinalYear(yearOfStudy);
+//   const candidateCountWords = numberToWords(suppCandidates.length);
+//   const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
 
-  const doc = new Document({
-    sections: [
-      {
-        children: [
-          ...createDocHeader( logoBuffer, programName, academicYear, currentYearOrdinal, "SUPPLEMENTARY" ),
+//   const doc = new Document({
+//     sections: [
+//       {
+//         children: [
+//           ...createDocHeader( logoBuffer, programName, academicYear, currentYearOrdinal, "SUPPLEMENTARY" ),
 
-          new Paragraph({
-            alignment: AlignmentType.JUSTIFIED,
-            spacing: { before: 400, after: 300 },
-            children: [
-              new TextRun({ text: `The following `, size: 22 }),
-              new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22  }),
-              new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22   }),
-              new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
-              new TextRun({ text: `Academic Year, `, size: 22 }),
-              new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22  }),
-              new TextRun({ text: `Examinations for the `, size: 22 }),
-              new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
-              new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they sit for the supplementary exams when next offered. `, size: 22 }),
-            ],
-          }),
+//           new Paragraph({
+//             alignment: AlignmentType.JUSTIFIED,
+//             spacing: { before: 400, after: 300 },
+//             children: [
+//               new TextRun({ text: `The following `, size: 22 }),
+//               new TextRun({ text: `${candidateCountWords} (${count}) `, bold: true, size: 22  }),
+//               new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22   }),
+//               new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+//               new TextRun({ text: `Academic Year, `, size: 22 }),
+//               new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22  }),
+//               new TextRun({ text: `Examinations for the `, size: 22 }),
+//               new TextRun({ text: `${programName}. `, bold: true, size: 22  }),
+//               new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they sit for the supplementary exams when next offered. `, size: 22 }),
+//             ],
+//           }),
 
-          createStandardUnitDetailTable(suppCandidates, cellMargin, "FAIL"),
-          ...createDocFooter(),
-        ],
-      },
-    ],
-  });
+//           createStandardUnitDetailTable(suppCandidates, cellMargin, "FAIL"),
+//           ...createDocFooter(),
+//         ],
+//       },
+//     ],
+//   });
 
-  return await Packer.toBuffer(doc);
-};
+//   return await Packer.toBuffer(doc);
+// };
 
 // --- GENERATE INCOMPLETE LIST ---
 export const generateIncompleteListDoc = async (data: PromotionData): Promise<Buffer> => {
@@ -909,7 +915,11 @@ function createStandardUnitDetailTable(students: any[], cellMargin: any, filterK
         rows.push(new TableRow({
           children: [
             new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: isFirstUnit ? studentCounter.toString() : "", size: 18 })] })] }),
-            new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: isFirstUnit ? s.regNo : "", size: 18 })] })] }),
+            // new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: isFirstUnit ? s.regNo : "", size: 18 })] })] }),
+            new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [
+              new TextRun({ text: isFirstUnit ? s.regNo : "", size: 18 }),
+              ...(isFirstUnit && s.qualifierSuffix ? [new TextRun({ text: s.qualifierSuffix, size: 14, subScript: true })] : []),
+            ] })] }),
             new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: isFirstUnit ? s.name : "", size: 18 })] })] }),
             new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: uCode, size: 18 })] })] }),
             new TableCell({ margins: cellMargin, children: [new Paragraph({ children: [new TextRun({ text: uName, size: 18 })] })] }),
@@ -1248,6 +1258,304 @@ export const generateDefermentDoc = async (data: PromotionData): Promise<Buffer>
   return await Packer.toBuffer(doc);
 };
 // ---- Deferement Block Ends ----   
+
+// serverside/src/utils/promotionReport.ts
+// ── Replace generateSupplementaryExamsDoc entirely ────────────────────────────
+
+export const generateSupplementaryExamsDoc = async (data: PromotionData): Promise<Buffer> => {
+  const { programName, academicYear, yearOfStudy, blocked, logoBuffer, examType } = data;
+
+  // Only first-attempt failures — exclude students who came from a prior hurdle
+  const suppCandidates = blocked.filter(
+    (s) =>
+      s.status.includes("SUPP") &&
+      !s.reasons?.some((r: string) =>
+        /stayout|a\/so|repeat\s+year|a\/ra|readmission|readmit|carry\s*forward|a\/cf/i.test(r),
+      ),
+  );
+
+  const count              = suppCandidates.length;
+  const currentYearOrdinal = getOrdinalYear(yearOfStudy);
+  const cellMargin         = { top: 100, bottom: 100, left: 100, right: 100 };
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        ...createDocHeader(logoBuffer, programName, academicYear, currentYearOrdinal,
+          "SUPPLEMENTARY", examType || "ORDINARY"),
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { before: 400, after: 300 },
+          children: [
+            new TextRun({ text: "The following ", size: 22 }),
+            new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
+            new TextRun({ text: `candidate(s) failed to satisfy the ${config.schoolName} Board of Examiners in the unit(s) indicated against their names during the `, size: 22 }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: "Academic Year, ", size: 22 }),
+            new TextRun({ text: `${currentYearOrdinal} Year `, bold: true, size: 22 }),
+            new TextRun({ text: "Examinations for the ", size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
+            new TextRun({ text: `The ${config.schoolName} Board of Examiners recommends that they sit for the supplementary exams when next offered. `, size: 22 }),
+          ],
+        }),
+        createStandardUnitDetailTable(suppCandidates, cellMargin, "FAIL"),
+        ...createDocFooter(),
+      ],
+    }],
+  });
+
+  return Packer.toBuffer(doc);
+};
+
+// ── Supplementary after Carry Forward (A/CFS) ─────────────────────────────────
+export const generateCarryForwardSuppDoc = async (data: PromotionData): Promise<Buffer> => {
+  const { programName, academicYear, yearOfStudy, blocked, logoBuffer, examType } = data;
+
+  const list = blocked.filter(
+    (s) =>
+      s.status.includes("SUPP") &&
+      s.reasons?.some((r: string) => /carry\s*forward|a\/cf/i.test(r)),
+  );
+
+  const count      = list.length;
+  const ordinal    = getOrdinalYear(yearOfStudy);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        ...createDocHeader(logoBuffer, programName, academicYear, ordinal,
+          "SUPPLEMENTARY (After Carry Forward)", examType || "ORDINARY"),
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { before: 400, after: 300 },
+          children: [
+            new TextRun({ text: "The following ", size: 22 }),
+            new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
+            new TextRun({
+              text: `candidate(s) failed their carry-forward supplementary examinations (A/CFS) in the unit(s) indicated against their names during the `,
+              size: 22,
+            }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year, ${ordinal} Year Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
+            new TextRun({
+              text: `The ${config.schoolName} Board of Examiners recommends that they sit for supplementary examinations when next offered.`,
+              size: 22,
+            }),
+          ],
+        }),
+        createStandardUnitDetailTable(list, cellMargin, "FAIL"),
+        ...createDocFooter(),
+      ],
+    }],
+  });
+  return Packer.toBuffer(doc);
+};
+
+// ── Supplementary after Stay Out (A/SOS) ──────────────────────────────────────
+export const generateStayoutSuppDoc = async (data: PromotionData): Promise<Buffer> => {
+  const { programName, academicYear, yearOfStudy, blocked, logoBuffer, examType } = data;
+
+  const list = blocked.filter(
+    (s) =>
+      s.status.includes("SUPP") &&
+      s.reasons?.some((r: string) => /stayout|a\/so/i.test(r)),
+  );
+
+  const count      = list.length;
+  const ordinal    = getOrdinalYear(yearOfStudy);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        ...createDocHeader(logoBuffer, programName, academicYear, ordinal,
+          "SUPPLEMENTARY (After Stayout)", examType || "ORDINARY"),
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { before: 400, after: 300 },
+          children: [
+            new TextRun({ text: "The following ", size: 22 }),
+            new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
+            new TextRun({
+              text: `candidate(s) were required to stay out and retake examinations. ` +
+                `Having now sat for the failed units, they have not fully satisfied the ${config.schoolName} ` +
+                `Board of Examiners in the unit(s) indicated against their names during the `,
+              size: 22,
+            }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year, ${ordinal} Year Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
+            new TextRun({
+              text: `The ${config.schoolName} Board of Examiners recommends that they sit for supplementary examinations (A/SOS) when next offered.`,
+              size: 22,
+            }),
+          ],
+        }),
+        createStandardUnitDetailTable(list, cellMargin, "FAIL"),
+        ...createDocFooter(),
+      ],
+    }],
+  });
+  return Packer.toBuffer(doc);
+};
+
+// ── Supplementary after Repeat Year (A/RA + supp) ────────────────────────────
+export const generateRepeatSuppDoc = async (data: PromotionData): Promise<Buffer> => {
+  const { programName, academicYear, yearOfStudy, blocked, logoBuffer, examType } = data;
+
+  const list = blocked.filter(
+    (s) =>
+      s.status.includes("SUPP") &&
+      s.reasons?.some((r: string) => /repeat\s+year|a\/ra/i.test(r)),
+  );
+
+  const count      = list.length;
+  const ordinal    = getOrdinalYear(yearOfStudy);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        ...createDocHeader(logoBuffer, programName, academicYear, ordinal,
+          "SUPPLEMENTARY (After Repeat Year)", examType || "ORDINARY"),
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { before: 400, after: 300 },
+          children: [
+            new TextRun({ text: "The following ", size: 22 }),
+            new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
+            new TextRun({
+              text: `candidate(s) were required to repeat the academic year. ` +
+                `After repeating, they have not fully satisfied the ${config.schoolName} Board of Examiners ` +
+                `in the unit(s) indicated against their names during the `,
+              size: 22,
+            }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year, ${ordinal} Year Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
+            new TextRun({
+              text: `The ${config.schoolName} Board of Examiners recommends that they sit for supplementary examinations when next offered.`,
+              size: 22,
+            }),
+          ],
+        }),
+        createStandardUnitDetailTable(list, cellMargin, "FAIL"),
+        ...createDocFooter(),
+      ],
+    }],
+  });
+  return Packer.toBuffer(doc);
+};
+
+// ── Supplementary after Readmission ───────────────────────────────────────────
+export const generateReadmissionSuppDoc = async (data: PromotionData): Promise<Buffer> => {
+  const { programName, academicYear, yearOfStudy, blocked, logoBuffer, examType } = data;
+
+  const list = blocked.filter(
+    (s) =>
+      s.status.includes("SUPP") &&
+      s.reasons?.some((r: string) => /readmission|readmit/i.test(r)),
+  );
+
+  const count      = list.length;
+  const ordinal    = getOrdinalYear(yearOfStudy);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        ...createDocHeader(logoBuffer, programName, academicYear, ordinal,
+          "SUPPLEMENTARY (After Readmission)", examType || "ORDINARY"),
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { before: 400, after: 300 },
+          children: [
+            new TextRun({ text: "The following ", size: 22 }),
+            new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
+            new TextRun({
+              text: `candidate(s) have been formally readmitted to the programme and have outstanding ` +
+                `supplementary examinations in the unit(s) indicated against their names during the `,
+              size: 22,
+            }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year, ${ordinal} Year Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
+            new TextRun({
+              text: `The ${config.schoolName} Board of Examiners recommends that they sit for supplementary examinations when next offered.`,
+              size: 22,
+            }),
+          ],
+        }),
+        createStandardUnitDetailTable(list, cellMargin, "FAIL"),
+        ...createDocFooter(),
+      ],
+    }],
+  });
+  return Packer.toBuffer(doc);
+};
+
+// ── Supplementary after Academic Leave ────────────────────────────────────────
+export const generateAcademicLeaveSuppDoc = async (data: PromotionData): Promise<Buffer> => {
+  const { programName, academicYear, yearOfStudy, blocked, logoBuffer, examType } = data;
+
+  const list = blocked.filter(
+    (s) =>
+      s.status.includes("SUPP") &&
+      s.reasons?.some((r: string) =>
+        /academic\s*leave|on\s*leave|a\/sp/i.test(r),
+      ),
+  );
+
+  const count      = list.length;
+  const ordinal    = getOrdinalYear(yearOfStudy);
+  const cellMargin = { top: 100, bottom: 100, left: 100, right: 100 };
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        ...createDocHeader(logoBuffer, programName, academicYear, ordinal,
+          "SUPPLEMENTARY (After Academic Leave)", examType || "ORDINARY"),
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { before: 400, after: 300 },
+          children: [
+            new TextRun({ text: "The following ", size: 22 }),
+            new TextRun({ text: `${numberToWords(count)} (${count}) `, bold: true, size: 22 }),
+            new TextRun({
+              text: `candidate(s) have resumed studies after academic leave and have outstanding supplementary ` +
+                `examinations in the unit(s) indicated against their names during the `,
+              size: 22,
+            }),
+            new TextRun({ text: `${academicYear} `, bold: true, size: 22 }),
+            new TextRun({ text: `Academic Year, ${ordinal} Year Examinations for the `, size: 22 }),
+            new TextRun({ text: `${programName}. `, bold: true, size: 22 }),
+            new TextRun({
+              text: `The ${config.schoolName} Board of Examiners recommends that they sit for supplementary examinations when next offered.`,
+              size: 22,
+            }),
+          ],
+        }),
+        createStandardUnitDetailTable(list, cellMargin, "FAIL"),
+        ...createDocFooter(),
+      ],
+    }],
+  });
+  return Packer.toBuffer(doc);
+};
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -416,7 +416,7 @@ export function buildRichRegNo(
   return {
     richText: [
       { text: regNo, font: { name: fontName, size: baseSize, bold: false }},
-      { text: qualifier.trim(), font: { name: fontName, size: Math.max(baseSize - 2, 5), vertAlign: "subscript", bold: true, color: { argb: "FF002B1B" }}},
+      { text: qualifier.trim(), font: { name: fontName, size: Math.max(baseSize - 2, 5), vertAlign: "subscript",  color: { argb: "FF002B1B" }}},
       // { text: qualifier.trim(), font: { name: fontName, size: Math.max(baseSize - 2, 5), vertAlign: "subscript"}},
     ],
   };
@@ -429,5 +429,5 @@ export function buildRichRegNoCMS(
   regNo: string,
   qualifier: string | undefined | null
 ): ExcelJS.CellRichTextValue | string {
-  return buildRichRegNo(regNo, qualifier, "Arial", 8);
+  return buildRichRegNo(regNo, qualifier, "Times New Roman", 8);
 }

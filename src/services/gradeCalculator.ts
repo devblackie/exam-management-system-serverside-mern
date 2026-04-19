@@ -1,4 +1,5 @@
 // serverside/src/services/gradeCalculator.ts
+
 import Mark from "../models/Mark";
 import MarkDirect from "../models/MarkDirect";
 import FinalGrade from "../models/FinalGrade";
@@ -21,9 +22,9 @@ export async function computeFinalGrade({ markId, session }: ComputeOptions) {
 
   let isDirect = false;
   if (!markDoc) {
-    markDoc   = await MarkDirect
+    markDoc  = await MarkDirect
       .findById(markId).populate(["student","academicYear","programUnit"]).session(session || null);
-    isDirect  = true;
+    isDirect = true;
   }
   if (!markDoc) throw new Error("Mark not found");
 
@@ -40,7 +41,10 @@ export async function computeFinalGrade({ markId, session }: ComputeOptions) {
     unitType: (markDoc.unitType as any) || "theory",
     examMode: (markDoc.examMode as any) || "standard",
     attempt:  markDoc.attempt || "1st",
-    settings: { catMax: settings.cat1Max || 30, assMax: settings.assignmentMax || 10, practicalMax: settings.practicalMax || 10, passMark: settings.passMark || 40 },
+    settings: {
+      catMax: settings.cat1Max || 30, assMax: settings.assignmentMax || 10,
+      practicalMax: settings.practicalMax || 10, passMark: settings.passMark || 40,
+    },
   });
 
   // ── 3. Preservation strategy ──────────────────────────────────────────────
@@ -49,20 +53,54 @@ export async function computeFinalGrade({ markId, session }: ComputeOptions) {
   const finalAgreed = finalCA + finalExam;
 
   // ── 4. Special exam override (ENG.18) ─────────────────────────────────────
-  const isSpecial = markDoc.isSpecial === true || markDoc.attempt === "special";
-  let grade:  string;
-  let status: string;
+  // KEY FIX: A special exam that has been SAT (finalExam > 0) must be graded
+  // as PASS or SUPPLEMENTARY based on the actual score.
+  // Only keep status=SPECIAL when the exam portion is still missing (exam not yet sat).
+  //
+  // ENG.18c: "special examinations shall normally be scored out of 100% and
+  // shall include continuous assessment."
+  // → Once the exam is sat, it grades like any other exam.
+  //
+  // The SPECIAL status means "this student has an approved special exam pending".
+  // Once they sit it (exam marks submitted), it resolves to PASS or SUPP.
 
-  if (isSpecial) {
-    grade = "I"; status = "SPECIAL";
+  const isSpecial = markDoc.isSpecial === true || markDoc.attempt === "special";
+  let grade:      string;
+  let status:     string;
+  let attemptType: string;
+
+  const sortedScale = [...((settings as any).gradingScale || [])].sort(
+    (a: any, b: any) => b.min - a.min,
+  );
+
+  if (isSpecial && finalExam === 0) {
+    // Special approved but exam NOT yet sat — keep as pending special
+    grade       = "I";
+    status      = "SPECIAL";
+    attemptType = "SPECIAL";
+  } else if (isSpecial && finalExam > 0) {
+    // Special exam has been COMPLETED — grade it like a normal exam
+    // ENG.18c: scored out of 100% including CA
+    grade       = sortedScale.find((s: any) => finalAgreed >= s.min)?.grade ?? "E";
+    status      = finalAgreed >= ((settings as any).passMark || 40) ? "PASS" : "SUPPLEMENTARY";
+    attemptType = "1ST_ATTEMPT"; // treated as a first attempt since special includes full CA
   } else {
-    const sortedScale = [...((settings as any).gradingScale || [])].sort((a: any, b: any) => b.min - a.min);
-    grade  = sortedScale.find((s: any) => finalAgreed >= s.min)?.grade ?? "E";
-    status = finalAgreed >= ((settings as any).passMark || 40) ? "PASS" : "SUPPLEMENTARY";
+    // Normal (non-special) exam
+    grade       = sortedScale.find((s: any) => finalAgreed >= s.min)?.grade ?? "E";
+    status      = finalAgreed >= ((settings as any).passMark || 40) ? "PASS" : "SUPPLEMENTARY";
+    attemptType = markDoc.attempt === "supplementary" ? "SUPPLEMENTARY"
+                : markDoc.attempt === "re-take"        ? "RETAKE"
+                : "1ST_ATTEMPT";
   }
 
   // ── 5. Update source mark ─────────────────────────────────────────────────
-  const markUpdate = { $set: { caTotal30: finalCA, examTotal70: isSpecial ? 0 : finalExam, agreedMark: isSpecial ? finalCA : finalAgreed } };
+  const markUpdate = {
+    $set: {
+      caTotal30:   finalCA,
+      examTotal70: (isSpecial && finalExam === 0) ? 0 : finalExam,
+      agreedMark:  (isSpecial && finalExam === 0) ? finalCA : finalAgreed,
+    },
+  };
   if (isDirect) await MarkDirect.updateOne({ _id: markId }, markUpdate).session(session || null);
   else          await Mark.updateOne({ _id: markId }, markUpdate).session(session || null);
 
@@ -75,10 +113,13 @@ export async function computeFinalGrade({ markId, session }: ComputeOptions) {
     },
     {
       $set: {
-        totalMark:    isSpecial ? finalCA : finalAgreed,
-        grade, caTotal30: finalCA, examTotal70: isSpecial ? 0 : finalExam,
-        status, isSpecial,
-        attemptType:  markDoc.attempt === "supplementary" ? "SUPPLEMENTARY" : markDoc.attempt === "re-take" ? "RETAKE" : "1ST_ATTEMPT",
+        totalMark:    (isSpecial && finalExam === 0) ? finalCA : finalAgreed,
+        grade,
+        caTotal30:    finalCA,
+        examTotal70:  (isSpecial && finalExam === 0) ? 0 : finalExam,
+        status,
+        isSpecial:    isSpecial && finalExam === 0, // isSpecial=false once the exam is sat
+        attemptType,
         institution:  markDoc.institution,
         semester:     markDoc.semester || "SEMESTER 1",
       },
@@ -87,7 +128,6 @@ export async function computeFinalGrade({ markId, session }: ComputeOptions) {
   );
 
   // ── 7. Carry-forward resolution (ENG.14) ──────────────────────────────────
-  // Fire-and-forget: when a CF unit is passed, remove it from carryForwardUnits.
   if (status === "PASS") {
     _resolveCFUnit(
       (markDoc.student._id    || markDoc.student).toString(),
@@ -95,13 +135,18 @@ export async function computeFinalGrade({ markId, session }: ComputeOptions) {
     ).catch((err: Error) => console.error("[gradeCalculator] CF resolution:", err.message));
   }
 
-  return { caTotal: finalCA, examTotal: isSpecial ? 0 : finalExam, finalMark: isSpecial ? finalCA : finalAgreed, grade, status };
+  return {
+    caTotal:   finalCA,
+    examTotal: (isSpecial && finalExam === 0) ? 0 : finalExam,
+    finalMark: (isSpecial && finalExam === 0) ? finalCA : finalAgreed,
+    grade,
+    status,
+  };
 }
 
-// ─── Private: remove a CF unit once it is passed ─────────────────────────────
-
 async function _resolveCFUnit(studentId: string, programUnitId: string): Promise<void> {
-  const studentDoc = await Student.findById(studentId).select("carryForwardUnits qualifierSuffix").lean() as any;
+  const studentDoc = await Student.findById(studentId)
+    .select("carryForwardUnits qualifierSuffix").lean() as any;
   if (!studentDoc) return;
 
   const hasCF = ((studentDoc.carryForwardUnits || []) as any[]).some(

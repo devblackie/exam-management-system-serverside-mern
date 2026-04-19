@@ -10,6 +10,11 @@ import {
   generateSpecialExamNotice, generateStudentTranscript, generateSupplementaryExamsDoc, generateSpecialExamsDoc,
   generateStayoutExamsDoc, generateAcademicLeaveDoc, generateDeregistrationDoc, generateDiscontinuationDoc, generateRepeatYearDoc,
   generateIncompleteListDoc, generateCarryForwardDoc, generateDefermentDoc, generateAwardListDoc,
+  generateStayoutSuppDoc,
+  generateRepeatSuppDoc,
+  generateReadmissionSuppDoc,
+  generateCarryForwardSuppDoc,
+  generateAcademicLeaveSuppDoc,
 } from "../utils/promotionReport";
 import fs from "fs";
 import path from "path"
@@ -155,8 +160,58 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       await addDocIfNotEmpty(wordData.eligible, getFileName("PASS_LIST"), generateEligibleSummaryDoc);
 
       sendProgress(50, "Checking Supplementary List...");
-      const suppList = wordData.blocked.filter(s => s.status.includes("SUPP"));
-      await addDocIfNotEmpty(suppList, getFileName("Supplementary_List"), generateSupplementaryExamsDoc);
+      // const suppList = wordData.blocked.filter(s => s.status.includes("SUPP"));
+      // await addDocIfNotEmpty(suppList, getFileName("Supplementary_List"), generateSupplementaryExamsDoc);
+
+      // 1. First-attempt SUPP (not from prior hurdle)
+const suppFirstAttempt = wordData.blocked.filter(
+  (s) =>
+    s.status.includes("SUPP") &&
+    !s.reasons?.some((r: string) =>
+      /stayout|a\/so|repeat\s+year|a\/ra|readmission|readmit|carry\s*forward|a\/cf|academic\s*leave/i.test(r),
+    ),
+);
+await addDocIfNotEmpty(suppFirstAttempt, getFileName("Supplementary_List"), generateSupplementaryExamsDoc);
+ 
+// 2. Supp after Carry Forward (A/CFS)
+const suppCF = wordData.blocked.filter(
+  (s) =>
+    s.status.includes("SUPP") &&
+    s.reasons?.some((r: string) => /carry\s*forward|a\/cf/i.test(r)),
+);
+await addDocIfNotEmpty(suppCF, getFileName("Supplementary_After_Carry_Forward"), generateCarryForwardSuppDoc);
+ 
+// 3. Supp after Stay Out (A/SOS)
+const suppStayout = wordData.blocked.filter(
+  (s) =>
+    s.status.includes("SUPP") &&
+    s.reasons?.some((r: string) => /stayout|a\/so/i.test(r)),
+);
+await addDocIfNotEmpty(suppStayout, getFileName("Supplementary_After_Stayout"), generateStayoutSuppDoc);
+ 
+// 4. Supp after Repeat Year (A/RA)
+const suppRepeat = wordData.blocked.filter(
+  (s) =>
+    s.status.includes("SUPP") &&
+    s.reasons?.some((r: string) => /repeat\s+year|a\/ra/i.test(r)),
+);
+await addDocIfNotEmpty(suppRepeat, getFileName("Supplementary_After_Repeat_Year"), generateRepeatSuppDoc);
+ 
+// 5. Supp after Readmission
+const suppReadmit = wordData.blocked.filter(
+  (s) =>
+    s.status.includes("SUPP") &&
+    s.reasons?.some((r: string) => /readmission|readmit/i.test(r)),
+);
+await addDocIfNotEmpty(suppReadmit, getFileName("Supplementary_After_Readmission"), generateReadmissionSuppDoc);
+ 
+// 6. Supp after Academic Leave
+const suppLeave = wordData.blocked.filter(
+  (s) =>
+    s.status.includes("SUPP") &&
+    s.reasons?.some((r: string) => /academic\s*leave|on\s*leave|a\/sp/i.test(r)),
+);
+await addDocIfNotEmpty(suppLeave, getFileName("Supplementary_After_Academic_Leave"), generateAcademicLeaveSuppDoc);
 
       sendProgress(60, "Checking Special Exams...");
       const getSpecialGround = (s: any): string => {
