@@ -17,6 +17,8 @@ import { getYearWeight } from "../utils/weightingRegistry";
 import MarkDirect from "../models/MarkDirect";
 import InstitutionSettings from "../models/InstitutionSettings";
 import { resolveStudentStatus } from "../utils/studentStatusResolver";
+import { logAudit } from "../lib/auditLogger";
+import { deferSuppToNextOrdinary, clearDeferredSuppUnit } from "../services/carryForwardService";
 
 const router = express.Router();
 
@@ -104,9 +106,7 @@ const formatChallenges = (analysis: any) => ({
   incomplete: [...analysis.incompleteList, ...analysis.missingList].map((i) => i.split(":")[0]),
 });
 
-router.get(
-  "/journey",
-  requireAuth,
+router.get("/journey", requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { regNo } = req.query;
     if (!regNo) return res.status(400).json({ error: "regNo is required" });
@@ -324,6 +324,22 @@ router.get(
       });
     });
 
+    // ── Part D: Deferred-supp events (ENG.13b / ENG.18c) ─────────────────────
+    // Each entry in deferredSuppUnits becomes a distinct timeline node so
+    // coordinators can see the full deferral history in the Journey card.
+    for (const entry of (student.deferredSuppUnits || []) as any[]) {
+      journey.push({
+        type: "DEFERRED_SUPP",
+        academicYear: entry.fromAcademicYear || "",
+        yearOfStudy: entry.fromYear || 0,
+        unitCode: entry.unitCode || "N/A",
+        unitName: entry.unitName || "",
+        reason: entry.reason || "supp_deferred", // "supp_deferred" | "special_deferred"
+        status: entry.status || "pending", // "pending" | "passed"
+        date: entry.addedAt || new Date(0),
+      });
+    }
+
     journey.sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
     );
@@ -437,5 +453,161 @@ router.post("/raw-marks", requireAuth, requireRole("coordinator"), asyncHandler(
   const gr = await computeFinalGrade({ markId: u._id as any, coordinatorReq: req });
   return res.json({ success: true, message: "Detailed marks processed", data: gr });
 }));
+
+// Coordinator explicitly defers a student's supp/special units to the next
+// ordinary examination period, enabling promotion despite pending units.
+// (ENG.13b / ENG.18c)
+router.post("/defer-supp", requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { studentId, programUnitIds, academicYear, reason } = req.body;
+ 
+    // ── Detailed request log ───────────────────────────────────────────────
+    console.group("[defer-supp] Incoming request");
+    console.log("body.studentId      :", studentId,      typeof studentId);
+    console.log("body.programUnitIds :", programUnitIds, Array.isArray(programUnitIds) ? `(length ${programUnitIds?.length})` : typeof programUnitIds);
+    console.log("body.academicYear   :", JSON.stringify(academicYear), typeof academicYear);
+    console.log("body.reason         :", reason);
+    console.groupEnd();
+ 
+    // ── Validation ────────────────────────────────────────────────────────
+    if (!studentId) {
+      console.error("[defer-supp] 400: studentId missing");
+      return res.status(400).json({ error: "studentId is required" });
+    }
+    if (!programUnitIds?.length) {
+      console.error("[defer-supp] 400: programUnitIds missing or empty");
+      return res.status(400).json({ error: "programUnitIds (array) is required" });
+    }
+    if (!academicYear) {
+      console.error("[defer-supp] 400: academicYear is falsy —", JSON.stringify(academicYear));
+      return res.status(400).json({ error: "academicYear is required" });
+    }
+    if (!["supp_deferred", "special_deferred"].includes(reason)) {
+      console.error("[defer-supp] 400: invalid reason —", reason);
+      return res.status(400).json({ error: "reason must be 'supp_deferred' or 'special_deferred'" });
+    }
+ 
+    const student = await Student.findById(studentId).lean();
+    if (!student) {
+      console.error("[defer-supp] 404: student not found for id", studentId);
+      return res.status(404).json({ error: "Student not found" });
+    }
+ 
+    // Validate all programUnitIds belong to this student's program
+    const pUnits = await ProgramUnit.find({
+      _id:     { $in: programUnitIds },
+      program: (student as any).program,
+    }).populate("unit").lean() as any[];
+ 
+    console.log("[defer-supp] programUnitIds requested:", programUnitIds);
+    console.log("[defer-supp] pUnits found in DB       :", pUnits.map((p: any) => ({
+      _id:     p._id.toString(),
+      code:    p.unit?.code,
+      program: p.program?.toString(),
+    })));
+ 
+    if (pUnits.length !== programUnitIds.length) {
+      console.error(
+        `[defer-supp] 400: ID count mismatch — requested ${programUnitIds.length}, found ${pUnits.length}`,
+        "\nrequested:", programUnitIds,
+        "\nfound    :", pUnits.map((p: any) => p._id.toString()),
+        "\nstudent.program:", (student as any).program?.toString(),
+      );
+      return res.status(400).json({
+        error: "One or more programUnitIds are invalid or don't belong to this student's program",
+      });
+    }
+ 
+    // Build deferred entries — skip units already pending
+    const existingDeferred  = (student as any).deferredSuppUnits || [];
+    const alreadyDeferredIds = new Set(
+      existingDeferred
+        .filter((u: any) => u.status === "pending")
+        .map((u: any) => u.programUnitId),
+    );
+ 
+    const newUnitIds = programUnitIds.filter((id: string) => !alreadyDeferredIds.has(id));
+ 
+    if (newUnitIds.length === 0) {
+      console.warn("[defer-supp] 400: all units already deferred");
+      return res.status(400).json({ error: "All specified units are already deferred" });
+    }
+ 
+    const entries = pUnits
+      .filter((pu: any) => newUnitIds.includes(pu._id.toString()))
+      .map((pu: any) => ({
+        programUnitId:    pu._id.toString(),
+        unitCode:         pu.unit?.code  || "N/A",
+        unitName:         pu.unit?.name  || "N/A",
+        fromYear:         (student as any).currentYearOfStudy,
+        fromAcademicYear: academicYear,
+        reason,
+        addedAt:          new Date(),
+        status:           "pending",
+      }));
+ 
+    console.log("[defer-supp] writing entries:", entries.map((e: any) => ({ code: e.unitCode, reason: e.reason })));
+ 
+    await Student.findByIdAndUpdate(studentId, {
+      $push: {
+        deferredSuppUnits: { $each: entries },
+        statusEvents: {
+          fromStatus:  (student as any).status,
+          toStatus:    (student as any).status,
+          date:        new Date(),
+          academicYear,
+          reason: `ENG.13b/ENG.18c deferral — ${reason.replace("_", " ")}: ${
+            entries.map((e: any) => e.unitCode).join(", ")
+          }`,
+        },
+      },
+    });
+ 
+    await logAudit(req, {
+      action:     "supp_deferred_to_next_ordinary",
+      targetUser: studentId as any,
+      details:    { units: entries.map((e: any) => e.unitCode), reason, academicYear },
+    });
+ 
+    console.log(`[defer-supp] ✓ deferred ${entries.length} unit(s) for student ${(student as any).regNo}`);
+ 
+    return res.json({
+      success:  true,
+      message:  `Deferred ${entries.length} unit(s) to next ordinary period`,
+      deferred: entries,
+    });
+  }),
+);
+
+// Undo a deferral (before promotion is processed)
+router.delete("/defer-supp/:studentId/:programUnitId", requireAuth,
+  requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { studentId, programUnitId } = req.params;
+
+    await Student.findByIdAndUpdate(studentId, {
+      $pull: { deferredSuppUnits: { programUnitId, status: "pending" } },
+    });
+
+    return res.json({ success: true, message: "Deferral cancelled" });
+  }),
+);
+
+// Returns all pending deferred units for a student (for UI display)
+router.get("/deferred-units/:studentId", requireAuth,
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const student = await Student.findById(req.params.studentId)
+      .select("deferredSuppUnits")
+      .lean() as any;
+
+    if (!student) return res.status(404).json({ error: "Student not found" });
+
+    const pending = (student.deferredSuppUnits || []).filter(
+      (u: any) => u.status === "pending",
+    );
+    return res.json({ success: true, data: pending });
+  }),
+);
 
 export default router;

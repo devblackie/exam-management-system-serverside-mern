@@ -1,5 +1,10 @@
 
 // serverside/src/services/statusEngine.ts
+// KEY CHANGES vs prior version:
+//   1. StudentStatusResult gains `deferredList` field
+//   2. calculateStudentStatus suppresses deferred units from fail/special counts
+//      and populates deferredList — so the status box reflects post-defer reality
+//   3. academicYearName is always returned (fixes the 400 on defer submit)
 
 import FinalGrade from "../models/FinalGrade";
 import ProgramUnit from "../models/ProgramUnit";
@@ -12,21 +17,12 @@ import { getYearWeight } from "../utils/weightingRegistry";
 import { performAcademicAudit } from "./academicAudit";
 import { getAttemptLabel, REG_QUALIFIERS } from "../utils/academicRules";
 
-// ── Helper: Check if qualifier is transient (repeat year only) ────────────────
-/**
- * Returns true if this qualifier should be cleared after a successful promotion.
- * RP1, RP2 etc. → clear (student passed their repeat year, no longer repeating)
- * RA1, M2, TF2 etc. → keep forever (permanent entry/status record)
- */
 function _qualifierShouldClearOnPromotion(qualifier: string): boolean {
   if (!qualifier || qualifier.trim() === "") return false;
-  // Only plain repeat-year qualifiers: RP1, RP2, RP3 (no C, D, or U suffix)
   return /^RP\d+$/.test(qualifier.trim());
 }
 
-// ── Lazy-load carry-forward ───────────────────────────────────────────────────
 let _assessAndGrant: ((studentId: string, programId: string, yearOfStudy: number, academicYearName: string) => Promise<{ granted: boolean; cfUnits: any[]; qualifier: string; reason: string }>) | null = null;
-
 
 async function tryAssessAndGrantCarryForward(
   studentId: string, programId: string, yearOfStudy: number, academicYearName: string,
@@ -42,8 +38,6 @@ async function tryAssessAndGrantCarryForward(
     return { granted: false, cfUnits: [], qualifier: "", reason: err.message };
   }
 }
-
-// ── Terminal DB sync ──────────────────────────────────────────────────────────
 
 const syncTerminalStatusToDb = async (
   studentId: string, engineStatus: string, details: string, academicYear: string,
@@ -83,13 +77,20 @@ const syncTerminalStatusToDb = async (
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface StudentStatusResult {
-  status: string; variant: "success" | "warning" | "error" | "info"; details: string;
-  weightedMean: string; sessionState: string;
+  status:           string;
+  variant:          "success" | "warning" | "error" | "info";
+  details:          string;
+  weightedMean:     string;
+  sessionState:     string;
+  academicYearName: string;
   summary: { totalExpected: number; passed: number; failed: number; missing: number; isOnLeave?: boolean };
-  passedList: { code: string; mark: number }[];
-  failedList: { displayName: string; attempt: string | number }[];
-  specialList: { displayName: string; grounds: string }[];
-  missingList: string[]; incompleteList: string[]; leaveDetails?: string;
+  passedList:    { code: string; mark: number }[];
+  failedList:    { displayName: string; attempt: string | number; programUnitId: string }[];
+  specialList:   { displayName: string; grounds: string; programUnitId: string }[];
+  deferredList:  { displayName: string; programUnitId: string; reason: string }[];
+  missingList:   string[];
+  incompleteList: string[];
+  leaveDetails?: string;
 }
 
 // ── calculateStudentStatus ────────────────────────────────────────────────────
@@ -100,7 +101,7 @@ export const calculateStudentStatus = async (
 ): Promise<StudentStatusResult> => {
 
   const settings = await InstitutionSettings.findOne().lean();
-  if (!settings) throw new Error("Institution settings not found. Please configure grading scales in System Settings.");
+  if (!settings) throw new Error("Institution settings not found.");
   const passMark = (settings as any).passMark || 40;
 
   const student = await Student.findById(studentId).lean();
@@ -121,16 +122,20 @@ export const calculateStudentStatus = async (
     const leaveType = (student as any).academicLeavePeriod?.type || "";
     const rem       = ((student as any).remarks || "").toLowerCase();
     let grounds = "";
-    if (leaveType === "financial" || rem.includes("financial"))                                grounds = "FINANCIAL";
-    else if (leaveType === "compassionate" || rem.includes("compassionate") || rem.includes("medical")) grounds = "COMPASSIONATE";
-    else if (leaveType) grounds = leaveType.toUpperCase();
+    if (leaveType === "financial" || rem.includes("financial"))
+      grounds = "FINANCIAL";
+    else if (leaveType === "compassionate" || rem.includes("compassionate") || rem.includes("medical"))
+      grounds = "COMPASSIONATE";
+    else if (leaveType)
+      grounds = leaveType.toUpperCase();
     const count = await ProgramUnit.countDocuments({ program: programId, requiredYear: yearOfStudy });
     return {
       status: terminalEntry.label, variant: terminalEntry.variant,
       details: `Student is currently ${terminalEntry.label}.${grounds ? ` Grounds: ${grounds}.` : ""}`,
-      weightedMean: "0.00", sessionState: "ORDINARY",
+      weightedMean: "0.00", sessionState: "ORDINARY", academicYearName: academicYearName ?? "",
       summary: { totalExpected: count, passed: 0, failed: 0, missing: 0, isOnLeave: true },
-      passedList: [], failedList: [], specialList: [], missingList: [], incompleteList: [], leaveDetails: grounds,
+      passedList: [], failedList: [], specialList: [], deferredList: [],
+      missingList: [], incompleteList: [], leaveDetails: grounds,
     };
   }
 
@@ -145,6 +150,8 @@ export const calculateStudentStatus = async (
     if (!targetYearDoc) console.warn(`[StatusEngine] AcademicYear "${academicYearName}" not found.`);
   }
 
+  const resolvedYearName: string = targetYearDoc?.year ?? academicYearName ?? "";
+
   // ── Curriculum ────────────────────────────────────────────────────────────
   const curriculum = await ProgramUnit.find({ program: programId, requiredYear: yearOfStudy })
     .populate("unit").lean() as any[];
@@ -152,9 +159,10 @@ export const calculateStudentStatus = async (
   if (!curriculum?.length) {
     return {
       status: "CURRICULUM NOT SET", variant: "info", details: `No units defined for Year ${yearOfStudy}.`,
-      weightedMean: "0.00", sessionState: "ORDINARY",
+      weightedMean: "0.00", sessionState: "ORDINARY", academicYearName: resolvedYearName,
       summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
-      passedList: [], failedList: [], specialList: [], missingList: [], incompleteList: [],
+      passedList: [], failedList: [], specialList: [], deferredList: [],
+      missingList: [], incompleteList: [],
     };
   }
 
@@ -166,29 +174,17 @@ export const calculateStudentStatus = async (
     FinalGrade.find({ student: studentId, programUnit: { $in: programUnitIds } }).lean(),
   ]);
 
-  // ── marksMap — three-pass priority with PASS-FinalGrade guard ─────────────
-  //
-  // PASS 1 (lowest priority): FinalGrade records
-  // PASS 2: MarkDirect raw records — overrides FinalGrade for live data
-  // PASS 3 (highest): Detailed Mark — most granular
-  // PASS 4: GUARD — if a PASS FinalGrade exists for a unit, it wins over
-  //         any raw mark that is still flagged isSpecial=true / attempt=special.
-  //         This is the case when a special exam has been sat and scored PASS,
-  //         but the underlying MarkDirect still carries isSpecial=true as metadata.
-
+  // ── marksMap ──────────────────────────────────────────────────────────────
   const marksMap = new Map<string, any>();
 
-  // Pass 1 — FinalGrade (lowest, overwritten below)
   finalGrades.forEach((fg: any) => {
     const key = fg.programUnit?.toString(); if (!key) return;
     const existing = marksMap.get(key);
-    // Among multiple FinalGrades for the same unit (across different academic years),
-    // prefer PASS > SPECIAL > anything else; among same status prefer newer.
     if (existing?.source === "finalGrade") {
       const existingIsBetter =
         (existing._fgStatus === "PASS" && fg.status !== "PASS") ||
         (existing._fgStatus === fg.status && (existing.createdAt ?? 0) >= (fg.createdAt ?? 0));
-      if (existingIsBetter) return; // keep existing
+      if (existingIsBetter) return;
     }
     marksMap.set(key, {
       agreedMark:  fg.totalMark ?? 0,
@@ -198,40 +194,30 @@ export const calculateStudentStatus = async (
                  : fg.attemptType === "RETAKE"         ? "re-take" : "1st",
       isSpecial:   (fg.isSpecial === true || fg.status === "SPECIAL") && fg.status !== "PASS",
       source:      "finalGrade",
-      _fgStatus:   fg.status,      // internal: used in guard below
+      _fgStatus:   fg.status,
     });
   });
 
-  // Pass 2 — MarkDirect
   directMarks.forEach((m: any) => {
     marksMap.set(m.programUnit.toString(), { ...m, source: "direct" });
   });
 
-  // Pass 3 — Detailed Mark (highest raw priority)
   detailedMarks.forEach((m: any) => {
     marksMap.set(m.programUnit.toString(), { ...m, source: "detailed" });
   });
 
-  // Pass 4 — GUARD: restore PASS FinalGrade if a raw mark is still flagged special
-  // Use case: special exam sat & passed → FinalGrade=PASS, MarkDirect=isSpecial:true
   finalGrades.forEach((fg: any) => {
     if (fg.status !== "PASS") return;
     const key = fg.programUnit?.toString(); if (!key) return;
     const current = marksMap.get(key);
     if (!current) return;
-
-    const currentIsSpecialFlagged = current.attempt === "special" || current.isSpecial === true;
-    if (currentIsSpecialFlagged) {
-      // The raw mark is still special-flagged, but a PASS FinalGrade exists.
-      // The PASS result is authoritative — override.
+    if (current.attempt === "special" || current.isSpecial === true) {
       marksMap.set(key, {
         agreedMark:  fg.totalMark ?? 0,
         caTotal30:   fg.caTotal30   != null ? fg.caTotal30   : (fg.totalMark > 0 ? 1 : 0),
         examTotal70: fg.examTotal70 != null ? fg.examTotal70 : (fg.totalMark > 0 ? 1 : 0),
-        attempt:     "1st",     // treat as first-attempt for mean calculation
-        isSpecial:   false,     // no longer pending
-        source:      "finalGrade_pass",
-        _fgStatus:   "PASS",
+        attempt: "1st", isSpecial: false,
+        source: "finalGrade_pass", _fgStatus: "PASS",
       });
     }
   });
@@ -239,17 +225,18 @@ export const calculateStudentStatus = async (
   // ── Unit classification loop ──────────────────────────────────────────────
   const lists = {
     passed:     [] as { code: string; mark: number }[],
-    failed:     [] as { displayName: string; attempt: string | number }[],
-    special:    [] as { displayName: string; grounds: string }[],
+    failed:     [] as { displayName: string; attempt: string | number; programUnitId: string }[],
+    special:    [] as { displayName: string; grounds: string; programUnitId: string }[],
     missing:    [] as string[],
     incomplete: [] as string[],
   };
   let totalFirstAttemptSum = 0;
 
   curriculum.forEach((pUnit: any) => {
-    const code        = pUnit.unit?.code?.toUpperCase();
-    const displayName = `${code}: ${pUnit.unit?.name}`;
-    const rawMark     = marksMap.get(pUnit._id.toString());
+    const code          = pUnit.unit?.code?.toUpperCase();
+    const displayName   = `${code}: ${pUnit.unit?.name}`;
+    const programUnitId = pUnit._id.toString();
+    const rawMark       = marksMap.get(programUnitId);
 
     if (!rawMark) { lists.missing.push(displayName); return; }
 
@@ -266,13 +253,13 @@ export const calculateStudentStatus = async (
     });
 
     if (isSpc) {
-      lists.special.push({ displayName, grounds: rawMark.remarks || "Special" });
+      lists.special.push({ displayName, grounds: rawMark.remarks || "Special", programUnitId });
     } else if (!hasCAT && !hasExam) {
       lists.missing.push(`${displayName} (Absent)`);
     } else if (!hasCAT && hasExam) {
       if (isSupp) {
         if (markVal >= passMark) lists.passed.push({ code, mark: markVal });
-        else                     lists.failed.push({ displayName, attempt: notation });
+        else                     lists.failed.push({ displayName, attempt: notation, programUnitId });
         totalFirstAttemptSum += markVal;
       } else {
         lists.incomplete.push(`${displayName} (No CAT)`);
@@ -281,11 +268,52 @@ export const calculateStudentStatus = async (
       lists.missing.push(`${displayName} (Missing Exam)`);
     } else {
       if (markVal >= passMark) lists.passed.push({ code, mark: markVal });
-      else                     lists.failed.push({ displayName, attempt: notation });
+      else                     lists.failed.push({ displayName, attempt: notation, programUnitId });
       totalFirstAttemptSum += markVal;
     }
   });
 
+  // ── Deferred-unit suppression (ENG.13b / ENG.18c) ────────────────────────
+  // Units the coordinator has deferred to the next ordinary period are removed
+  // from the fail/special lists so the status reflects the student's effective
+  // standing (i.e. what they still need to resolve THIS year).
+  const pendingDeferredUnits: Array<{ displayName: string; programUnitId: string; reason: string }> = [];
+
+  const allPendingDeferred: any[] = ((student as any).deferredSuppUnits || []).filter(
+    (u: any) => u.status === "pending",
+  );
+
+  if (allPendingDeferred.length > 0) {
+    const deferredIds = new Set(allPendingDeferred.map((u: any) => u.programUnitId));
+
+    // Move matching entries out of failed/special into deferredList
+    const newFailed:  typeof lists.failed  = [];
+    const newSpecial: typeof lists.special = [];
+
+    for (const f of lists.failed) {
+      if (deferredIds.has(f.programUnitId)) {
+        const entry = allPendingDeferred.find((u: any) => u.programUnitId === f.programUnitId);
+        pendingDeferredUnits.push({ displayName: f.displayName, programUnitId: f.programUnitId, reason: entry?.reason || "supp_deferred" });
+      } else {
+        newFailed.push(f);
+      }
+    }
+    for (const s of lists.special) {
+      if (deferredIds.has(s.programUnitId)) {
+        const entry = allPendingDeferred.find((u: any) => u.programUnitId === s.programUnitId);
+        pendingDeferredUnits.push({ displayName: s.displayName, programUnitId: s.programUnitId, reason: entry?.reason || "special_deferred" });
+      } else {
+        newSpecial.push(s);
+      }
+    }
+
+    lists.failed  = newFailed;
+    lists.special = newSpecial;
+
+    console.log(`[StatusEngine] deferred suppression: removed ${pendingDeferredUnits.length} unit(s) from fail/special lists`);
+  }
+
+  // ── Status decision ───────────────────────────────────────────────────────
   const totalUnits   = curriculum.length;
   const failCount    = lists.failed.length;
   const missingCount = lists.missing.length;
@@ -300,7 +328,7 @@ export const calculateStudentStatus = async (
     : (await AcademicYear.findOne({ isCurrent: true }).lean()) || (await AcademicYear.findOne().sort({ startDate: -1 }).lean());
 
   const targetSession   = targetYearDoc?.session ?? "ORDINARY";
-  const [tStart]        = (academicYearName || "0/0").split("/").map(Number);
+  const [tStart]        = (resolvedYearName || "0/0").split("/").map(Number);
   const [gStart]        = currentYearDoc?.year ? currentYearDoc.year.split("/").map(Number) : [0];
   const isPastYear      = targetYearDoc && gStart > 0 ? tStart < gStart : false;
   const isSessionClosed = targetSession === "CLOSED" || isPastYear;
@@ -332,14 +360,25 @@ export const calculateStudentStatus = async (
     if (incCount > 0)     parts.push(`INC ${incCount}`);
     if (missingCount > 0) parts.push(`INC ${missingCount}`);
     status = parts.join("; "); variant = "warning"; details = "Eligible for supplementary exams.";
+  } else if (pendingDeferredUnits.length > 0 && failCount === 0 && specialCount === 0) {
+    // All outstanding units are deferred — student is effectively clear for promotion
+    status  = "PASS";
+    variant = "success";
+    details = `All pending units deferred to next ordinary period (ENG.13b/18c). Eligible for promotion.`;
   }
 
   return {
     status, variant, details,
-    weightedMean: officialMean.toFixed(2), sessionState: targetSession,
+    weightedMean:     officialMean.toFixed(2),
+    sessionState:     targetSession,
+    academicYearName: resolvedYearName,
     summary: { totalExpected: totalUnits, passed: lists.passed.length, failed: failCount, missing: missingCount },
-    passedList: lists.passed, failedList: lists.failed, specialList: lists.special,
-    missingList: lists.missing, incompleteList: lists.incomplete,
+    passedList:    lists.passed,
+    failedList:    lists.failed,
+    specialList:   lists.special,
+    deferredList:  pendingDeferredUnits,
+    missingList:   lists.missing,
+    incompleteList: lists.incomplete,
   };
 };
 
@@ -362,8 +401,8 @@ export const promoteStudent = async (studentId: string) => {
   const auditResult = await performAcademicAudit(studentId);
   if (auditResult.discontinued) return { success: false, message: `Discontinued: ${auditResult.reason}` };
 
-  const program      = student.program as any;
-  const duration     = program.durationYears || 5;
+  const program        = student.program as any;
+  const duration       = program.durationYears || 5;
   const currentSession = await AcademicYear.findOne({ isCurrent: true }).lean();
   const completedYear  = currentSession?.year || "N/A";
 
@@ -396,31 +435,6 @@ export const promoteStudent = async (studentId: string) => {
     return { success: false, message: "Stay out required (ENG.15h)", details: statusResult };
   }
 
-  // ── DEFERRED SUPP/SPECIAL CHECK (ENG.13b / ENG.18c) ─────────────────────
-  if (statusResult.status !== "PASS" && !statusResult.status.includes("REPEAT") && statusResult.status !== "STAYOUT") {
-    const pendingDeferred = ((student as any).deferredSuppUnits || []).filter(
-      (u: any) => u.status === "pending" && u.fromYear === currentYear,
-    );
-
-    if (pendingDeferred.length > 0) {
-      const deferredCodes = new Set(pendingDeferred.map((u: any) => u.unitCode));
-
-      const allFailedDeferred = statusResult.failedList.every((f: any) => {
-        const code = f.displayName.split(":")[0].trim().toUpperCase();
-        return deferredCodes.has(code);
-      });
-      const allSpecialDeferred = statusResult.specialList.every((s: any) => {
-        const code = s.displayName.split(":")[0].trim().toUpperCase();
-        return deferredCodes.has(code);
-      });
-
-      if (allFailedDeferred && allSpecialDeferred) {
-        console.log(`[promoteStudent] ${regNo}: all failed/special units deferred — allowing promotion`);
-        (statusResult as any)._deferredPromotion = true;
-      }
-    }
-  }
-
   if (statusResult.specialList.length > 0 && statusResult.failedList.length === 0)
     return { success: false, message: "Special examinations pending", details: statusResult };
 
@@ -449,46 +463,30 @@ export const promoteStudent = async (studentId: string) => {
     return { success: true, message: `Graduated: ${classification}`, isGraduation: true };
   }
 
-  const nextYear  = currentYear + 1;
-  let cfGranted   = false;
-  let cfMessage   = "";
-  let cfQualifier = "";
+  const nextYear = currentYear + 1;
+  let cfGranted  = false;
+  let cfMessage  = "";
 
-  // if (statusResult.status !== "PASS") {
-  //   const cfResult = await tryAssessAndGrantCarryForward(studentId, student.program.toString(), currentYear, completedYear);
-  //   cfGranted   = cfResult.granted;
-  //   cfQualifier = cfResult.qualifier;
-  //   cfMessage   = cfGranted
-  //     ? `Promoted to Year ${nextYear} with carry-forward (${cfResult.qualifier}): ${cfResult.cfUnits.map((u) => u.unitCode).join(", ")}`
-  //     : "";
-  //   if (!cfGranted) return { success: false, message: `Promotion Blocked: ${cfResult.reason}`, details: statusResult };
-  // }
-
-  if (
-    statusResult.status !== "PASS" &&
-    !(statusResult as any)._deferredPromotion
-  ) {
+  // If status is PASS (possibly because all units were deferred), skip CF entirely.
+  // If non-PASS for other reasons, attempt CF.
+  if (statusResult.status !== "PASS") {
     const cfResult = await tryAssessAndGrantCarryForward(
-      studentId,
-      student.program.toString(),
-      currentYear,
-      completedYear,
+      studentId, student.program.toString(), currentYear, completedYear,
     );
     cfGranted = cfResult.granted;
     cfMessage = cfGranted
       ? `Promoted to Year ${nextYear} with carry-forward (${cfResult.qualifier}): ${cfResult.cfUnits.map((u) => u.unitCode).join(", ")}`
       : "";
-    if (!cfGranted && !(statusResult as any)._deferredPromotion) {
-      return {
-        success: false,
-        message: `Promotion Blocked: ${cfResult.reason}`,
-        details: statusResult,
-      };
+    if (!cfGranted) {
+      return { success: false, message: `Promotion Blocked: ${cfResult.reason}`, details: statusResult };
     }
   }
 
   await Student.findByIdAndUpdate(studentId, {
-    $set:  { currentYearOfStudy: nextYear, currentSemester: 1, ...((!cfGranted && _qualifierShouldClearOnPromotion((student as any).qualifierSuffix || "")) ? { qualifierSuffix: "" } : {} )},
+    $set: {
+      currentYearOfStudy: nextYear, currentSemester: 1,
+      ...((!cfGranted && _qualifierShouldClearOnPromotion((student as any).qualifierSuffix || "")) ? { qualifierSuffix: "" } : {}),
+    },
     $push: {
       promotionHistory: { from: currentYear, to: nextYear, date: new Date() },
       academicHistory:  histRecord,
@@ -532,9 +530,8 @@ export const previewPromotion = async (programId: string, yearToPromote: number,
       eligible.push({ id: (student as any)._id, _id: (student as any)._id, regNo: (student as any).regNo, name: (student as any).name, status: "ALREADY PROMOTED", reasons: [], specialGrounds: "", qualifierSuffix: (student as any).qualifierSuffix || "", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 }, details: "" });
       continue;
     }
-
     if (adminLabel) {
-      const leaveType = (student as any).academicLeavePeriod?.type?.toUpperCase();
+      const leaveType    = (student as any).academicLeavePeriod?.type?.toUpperCase();
       const adminGrounds = [((student as any).academicLeavePeriod?.type || "").toLowerCase(), ((student as any).remarks || "").toLowerCase()].join(" ").trim() || "other";
       blocked.push({ id: (student as any)._id, _id: (student as any)._id, regNo: (student as any).regNo, name: (student as any).name, status: adminLabel, reasons: [leaveType ? `${adminLabel} (${leaveType})` : adminLabel], specialGrounds: adminGrounds, qualifierSuffix: (student as any).qualifierSuffix || "", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 }, academicLeavePeriod: (student as any).academicLeavePeriod, remarks: (student as any).remarks, details: "" });
       continue;
@@ -556,7 +553,7 @@ export const previewPromotion = async (programId: string, yearToPromote: number,
     if (sr.status === "STAYOUT")      report.reasons.push("ENG 15h: > 1/3 units failed");
     if (sr.status === "REPEAT YEAR")  report.reasons.push("ENG 16: >= 1/2 units failed or mean < 40%");
     if (sr.status === "DEREGISTERED") report.reasons.push("ENG 23c: Absent from 6+ examinations");
-    sr.specialList.forEach((s: any)     => report.reasons.push(`${s.displayName} (SPECIAL)`));
+    sr.specialList.forEach((s: any)      => report.reasons.push(`${s.displayName} (SPECIAL)`));
     sr.incompleteList.forEach((u: string) => report.reasons.push(`${u} (INCOMPLETE)`));
     sr.missingList.forEach((u: string)    => report.reasons.push(`${u} (MISSING)`));
     sr.failedList.forEach((f: any)        => report.reasons.push(`${f.displayName} (FAIL: ${f.attempt})`));
