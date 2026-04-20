@@ -12,8 +12,21 @@ import { getYearWeight } from "../utils/weightingRegistry";
 import { performAcademicAudit } from "./academicAudit";
 import { getAttemptLabel, REG_QUALIFIERS } from "../utils/academicRules";
 
+// ── Helper: Check if qualifier is transient (repeat year only) ────────────────
+/**
+ * Returns true if this qualifier should be cleared after a successful promotion.
+ * RP1, RP2 etc. → clear (student passed their repeat year, no longer repeating)
+ * RA1, M2, TF2 etc. → keep forever (permanent entry/status record)
+ */
+function _qualifierShouldClearOnPromotion(qualifier: string): boolean {
+  if (!qualifier || qualifier.trim() === "") return false;
+  // Only plain repeat-year qualifiers: RP1, RP2, RP3 (no C, D, or U suffix)
+  return /^RP\d+$/.test(qualifier.trim());
+}
+
 // ── Lazy-load carry-forward ───────────────────────────────────────────────────
 let _assessAndGrant: ((studentId: string, programId: string, yearOfStudy: number, academicYearName: string) => Promise<{ granted: boolean; cfUnits: any[]; qualifier: string; reason: string }>) | null = null;
+
 
 async function tryAssessAndGrantCarryForward(
   studentId: string, programId: string, yearOfStudy: number, academicYearName: string,
@@ -383,6 +396,31 @@ export const promoteStudent = async (studentId: string) => {
     return { success: false, message: "Stay out required (ENG.15h)", details: statusResult };
   }
 
+  // ── DEFERRED SUPP/SPECIAL CHECK (ENG.13b / ENG.18c) ─────────────────────
+  if (statusResult.status !== "PASS" && !statusResult.status.includes("REPEAT") && statusResult.status !== "STAYOUT") {
+    const pendingDeferred = ((student as any).deferredSuppUnits || []).filter(
+      (u: any) => u.status === "pending" && u.fromYear === currentYear,
+    );
+
+    if (pendingDeferred.length > 0) {
+      const deferredCodes = new Set(pendingDeferred.map((u: any) => u.unitCode));
+
+      const allFailedDeferred = statusResult.failedList.every((f: any) => {
+        const code = f.displayName.split(":")[0].trim().toUpperCase();
+        return deferredCodes.has(code);
+      });
+      const allSpecialDeferred = statusResult.specialList.every((s: any) => {
+        const code = s.displayName.split(":")[0].trim().toUpperCase();
+        return deferredCodes.has(code);
+      });
+
+      if (allFailedDeferred && allSpecialDeferred) {
+        console.log(`[promoteStudent] ${regNo}: all failed/special units deferred — allowing promotion`);
+        (statusResult as any)._deferredPromotion = true;
+      }
+    }
+  }
+
   if (statusResult.specialList.length > 0 && statusResult.failedList.length === 0)
     return { success: false, message: "Special examinations pending", details: statusResult };
 
@@ -416,18 +454,41 @@ export const promoteStudent = async (studentId: string) => {
   let cfMessage   = "";
   let cfQualifier = "";
 
-  if (statusResult.status !== "PASS") {
-    const cfResult = await tryAssessAndGrantCarryForward(studentId, student.program.toString(), currentYear, completedYear);
-    cfGranted   = cfResult.granted;
-    cfQualifier = cfResult.qualifier;
-    cfMessage   = cfGranted
+  // if (statusResult.status !== "PASS") {
+  //   const cfResult = await tryAssessAndGrantCarryForward(studentId, student.program.toString(), currentYear, completedYear);
+  //   cfGranted   = cfResult.granted;
+  //   cfQualifier = cfResult.qualifier;
+  //   cfMessage   = cfGranted
+  //     ? `Promoted to Year ${nextYear} with carry-forward (${cfResult.qualifier}): ${cfResult.cfUnits.map((u) => u.unitCode).join(", ")}`
+  //     : "";
+  //   if (!cfGranted) return { success: false, message: `Promotion Blocked: ${cfResult.reason}`, details: statusResult };
+  // }
+
+  if (
+    statusResult.status !== "PASS" &&
+    !(statusResult as any)._deferredPromotion
+  ) {
+    const cfResult = await tryAssessAndGrantCarryForward(
+      studentId,
+      student.program.toString(),
+      currentYear,
+      completedYear,
+    );
+    cfGranted = cfResult.granted;
+    cfMessage = cfGranted
       ? `Promoted to Year ${nextYear} with carry-forward (${cfResult.qualifier}): ${cfResult.cfUnits.map((u) => u.unitCode).join(", ")}`
       : "";
-    if (!cfGranted) return { success: false, message: `Promotion Blocked: ${cfResult.reason}`, details: statusResult };
+    if (!cfGranted && !(statusResult as any)._deferredPromotion) {
+      return {
+        success: false,
+        message: `Promotion Blocked: ${cfResult.reason}`,
+        details: statusResult,
+      };
+    }
   }
 
   await Student.findByIdAndUpdate(studentId, {
-    $set:  { currentYearOfStudy: nextYear, currentSemester: 1, ...(!cfGranted ? { qualifierSuffix: "" } : {}) },
+    $set:  { currentYearOfStudy: nextYear, currentSemester: 1, ...((!cfGranted && _qualifierShouldClearOnPromotion((student as any).qualifierSuffix || "")) ? { qualifierSuffix: "" } : {} )},
     $push: {
       promotionHistory: { from: currentYear, to: nextYear, date: new Date() },
       academicHistory:  histRecord,

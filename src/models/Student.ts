@@ -331,6 +331,7 @@ export interface IStudent extends Document {
   intake:                string;
   qualifierSuffix:       string;
   carryForwardUnits:     CarryForwardUnit[];
+  deferredSuppUnits: Array<{ programUnitId: string; unitCode: string; unitName: string; fromYear: number; fromAcademicYear: string; reason: "supp_deferred" | "special_deferred"; addedAt: Date; status: "pending" | "passed" | "failed"; }>;
   academicLeavePeriod?:  { startDate: Date; endDate: Date; reason: string; type: "compassionate" | "financial" | "other"; };
   totalTimeOutYears:     number;
   unitAttemptRegistry:   Array<{ unitId: mongoose.Types.ObjectId; attempts: Array<{ attemptNumber: number; mark: number; passed: boolean; type: string; }>; }>;
@@ -366,6 +367,19 @@ const schema = new Schema<IStudent>({
     status:           { type: String, enum: ["pending","passed","failed","escalated_to_rpu"], default: "pending" },
   }],
 
+  deferredSuppUnits: [{
+    programUnitId:    { type: String, required: true },
+    unitCode:         { type: String, required: true },
+    unitName:         { type: String, required: true },
+    fromYear:         { type: Number, required: true },
+    fromAcademicYear: { type: String, required: true },
+    // "supp_deferred"    = student skipped supp period, sitting in next ordinary
+    // "special_deferred" = student's special exam deferred to next ordinary
+    reason:  { type: String, enum: ["supp_deferred", "special_deferred"], default: "supp_deferred" },
+    addedAt: { type: Date,   default: Date.now },
+    status:  { type: String, enum: ["pending", "passed", "failed"], default: "pending" },
+  }],
+
   academicLeavePeriod: { startDate: Date, endDate: Date, reason: String, type: { type: String, enum: ["compassionate","financial","other"] } },
   totalTimeOutYears:   { type: Number, default: 0 },
 
@@ -385,5 +399,6 @@ schema.index({ institution: 1, admissionAcademicYear: 1, intake: 1 });
 schema.index({ "statusEvents.toStatus": 1, "statusEvents.academicYear": 1 });
 schema.index({ qualifierSuffix: 1 });
 schema.index({ "carryForwardUnits.programUnitId": 1 });
+schema.index({ "deferredSuppUnits.programUnitId": 1 });
 
 export default mongoose.model<IStudent>("Student", schema);

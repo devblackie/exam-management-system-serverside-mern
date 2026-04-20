@@ -8,6 +8,11 @@ import { calculateStudentStatus } from "../services/statusEngine";
 import { buildDisplayRegNo } from "./academicRules";
 import mongoose from "mongoose";
 import { buildRichRegNoCMS } from "./scoresheetStudentList";
+import FinalGrade from "../models/FinalGrade";
+import ProgramUnit from "../models/ProgramUnit";
+import AcademicYear from "../models/AcademicYear";
+import MarkDirect from "../models/MarkDirect";
+import Mark from "../models/Mark";
 
 interface OfferedUnit { code: string; name: string }
 
@@ -28,62 +33,7 @@ export interface ConsolidatedData {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: derive attempt notation string for CMS ATTEMPT column.
-//
-// This is a REGULAR FUNCTION — call it with arguments.
-// Its RETURN VALUE (a string) goes into the Excel cell, not the function itself.
 // ─────────────────────────────────────────────────────────────────────────────
-// function buildAttemptNotation(
-//   studentStatusRaw: string,
-//   studentQualifier: string,
-//   studentMarks:     any[],
-//   yearOfStudy:      number,
-//   academicHistory:  any[],
-// ): string {
-//   const st = studentStatusRaw.toLowerCase().replace(/_/g, " ");
-
-//   if (st === "deferred"     || st === "deferment")     return "DEF";
-//   if (st === "on leave"     || st === "on_leave"
-//    || st === "academic leave")                         return "A/L";
-//   if (st === "discontinued")                           return "DISC.";
-//   if (st === "deregistered")                           return "DEREG.";
-//   if (st === "repeat")                                 return "A/RA1";
-
-//   // Carry-forward qualifier
-//   if (studentQualifier && /RP\d+C/i.test(studentQualifier)) return studentQualifier;
-//   // Repeat unit
-//   if (studentQualifier && studentQualifier.startsWith("RPU")) return studentQualifier;
-//   // Re-admission
-//   if (studentQualifier && /^RA\d/i.test(studentQualifier)) return studentQualifier;
-
-//   // Derive from mark attempt types
-//   const attemptTypes = studentMarks.map(
-//     (m: any) => (m.attempt || "1st").toLowerCase(),
-//   );
-
-//   if (attemptTypes.length === 0) {
-//     const hasRepeat = (academicHistory || []).some(
-//       (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy,
-//     );
-//     return hasRepeat ? "A/RA1" : "B/S";
-//   }
-
-//   if (attemptTypes.every((a: string) => a === "1st" || a === "special")) {
-//     const hasRepeat = (academicHistory || []).some(
-//       (h: any) => h.isRepeatYear && h.yearOfStudy === yearOfStudy,
-//     );
-//     return hasRepeat ? "A/RA1" : "B/S";
-//   }
-
-//   if (attemptTypes.includes("re-take")) {
-//     return studentQualifier && /RP\d+C/i.test(studentQualifier)
-//       ? studentQualifier
-//       : "A/CF";
-//   }
-//   if (attemptTypes.includes("supplementary")) return "A/S";
-
-//   return "B/S";
-// }
-
 function buildAttemptNotation(
   studentStatusRaw: string,
   studentQualifier: string,
@@ -114,7 +64,7 @@ function buildAttemptNotation(
     // Carry-forward: RP1C, RP2C, etc.
     if (/^RP\d+C$/i.test(q)) return q;
 
-    // FIXED: Plain repeat year: RP1, RP2 — no trailing C
+    // Plain repeat year: RP1, RP2 — no trailing C
     // Must be checked AFTER carry-forward so "RP1C" doesn't match this.
     if (/^RP\d+$/i.test(q)) return q;
 
@@ -151,7 +101,6 @@ function buildAttemptNotation(
   }
 
   if (attemptTypes.includes("re-take")) {
-    // Check if carry-forward or stayout
     if (studentQualifier && /^RP\d+C$/i.test(studentQualifier)) {
       return studentQualifier.trim().toUpperCase();
     }
@@ -161,6 +110,116 @@ function buildAttemptNotation(
   if (attemptTypes.includes("supplementary")) return "A/S";
 
   return "B/S";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: build a per-student mark map that resolves cross-year marks.
+//
+// Priority order per unit:
+//   1. FinalGrade for the target academic year
+//   2. MarkDirect for the target academic year
+//   3. Most recent PASSING FinalGrade from ANY prior year (cross-year)
+//   4. Mark (detailed) for the target academic year
+//   5. "INC"
+// ─────────────────────────────────────────────────────────────────────────────
+async function buildStudentMarkMap(
+  studentId:        string,
+  offeredUnits:     Array<{ code: string; name: string }>,
+  allProgramUnits:  any[],
+  targetAcadYearId: string,
+  passMark:         number,
+): Promise<Map<string, {
+  value:       number | string;
+  isCrossYear: boolean;
+  isSpecial:   boolean;
+}>> {
+  const map = new Map<string, { value: number | string; isCrossYear: boolean; isSpecial: boolean }>();
+
+  for (const offered of offeredUnits) {
+    const pu = allProgramUnits.find((p: any) => p.unit?.code === offered.code);
+    if (!pu) {
+      map.set(offered.code, { value: "INC", isCrossYear: false, isSpecial: false });
+      continue;
+    }
+    const puId = pu._id.toString();
+
+    // ── Priority 1: FinalGrade for THIS academic year ─────────────────────
+    const fgThisYear = await FinalGrade.findOne({
+      student:      studentId,
+      programUnit:  puId,
+      academicYear: targetAcadYearId,
+    }).lean() as any;
+
+    if (fgThisYear) {
+      const isPendingSpecial = fgThisYear.isSpecial && (fgThisYear.examTotal70 ?? 0) === 0;
+      const mark = fgThisYear.totalMark ?? 0;
+      map.set(offered.code, {
+        value:       isPendingSpecial ? `${mark}C` : mark,
+        isCrossYear: false,
+        isSpecial:   fgThisYear.isSpecial || fgThisYear.status === "SPECIAL",
+      });
+      continue;
+    }
+
+    // ── Priority 2: MarkDirect for THIS academic year ─────────────────────
+    const mdThisYear = await MarkDirect.findOne({
+      student:      studentId,
+      programUnit:  puId,
+      academicYear: targetAcadYearId,
+    }).lean() as any;
+
+    if (mdThisYear) {
+      const isPendingSpecial = (mdThisYear.isSpecial || mdThisYear.attempt === "special") &&
+                               (mdThisYear.examTotal70 ?? 0) === 0;
+      const mark = mdThisYear.agreedMark ?? 0;
+      map.set(offered.code, {
+        value:       isPendingSpecial ? `${mark}C` : (mark || "INC"),
+        isCrossYear: false,
+        isSpecial:   mdThisYear.isSpecial || mdThisYear.attempt === "special",
+      });
+      continue;
+    }
+
+    // ── Priority 3: Most recent PASSING FinalGrade from ANY prior year ────
+    // Covers students who passed some units in a prior year and aren't
+    // re-sitting them in the current year (e.g. special/stayout/repeat).
+    const fgAnyYear = await FinalGrade.findOne({
+      student:     studentId,
+      programUnit: puId,
+      status:      "PASS",
+    }).sort({ createdAt: -1 }).lean() as any;
+
+    if (fgAnyYear) {
+      const mark = fgAnyYear.totalMark ?? 0;
+      map.set(offered.code, {
+        value:       mark,
+        isCrossYear: true,   // grey cell in CMS to distinguish from current-year marks
+        isSpecial:   false,
+      });
+      continue;
+    }
+
+    // ── Priority 4: Mark (detailed) for THIS academic year ────────────────
+    const dmThisYear = await Mark.findOne({
+      student:      studentId,
+      programUnit:  puId,
+      academicYear: targetAcadYearId,
+    }).lean() as any;
+
+    if (dmThisYear) {
+      const mark = dmThisYear.agreedMark ?? 0;
+      map.set(offered.code, {
+        value:       mark || "INC",
+        isCrossYear: false,
+        isSpecial:   dmThisYear.isSpecial || false,
+      });
+      continue;
+    }
+
+    map.set(offered.code, { value: "INC", isCrossYear: false, isSpecial: false });
+  }
+
+  return map;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,7 +251,7 @@ export const generateConsolidatedMarkSheet = async (
     logoBuffer, institutionId, programId,
   } = data;
 
-  // Institution settings — unchanged as instructed
+  // Institution settings
   const settings = await InstitutionSettings.findOne({ institution: institutionId });
   const passMark = settings?.passMark || 40;
 
@@ -215,10 +274,7 @@ export const generateConsolidatedMarkSheet = async (
   const centerColIdx = Math.floor(totalCols / 2);
   if (logoBuffer && logoBuffer.length > 0) {
     const logoId = workbook.addImage({ buffer: logoBuffer, extension: "png" });
-    sheet.addImage(logoId, {
-      tl: { col: centerColIdx - 1, row: 0 },
-      ext: { width: 100, height: 60 },
-    });
+    sheet.addImage(logoId, { tl: { col: centerColIdx - 1, row: 0 }, ext: { width: 100, height: 60 } });
   }
 
   const setCenteredHeader = (rowNum: number, text: string, fontSize = 10) => {
@@ -243,10 +299,7 @@ export const generateConsolidatedMarkSheet = async (
   setCenteredHeader(4, `${config.instName}`);
   setCenteredHeader(5, `${config.schoolName || "SCHOOL OF ENGINEERING"}`);
   setCenteredHeader(6, `${programName}`);
-  setCenteredHeader(
-    7,
-    `CONSOLIDATED MARK SHEET - - ${examPhaseLabel} - ${yrTxt} YEAR - ${academicYear} ACADEMIC YEAR`,
-  );
+  setCenteredHeader(7, `CONSOLIDATED MARK SHEET - - ${examPhaseLabel} - ${yrTxt} YEAR - ${academicYear} ACADEMIC YEAR`);
   sheet.getCell(7, 1).font.underline = true;
 
   // ── 2. Table headers ───────────────────────────────────────────────────────
@@ -294,7 +347,17 @@ export const generateConsolidatedMarkSheet = async (
     };
   });
 
-  // ── 3. Student data rows ───────────────────────────────────────────────────
+  // ── 3. Pre-loop setup: resolve target year ID and all program units ─────────
+  // Required by buildStudentMarkMap to look up marks across academic years.
+  const academicYearDoc = await AcademicYear.findOne({ year: academicYear }).lean() as any;
+  const targetAcadYearId = academicYearDoc?._id?.toString() || "";
+
+  const allProgramUnits = await ProgramUnit.find({
+    program:      programId,
+    requiredYear: yearOfStudy,
+  }).populate("unit").lean() as any[];
+
+  // ── 4. Student data rows ───────────────────────────────────────────────────
   const sortedStudents = [...students].sort(
     (a, b) => (String(a.regNo || "")).localeCompare(String(b.regNo || "")),
   );
@@ -338,16 +401,11 @@ export const generateConsolidatedMarkSheet = async (
         specialList:   [],
         missingList:   [],
         incompleteList: [],
-        summary: {
-          totalExpected: offeredUnits.length,
-          passed: 0, failed: 0, missing: 0, isOnLeave: true,
-        },
+        summary: { totalExpected: offeredUnits.length, passed: 0, failed: 0, missing: 0, isOnLeave: true },
       };
     } else {
       try {
-        audit = await calculateStudentStatus(
-          sId, programId, academicYear, yearOfStudy, { forPromotion: true },
-        );
+        audit = await calculateStudentStatus(sId, programId, academicYear, yearOfStudy, { forPromotion: true });
       } catch (err: any) {
         console.error(`[CMS] Engine failed for ${(student as any).regNo}:`, err.message);
         audit = {
@@ -360,25 +418,18 @@ export const generateConsolidatedMarkSheet = async (
       }
     }
 
-    // Marks for this student
+    // Marks for this student (used by buildAttemptNotation)
     const studentMarks = (marks as any[]).filter(
       (m: any) =>
         (m.student?._id?.toString() || m.student?.toString()) === sId,
     );
 
-    // ── THE FIX: CALL the function, use the returned STRING ────────────────
     const attemptNotation: string = buildAttemptNotation(
       studentStatusRaw,
       (student as any).qualifierSuffix || "",
       studentMarks,
       yearOfStudy,
       (student as any).academicHistory || [],
-    );
-
-    // Display regNo with qualifier
-    const displayRegNo = buildDisplayRegNo(
-      (student as any).regNo || "",
-      (student as any).qualifierSuffix || "",
     );
 
     // Display name
@@ -398,47 +449,36 @@ export const generateConsolidatedMarkSheet = async (
     ].join("").toUpperCase();
 
     // ── rowData — all primitive values ─────────────────────────────────────
-    // const rowData: any[] = [
-    //   currentIndex + 1,
-    //   displayRegNo,         // string
-    //   finalDisplayName,     // string
-    //   attemptNotation,      // string — RETURN VALUE of the function call above
-    // ];
-
     const rowData: any[] = [
       currentIndex + 1,
-      buildRichRegNoCMS(
-        (student as any).regNo || "",
-        (student as any).qualifierSuffix || "",
-      ),
+      buildRichRegNoCMS((student as any).regNo || "", (student as any).qualifierSuffix || ""),
       finalDisplayName,
       attemptNotation,
     ];
 
-    // Unit marks
+    // ── Unit marks: use cross-year-aware mark map ──────────────────────────
     const resolvedStatus = resolveStudentStatus(student as any);
 
+    const markCellMap = await buildStudentMarkMap(
+      sId,
+      offeredUnits,
+      allProgramUnits,
+      targetAcadYearId,
+      passMark,
+    );
+
+    // Parallel array of mark metadata for cell styling (indexed 0 = first unit column)
+    const rowMarkData: Array<{ isCrossYear: boolean; isSpecial: boolean } | null> = [];
+
     offeredUnits.forEach((unit) => {
-      if (resolvedStatus.isLocked) { rowData.push(""); return; }
-
-      const markObj = (marks as any[]).find(
-        (m: any) =>
-          (m.student?._id?.toString() || m.student?.toString()) === sId &&
-          m.programUnit?.unit?.code === unit.code,
-      );
-
-      if (!markObj) { rowData.push("INC"); return; }
-
-      const isSpecialMark =
-        (markObj as any).isSpecial ||
-        ((markObj as any).remarks || "").toLowerCase().includes("special");
-      const markValue = (markObj as any).agreedMark ?? 0;
-      const hasCA     = (markObj as any).caTotal30   != null;
-      const hasExam   = (markObj as any).examTotal70  != null;
-
-      if (isSpecialMark)                              rowData.push(`${markValue}C`);
-      else if (!hasCA || !hasExam || markValue === 0) rowData.push("INC");
-      else                                            rowData.push(markValue);
+      if (resolvedStatus.isLocked) {
+        rowData.push("");
+        rowMarkData.push(null);
+        return;
+      }
+      const m = markCellMap.get(unit.code);
+      rowData.push(m ? m.value : "INC");
+      rowMarkData.push(m || null);
     });
 
     // Recommendation
@@ -536,7 +576,11 @@ export const generateConsolidatedMarkSheet = async (
       }
 
       if (colNum >= 5 && colNum < tuColIdx) {
-        const val = cell.value?.toString() || "";
+        const val     = cell.value?.toString() || "";
+        // 0-indexed position within the unit columns
+        const unitIdx = colNum - 5;
+        const mData   = rowMarkData[unitIdx];
+
         if (resolvedStatus.isLocked) {
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" } };
         } else if (val === "INC" || val.endsWith("C")) {
@@ -544,6 +588,10 @@ export const generateConsolidatedMarkSheet = async (
         } else if (typeof cell.value === "number" && cell.value < passMark) {
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" } };
           cell.font = { color: { argb: "FF9C0006" }, bold: true, size: 8, name: fontName };
+        } else if (mData?.isCrossYear) {
+          // Mark came from a prior academic year — light grey, italic to distinguish
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
+          cell.font = { size: 8, name: fontName, italic: true };
         }
       }
     });
@@ -554,7 +602,7 @@ export const generateConsolidatedMarkSheet = async (
 
   const lastDataRow = 10 + sortedStudents.length;
 
-  // ── 4. Unit statistics ─────────────────────────────────────────────────────
+  // ── 5. Unit statistics ─────────────────────────────────────────────────────
   const statsStart  = lastDataRow + 2;
   const statsLabels = [
     "Mean", "Standard Deviation", "Maximum", "Minimum",
@@ -613,7 +661,7 @@ export const generateConsolidatedMarkSheet = async (
     }
   });
 
-  // ── 5. Summary table ───────────────────────────────────────────────────────
+  // ── 6. Summary table ───────────────────────────────────────────────────────
   const summaryStart      = lastDataRow + 12;
   const summaryHeaderCell = sheet.getCell(`B${summaryStart}`);
   summaryHeaderCell.value = "SUMMARY";
@@ -653,7 +701,7 @@ export const generateConsolidatedMarkSheet = async (
     countCell.font   = { size: 8, name: fontName };
   });
 
-  // ── 6. Offered units table ─────────────────────────────────────────────────
+  // ── 7. Offered units table ─────────────────────────────────────────────────
   const unitsStart = summaryStart + activeSummaryEntries.length + 4;
   sheet.mergeCells(unitsStart, 2, unitsStart, 6);
   sheet.getCell(unitsStart, 2).value = "LIST OF UNITS OFFERED";
@@ -689,7 +737,7 @@ export const generateConsolidatedMarkSheet = async (
     });
   }
 
-  // ── 7. Main table thick borders ────────────────────────────────────────────
+  // ── 8. Main table thick borders ────────────────────────────────────────────
   for (let i = startRow; i <= lastDataRow; i++) {
     sheet.getCell(i, 1).border =
       { ...sheet.getCell(i, 1).border, left:  { style: "thick" } };
@@ -703,11 +751,11 @@ export const generateConsolidatedMarkSheet = async (
     (c) => (c.border = { ...c.border, bottom: { style: "thick" } }),
   );
 
-  // ── 8. Sheet formatting ────────────────────────────────────────────────────
+  // ── 9. Sheet formatting ────────────────────────────────────────────────────
   sheet.getColumn(1).width = 4;
-  sheet.getColumn(2).width = 22;  // wider for qualifier suffix
+  sheet.getColumn(2).width = 22;
   sheet.getColumn(3).width = 25;
-  sheet.getColumn(4).width = 7;   // wider for "RP1C", "A/SO", "A/RA1" etc.
+  sheet.getColumn(4).width = 7;
   offeredUnits.forEach((_, i) => (sheet.getColumn(5 + i).width = 4.5));
   sheet.getColumn(tuColIdx).width     = 5;
   sheet.getColumn(tuColIdx + 1).width = 7;
