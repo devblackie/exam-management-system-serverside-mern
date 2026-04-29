@@ -16,6 +16,7 @@ import AcademicYear from "../models/AcademicYear";
 import { getYearWeight } from "../utils/weightingRegistry";
 import { performAcademicAudit } from "./academicAudit";
 import { getAttemptLabel, REG_QUALIFIERS } from "../utils/academicRules";
+import { validateHistoricalYears } from "./historicalYearValidator";
 
 function _qualifierShouldClearOnPromotion(qualifier: string): boolean {
   if (!qualifier || qualifier.trim() === "") return false;
@@ -384,49 +385,216 @@ export const calculateStudentStatus = async (
 
 // ── promoteStudent ────────────────────────────────────────────────────────────
 
-export const promoteStudent = async (studentId: string) => {
+// export const promoteStudent = async (studentId: string) => {
+//   const student = await Student.findById(studentId).populate("program");
+//   if (!student) throw new Error("Student not found");
+
+//   const st          = (student as any).status as string;
+//   const regNo       = (student as any).regNo;
+//   const currentYear = (student as any).currentYearOfStudy || 1;
+
+//   if (["deregistered", "discontinued", "graduated", "graduand"].includes(st))
+//     return { success: false, message: `Action blocked: Student is ${st}` };
+
+//   if (st !== "active" && st !== "repeat")
+//     return { success: false, message: `Promotion blocked: Student status is ${st}` };
+
+//   const auditResult = await performAcademicAudit(studentId);
+//   if (auditResult.discontinued) return { success: false, message: `Discontinued: ${auditResult.reason}` };
+
+//   const program        = student.program as any;
+//   const duration       = program.durationYears || 5;
+//   const currentSession = await AcademicYear.findOne({ isCurrent: true }).lean();
+//   const completedYear  = currentSession?.year || "N/A";
+
+//   const statusResult = await calculateStudentStatus(student._id, student.program, completedYear, currentYear, { forPromotion: true });
+
+//   if (["DEREGISTERED", "DISCONTINUED"].includes(statusResult.status)) {
+//     await syncTerminalStatusToDb(studentId, statusResult.status, statusResult.details, completedYear);
+//     return { success: false, message: `Promotion Blocked: ${statusResult.status}`, details: statusResult };
+//   }
+
+//   if (statusResult.status === "REPEAT YEAR") {
+//     const repeatCount = ((student as any).academicHistory || []).filter((h: any) => h.isRepeatYear && h.yearOfStudy === currentYear).length + 1;
+//     const qualifier = REG_QUALIFIERS.repeatYear(repeatCount);
+//     await Student.findByIdAndUpdate(studentId, {
+//       $set:  { status: "repeat", qualifierSuffix: qualifier, remarks: statusResult.details },
+//       $push: {
+//         statusEvents:  { fromStatus: st, toStatus: "repeat", date: new Date(), academicYear: completedYear, reason: `ENG.16: ${statusResult.details}` },
+//         statusHistory: { status: "repeat", previousStatus: st, date: new Date(), reason: statusResult.details },
+//         academicHistory: { academicYear: completedYear, yearOfStudy: currentYear, annualMeanMark: parseFloat(statusResult.weightedMean), weightedContribution: 0, failedUnitsCount: statusResult.summary.failed, isRepeatYear: true, date: new Date() },
+//       },
+//     });
+//     return { success: false, message: `Repeat year required (${qualifier})`, details: statusResult };
+//   }
+
+//   if (statusResult.status === "STAYOUT") {
+//     await Student.findByIdAndUpdate(studentId, {
+//       $set:  { remarks: `ENG.15h: ${statusResult.details}` },
+//       $push: { statusEvents: { fromStatus: st, toStatus: "active", date: new Date(), academicYear: completedYear, reason: `ENG.15h: ${statusResult.details}` } },
+//     });
+//     return { success: false, message: "Stay out required (ENG.15h)", details: statusResult };
+//   }
+
+//   if (statusResult.specialList.length > 0 && statusResult.failedList.length === 0)
+//     return { success: false, message: "Special examinations pending", details: statusResult };
+
+//   const rawMean    = parseFloat(statusResult.weightedMean);
+//   const yearWeight = getYearWeight(program, (student as any).entryType || "Direct", currentYear);
+//   const histRecord = {
+//     academicYear: completedYear, yearOfStudy: currentYear, annualMeanMark: rawMean,
+//     weightedContribution: rawMean * yearWeight, failedUnitsCount: statusResult.summary.failed,
+//     isRepeatYear: false, date: new Date(),
+//   };
+
+//   const pendingCF = ((student as any).carryForwardUnits || []).filter((u: any) => u.status === "pending").length;
+
+//   if (currentYear === duration) {
+//     if (pendingCF > 0) return { success: false, message: `Cannot graduate: ${pendingCF} carry-forward unit(s) not yet cleared` };
+//     const fullHistory = [...((student as any).academicHistory || []), histRecord];
+//     const finalWAA    = fullHistory.reduce((acc: number, h: any) => acc + (h.weightedContribution || 0), 0);
+//     let classification = "PASS";
+//     if (finalWAA >= 70)      classification = "FIRST CLASS HONOURS";
+//     else if (finalWAA >= 60) classification = "SECOND CLASS HONOURS (UPPER DIVISION)";
+//     else if (finalWAA >= 50) classification = "SECOND CLASS HONOURS (LOWER DIVISION)";
+//     await Student.findByIdAndUpdate(studentId, {
+//       $set:  { status: "graduand", qualifierSuffix: "", finalWeightedAverage: finalWAA.toFixed(2), classification, graduationYear: new Date().getFullYear(), currentYearOfStudy: currentYear + 1 },
+//       $push: { academicHistory: histRecord },
+//     });
+//     return { success: true, message: `Graduated: ${classification}`, isGraduation: true };
+//   }
+
+//   const nextYear = currentYear + 1;
+//   let cfGranted  = false;
+//   let cfMessage  = "";
+
+//   // If status is PASS (possibly because all units were deferred), skip CF entirely.
+//   // If non-PASS for other reasons, attempt CF.
+//   if (statusResult.status !== "PASS") {
+//     const cfResult = await tryAssessAndGrantCarryForward(
+//       studentId, student.program.toString(), currentYear, completedYear,
+//     );
+//     cfGranted = cfResult.granted;
+//     cfMessage = cfGranted
+//       ? `Promoted to Year ${nextYear} with carry-forward (${cfResult.qualifier}): ${cfResult.cfUnits.map((u) => u.unitCode).join(", ")}`
+//       : "";
+//     if (!cfGranted) {
+//       return { success: false, message: `Promotion Blocked: ${cfResult.reason}`, details: statusResult };
+//     }
+//   }
+
+//   await Student.findByIdAndUpdate(studentId, {
+//     $set: {
+//       currentYearOfStudy: nextYear, currentSemester: 1,
+//       ...((!cfGranted && _qualifierShouldClearOnPromotion((student as any).qualifierSuffix || "")) ? { qualifierSuffix: "" } : {}),
+//     },
+//     $push: {
+//       promotionHistory: { from: currentYear, to: nextYear, date: new Date() },
+//       academicHistory:  histRecord,
+//       statusHistory:    { status: "active", previousStatus: st, date: new Date(), reason: `Promoted to Year ${nextYear}` },
+//     },
+//   });
+
+//   return { success: true, message: cfGranted ? cfMessage : `Successfully promoted to Year ${nextYear}` };
+// };
+
+export const promoteStudent = async (studentId: string): Promise<{
+  success:       boolean;
+  message:       string;
+  isGraduation?: boolean;
+  details?:      unknown;
+  eng15bBlock?:  boolean;
+  blockingUnits?: unknown[];
+  yearSummaries?: unknown[];
+}> => {
   const student = await Student.findById(studentId).populate("program");
   if (!student) throw new Error("Student not found");
-
+ 
   const st          = (student as any).status as string;
-  const regNo       = (student as any).regNo;
   const currentYear = (student as any).currentYearOfStudy || 1;
-
-  if (["deregistered", "discontinued", "graduated", "graduand"].includes(st))
+ 
+  if (["deregistered","discontinued","graduated","graduand"].includes(st))
     return { success: false, message: `Action blocked: Student is ${st}` };
-
+ 
   if (st !== "active" && st !== "repeat")
     return { success: false, message: `Promotion blocked: Student status is ${st}` };
-
+ 
   const auditResult = await performAcademicAudit(studentId);
-  if (auditResult.discontinued) return { success: false, message: `Discontinued: ${auditResult.reason}` };
-
-  const program        = student.program as any;
-  const duration       = program.durationYears || 5;
-  const currentSession = await AcademicYear.findOne({ isCurrent: true }).lean();
-  const completedYear  = currentSession?.year || "N/A";
-
-  const statusResult = await calculateStudentStatus(student._id, student.program, completedYear, currentYear, { forPromotion: true });
-
-  if (["DEREGISTERED", "DISCONTINUED"].includes(statusResult.status)) {
+  if (auditResult.discontinued)
+    return { success: false, message: `Discontinued: ${auditResult.reason}` };
+ 
+  const program  = student.program as any;
+  const duration = program.durationYears || 5;
+ 
+  const currentSession  = await AcademicYear.findOne({ isCurrent: true }).lean();
+  const completedYear   = currentSession?.year || "N/A";
+ 
+  // ── ENG.15(b): Historical year validation ──────────────────────────────────
+  // Runs ONLY when promoting from the penultimate year into the final year.
+  // For a 5-year programme: currentYear = 4 (promoting into Y5).
+  // For a 4-year programme: currentYear = 3 (promoting into Y4).
+  //
+  // WHY HERE AND NOT EARLIER:
+  // Years 1→2, 2→3, 3→4 don't need historical validation because carry-forwards
+  // and supplementaries from prior years are legitimately still in-flight.
+  // ENG.15(b) draws a hard line specifically at final year entry.
+  if (currentYear === duration - 1) {
+    const histCheck = await validateHistoricalYears(
+      studentId.toString(),
+      (student.program as any)._id.toString(),
+      duration - 1,
+    );
+ 
+    if (!histCheck.canEnterFinalYear) {
+      // Write a statusEvent so the audit trail shows WHY this student was blocked
+      await Student.findByIdAndUpdate(studentId, {
+        $push: {
+          statusEvents: {
+            fromStatus:  st,
+            toStatus:    st,       // status unchanged — they stay where they are
+            date:        new Date(),
+            academicYear: completedYear,
+            reason:      histCheck.blockReason,
+          },
+        },
+      });
+ 
+      return {
+        success:       false,
+        message:       histCheck.blockReason,
+        eng15bBlock:   true,
+        blockingUnits: histCheck.blockingUnits,
+        yearSummaries: histCheck.yearSummaries,
+      };
+    }
+    // Historical years are clean — fall through to normal Y(n-1) engine check
+  }
+ 
+  // ── Standard current-year status engine (unchanged) ───────────────────────
+  const statusResult = await calculateStudentStatus(
+    student._id, student.program, completedYear, currentYear, { forPromotion: true },
+  );
+ 
+  if (["DEREGISTERED","DISCONTINUED"].includes(statusResult.status)) {
     await syncTerminalStatusToDb(studentId, statusResult.status, statusResult.details, completedYear);
     return { success: false, message: `Promotion Blocked: ${statusResult.status}`, details: statusResult };
   }
-
+ 
   if (statusResult.status === "REPEAT YEAR") {
-    const repeatCount = ((student as any).academicHistory || []).filter((h: any) => h.isRepeatYear && h.yearOfStudy === currentYear).length + 1;
+    const repeatCount = ((student as any).academicHistory || [])
+      .filter((h: any) => h.isRepeatYear && h.yearOfStudy === currentYear).length + 1;
     const qualifier = REG_QUALIFIERS.repeatYear(repeatCount);
     await Student.findByIdAndUpdate(studentId, {
       $set:  { status: "repeat", qualifierSuffix: qualifier, remarks: statusResult.details },
       $push: {
-        statusEvents:  { fromStatus: st, toStatus: "repeat", date: new Date(), academicYear: completedYear, reason: `ENG.16: ${statusResult.details}` },
-        statusHistory: { status: "repeat", previousStatus: st, date: new Date(), reason: statusResult.details },
+        statusEvents:   { fromStatus: st, toStatus: "repeat", date: new Date(), academicYear: completedYear, reason: `ENG.16: ${statusResult.details}` },
+        statusHistory:  { status: "repeat", previousStatus: st, date: new Date(), reason: statusResult.details },
         academicHistory: { academicYear: completedYear, yearOfStudy: currentYear, annualMeanMark: parseFloat(statusResult.weightedMean), weightedContribution: 0, failedUnitsCount: statusResult.summary.failed, isRepeatYear: true, date: new Date() },
       },
     });
     return { success: false, message: `Repeat year required (${qualifier})`, details: statusResult };
   }
-
+ 
   if (statusResult.status === "STAYOUT") {
     await Student.findByIdAndUpdate(studentId, {
       $set:  { remarks: `ENG.15h: ${statusResult.details}` },
@@ -434,10 +602,10 @@ export const promoteStudent = async (studentId: string) => {
     });
     return { success: false, message: "Stay out required (ENG.15h)", details: statusResult };
   }
-
+ 
   if (statusResult.specialList.length > 0 && statusResult.failedList.length === 0)
     return { success: false, message: "Special examinations pending", details: statusResult };
-
+ 
   const rawMean    = parseFloat(statusResult.weightedMean);
   const yearWeight = getYearWeight(program, (student as any).entryType || "Direct", currentYear);
   const histRecord = {
@@ -445,30 +613,34 @@ export const promoteStudent = async (studentId: string) => {
     weightedContribution: rawMean * yearWeight, failedUnitsCount: statusResult.summary.failed,
     isRepeatYear: false, date: new Date(),
   };
-
+ 
   const pendingCF = ((student as any).carryForwardUnits || []).filter((u: any) => u.status === "pending").length;
-
+ 
+  // Graduation path (final year)
   if (currentYear === duration) {
-    if (pendingCF > 0) return { success: false, message: `Cannot graduate: ${pendingCF} carry-forward unit(s) not yet cleared` };
+    if (pendingCF > 0)
+      return { success: false, message: `Cannot graduate: ${pendingCF} carry-forward unit(s) not yet cleared` };
+ 
     const fullHistory = [...((student as any).academicHistory || []), histRecord];
     const finalWAA    = fullHistory.reduce((acc: number, h: any) => acc + (h.weightedContribution || 0), 0);
+ 
     let classification = "PASS";
     if (finalWAA >= 70)      classification = "FIRST CLASS HONOURS";
     else if (finalWAA >= 60) classification = "SECOND CLASS HONOURS (UPPER DIVISION)";
     else if (finalWAA >= 50) classification = "SECOND CLASS HONOURS (LOWER DIVISION)";
+ 
     await Student.findByIdAndUpdate(studentId, {
       $set:  { status: "graduand", qualifierSuffix: "", finalWeightedAverage: finalWAA.toFixed(2), classification, graduationYear: new Date().getFullYear(), currentYearOfStudy: currentYear + 1 },
       $push: { academicHistory: histRecord },
     });
     return { success: true, message: `Graduated: ${classification}`, isGraduation: true };
   }
-
+ 
+  // Standard promotion to next year
   const nextYear = currentYear + 1;
   let cfGranted  = false;
   let cfMessage  = "";
-
-  // If status is PASS (possibly because all units were deferred), skip CF entirely.
-  // If non-PASS for other reasons, attempt CF.
+ 
   if (statusResult.status !== "PASS") {
     const cfResult = await tryAssessAndGrantCarryForward(
       studentId, student.program.toString(), currentYear, completedYear,
@@ -477,11 +649,10 @@ export const promoteStudent = async (studentId: string) => {
     cfMessage = cfGranted
       ? `Promoted to Year ${nextYear} with carry-forward (${cfResult.qualifier}): ${cfResult.cfUnits.map((u) => u.unitCode).join(", ")}`
       : "";
-    if (!cfGranted) {
+    if (!cfGranted)
       return { success: false, message: `Promotion Blocked: ${cfResult.reason}`, details: statusResult };
-    }
   }
-
+ 
   await Student.findByIdAndUpdate(studentId, {
     $set: {
       currentYearOfStudy: nextYear, currentSemester: 1,
@@ -493,74 +664,301 @@ export const promoteStudent = async (studentId: string) => {
       statusHistory:    { status: "active", previousStatus: st, date: new Date(), reason: `Promoted to Year ${nextYear}` },
     },
   });
-
+ 
   return { success: true, message: cfGranted ? cfMessage : `Successfully promoted to Year ${nextYear}` };
 };
 
 // ── previewPromotion ──────────────────────────────────────────────────────────
 
-export const previewPromotion = async (programId: string, yearToPromote: number, academicYearName: string) => {
-  const nextYear      = yearToPromote + 1;
-  const targetYearDoc = await AcademicYear.findOne({ year: academicYearName }).lean();
+// export const previewPromotion = async (programId: string, yearToPromote: number, academicYearName: string) => {
+//   const nextYear      = yearToPromote + 1;
+//   const targetYearDoc = await AcademicYear.findOne({ year: academicYearName }).lean();
+//   if (!targetYearDoc) {
+//     console.warn(`[previewPromotion] AcademicYear "${academicYearName}" not found.`);
+//     return { totalProcessed: 0, eligibleCount: 0, blockedCount: 0, eligible: [], blocked: [] };
+//   }
+
+//   const admissionStudents = await Student.find({ program: programId, currentYearOfStudy: yearToPromote, admissionAcademicYear: (targetYearDoc as any)._id }).lean();
+//   const [m1, m2] = await Promise.all([
+//     Mark.distinct("student",       { academicYear: (targetYearDoc as any)._id }),
+//     MarkDirect.distinct("student", { academicYear: (targetYearDoc as any)._id }),
+//   ]);
+//   const markedIds    = new Set<string>([...m1, ...m2].map((id: any) => id.toString()));
+//   const admissionIds = new Set(admissionStudents.map((s: any) => s._id.toString()));
+//   const returningStudents = await Student.find({ program: programId, currentYearOfStudy: yearToPromote, _id: { $in: Array.from(markedIds), $nin: Array.from(admissionIds) } }).lean();
+//   const adminStudents = await Student.find({ program: programId, currentYearOfStudy: yearToPromote, status: { $in: ["on_leave","deferred","deregistered","discontinued"] }, $or: [{ admissionAcademicYear: (targetYearDoc as any)._id }, { "academicHistory.academicYear": academicYearName }], _id: { $nin: [...Array.from(admissionIds), ...returningStudents.map((s: any) => s._id.toString())] } }).lean();
+
+//   const allStudents  = [...admissionStudents, ...returningStudents, ...adminStudents];
+//   const ADMIN_LABELS: Record<string, string> = { on_leave: "ACADEMIC LEAVE", deferred: "DEFERMENT", discontinued: "DISCONTINUED", deregistered: "DEREGISTERED", graduated: "GRADUATED" };
+//   const eligible: any[] = [];
+//   const blocked:  any[] = [];
+
+//   for (const student of allStudents) {
+//     const isAlreadyPromoted = (student as any).currentYearOfStudy === nextYear;
+//     const adminLabel        = ADMIN_LABELS[(student as any).status];
+
+//     if (isAlreadyPromoted) {
+//       eligible.push({ id: (student as any)._id, _id: (student as any)._id, regNo: (student as any).regNo, name: (student as any).name, status: "ALREADY PROMOTED", reasons: [], specialGrounds: "", qualifierSuffix: (student as any).qualifierSuffix || "", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 }, details: "" });
+//       continue;
+//     }
+//     if (adminLabel) {
+//       const leaveType    = (student as any).academicLeavePeriod?.type?.toUpperCase();
+//       const adminGrounds = [((student as any).academicLeavePeriod?.type || "").toLowerCase(), ((student as any).remarks || "").toLowerCase()].join(" ").trim() || "other";
+//       blocked.push({ id: (student as any)._id, _id: (student as any)._id, regNo: (student as any).regNo, name: (student as any).name, status: adminLabel, reasons: [leaveType ? `${adminLabel} (${leaveType})` : adminLabel], specialGrounds: adminGrounds, qualifierSuffix: (student as any).qualifierSuffix || "", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 }, academicLeavePeriod: (student as any).academicLeavePeriod, remarks: (student as any).remarks, details: "" });
+//       continue;
+//     }
+
+//     const sr = await calculateStudentStatus((student as any)._id, programId, academicYearName, yearToPromote, { forPromotion: true });
+//     const specialGrounds = [(sr.specialList || []).map((s: any) => (s.grounds || "").toLowerCase()).join(" "), ((student as any).remarks || "").toLowerCase(), ((student as any).academicLeavePeriod?.type || "").toLowerCase()].join(" ").trim() || "other";
+
+//     const report: any = {
+//       id: (student as any)._id, _id: (student as any)._id, regNo: (student as any).regNo, name: (student as any).name,
+//       status: sr.status, summary: sr.summary, reasons: [], remarks: (student as any).remarks,
+//       academicLeavePeriod: (student as any).academicLeavePeriod, details: sr.details, specialGrounds,
+//       qualifierSuffix: (student as any).qualifierSuffix || "",
+//       isEligibleForSupp: !["STAYOUT","REPEAT YEAR","DEREGISTERED"].includes(sr.status) && (sr.failedList.length > 0 || sr.specialList.length > 0),
+//     };
+
+//     if (sr.status === "PASS") { eligible.push(report); continue; }
+
+//     if (sr.status === "STAYOUT")      report.reasons.push("ENG 15h: > 1/3 units failed");
+//     if (sr.status === "REPEAT YEAR")  report.reasons.push("ENG 16: >= 1/2 units failed or mean < 40%");
+//     if (sr.status === "DEREGISTERED") report.reasons.push("ENG 23c: Absent from 6+ examinations");
+//     sr.specialList.forEach((s: any)      => report.reasons.push(`${s.displayName} (SPECIAL)`));
+//     sr.incompleteList.forEach((u: string) => report.reasons.push(`${u} (INCOMPLETE)`));
+//     sr.missingList.forEach((u: string)    => report.reasons.push(`${u} (MISSING)`));
+//     sr.failedList.forEach((f: any)        => report.reasons.push(`${f.displayName} (FAIL: ${f.attempt})`));
+//     blocked.push(report);
+//   }
+
+//   return { totalProcessed: allStudents.length, eligibleCount: eligible.length, blockedCount: blocked.length, eligible, blocked };
+// };
+
+export const previewPromotion = async (
+  programId: string,
+  yearToPromote: number,
+  academicYearName: string,
+) => {
+  const nextYear = yearToPromote + 1;
+  const targetYearDoc = await AcademicYear.findOne({
+    year: academicYearName,
+  }).lean();
   if (!targetYearDoc) {
-    console.warn(`[previewPromotion] AcademicYear "${academicYearName}" not found.`);
-    return { totalProcessed: 0, eligibleCount: 0, blockedCount: 0, eligible: [], blocked: [] };
+    console.warn(
+      `[previewPromotion] AcademicYear "${academicYearName}" not found.`,
+    );
+    return {
+      totalProcessed: 0,
+      eligibleCount: 0,
+      blockedCount: 0,
+      eligible: [],
+      blocked: [],
+    };
   }
 
-  const admissionStudents = await Student.find({ program: programId, currentYearOfStudy: yearToPromote, admissionAcademicYear: (targetYearDoc as any)._id }).lean();
-  const [m1, m2] = await Promise.all([
-    Mark.distinct("student",       { academicYear: (targetYearDoc as any)._id }),
-    MarkDirect.distinct("student", { academicYear: (targetYearDoc as any)._id }),
-  ]);
-  const markedIds    = new Set<string>([...m1, ...m2].map((id: any) => id.toString()));
-  const admissionIds = new Set(admissionStudents.map((s: any) => s._id.toString()));
-  const returningStudents = await Student.find({ program: programId, currentYearOfStudy: yearToPromote, _id: { $in: Array.from(markedIds), $nin: Array.from(admissionIds) } }).lean();
-  const adminStudents = await Student.find({ program: programId, currentYearOfStudy: yearToPromote, status: { $in: ["on_leave","deferred","deregistered","discontinued"] }, $or: [{ admissionAcademicYear: (targetYearDoc as any)._id }, { "academicHistory.academicYear": academicYearName }], _id: { $nin: [...Array.from(admissionIds), ...returningStudents.map((s: any) => s._id.toString())] } }).lean();
+  const program = (await (await import("../models/Program")).default
+    .findById(programId)
+    .lean()) as any;
+  const duration = program?.durationYears || 5;
 
-  const allStudents  = [...admissionStudents, ...returningStudents, ...adminStudents];
-  const ADMIN_LABELS: Record<string, string> = { on_leave: "ACADEMIC LEAVE", deferred: "DEFERMENT", discontinued: "DISCONTINUED", deregistered: "DEREGISTERED", graduated: "GRADUATED" };
+  // Student sets (same as original — unchanged)
+  const admissionStudents = await Student.find({
+    program: programId,
+    currentYearOfStudy: yearToPromote,
+    admissionAcademicYear: (targetYearDoc as any)._id,
+  }).lean();
+
+  const [m1, m2] = await Promise.all([
+    Mark.distinct("student", { academicYear: (targetYearDoc as any)._id }),
+    MarkDirect.distinct("student", {
+      academicYear: (targetYearDoc as any)._id,
+    }),
+  ]);
+
+  const markedIds = new Set<string>(
+    [...m1, ...m2].map((id: any) => id.toString()),
+  );
+  const admissionIds = new Set(
+    admissionStudents.map((s: any) => s._id.toString()),
+  );
+
+  const returningStudents = await Student.find({
+    program: programId,
+    currentYearOfStudy: yearToPromote,
+    _id: { $in: Array.from(markedIds), $nin: Array.from(admissionIds) },
+  }).lean();
+
+  const adminStudents = await Student.find({
+    program: programId,
+    currentYearOfStudy: yearToPromote,
+    status: { $in: ["on_leave", "deferred", "deregistered", "discontinued"] },
+    $or: [
+      { admissionAcademicYear: (targetYearDoc as any)._id },
+      { "academicHistory.academicYear": academicYearName },
+    ],
+    _id: {
+      $nin: [
+        ...Array.from(admissionIds),
+        ...returningStudents.map((s: any) => s._id.toString()),
+      ],
+    },
+  }).lean();
+
+  const allStudents = [
+    ...admissionStudents,
+    ...returningStudents,
+    ...adminStudents,
+  ];
+  const ADMIN_LABELS: Record<string, string> = {
+    on_leave: "ACADEMIC LEAVE",
+    deferred: "DEFERMENT",
+    discontinued: "DISCONTINUED",
+    deregistered: "DEREGISTERED",
+    graduated: "GRADUATED",
+  };
+
   const eligible: any[] = [];
-  const blocked:  any[] = [];
+  const blocked: any[] = [];
 
   for (const student of allStudents) {
     const isAlreadyPromoted = (student as any).currentYearOfStudy === nextYear;
-    const adminLabel        = ADMIN_LABELS[(student as any).status];
+    const adminLabel = ADMIN_LABELS[(student as any).status];
 
-    if (isAlreadyPromoted) {
-      eligible.push({ id: (student as any)._id, _id: (student as any)._id, regNo: (student as any).regNo, name: (student as any).name, status: "ALREADY PROMOTED", reasons: [], specialGrounds: "", qualifierSuffix: (student as any).qualifierSuffix || "", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 }, details: "" });
-      continue;
-    }
-    if (adminLabel) {
-      const leaveType    = (student as any).academicLeavePeriod?.type?.toUpperCase();
-      const adminGrounds = [((student as any).academicLeavePeriod?.type || "").toLowerCase(), ((student as any).remarks || "").toLowerCase()].join(" ").trim() || "other";
-      blocked.push({ id: (student as any)._id, _id: (student as any)._id, regNo: (student as any).regNo, name: (student as any).name, status: adminLabel, reasons: [leaveType ? `${adminLabel} (${leaveType})` : adminLabel], specialGrounds: adminGrounds, qualifierSuffix: (student as any).qualifierSuffix || "", summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 }, academicLeavePeriod: (student as any).academicLeavePeriod, remarks: (student as any).remarks, details: "" });
-      continue;
-    }
-
-    const sr = await calculateStudentStatus((student as any)._id, programId, academicYearName, yearToPromote, { forPromotion: true });
-    const specialGrounds = [(sr.specialList || []).map((s: any) => (s.grounds || "").toLowerCase()).join(" "), ((student as any).remarks || "").toLowerCase(), ((student as any).academicLeavePeriod?.type || "").toLowerCase()].join(" ").trim() || "other";
-
-    const report: any = {
-      id: (student as any)._id, _id: (student as any)._id, regNo: (student as any).regNo, name: (student as any).name,
-      status: sr.status, summary: sr.summary, reasons: [], remarks: (student as any).remarks,
-      academicLeavePeriod: (student as any).academicLeavePeriod, details: sr.details, specialGrounds,
+    const baseReport = {
+      id: (student as any)._id,
+      _id: (student as any)._id,
+      regNo: (student as any).regNo,
+      name: (student as any).name,
       qualifierSuffix: (student as any).qualifierSuffix || "",
-      isEligibleForSupp: !["STAYOUT","REPEAT YEAR","DEREGISTERED"].includes(sr.status) && (sr.failedList.length > 0 || sr.specialList.length > 0),
+      remarks: (student as any).remarks,
+      academicLeavePeriod: (student as any).academicLeavePeriod,
     };
 
-    if (sr.status === "PASS") { eligible.push(report); continue; }
+    if (isAlreadyPromoted) {
+      eligible.push({
+        ...baseReport,
+        status: "ALREADY PROMOTED",
+        reasons: [],
+        summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
+        details: "",
+      });
+      continue;
+    }
 
-    if (sr.status === "STAYOUT")      report.reasons.push("ENG 15h: > 1/3 units failed");
-    if (sr.status === "REPEAT YEAR")  report.reasons.push("ENG 16: >= 1/2 units failed or mean < 40%");
-    if (sr.status === "DEREGISTERED") report.reasons.push("ENG 23c: Absent from 6+ examinations");
-    sr.specialList.forEach((s: any)      => report.reasons.push(`${s.displayName} (SPECIAL)`));
-    sr.incompleteList.forEach((u: string) => report.reasons.push(`${u} (INCOMPLETE)`));
-    sr.missingList.forEach((u: string)    => report.reasons.push(`${u} (MISSING)`));
-    sr.failedList.forEach((f: any)        => report.reasons.push(`${f.displayName} (FAIL: ${f.attempt})`));
+    if (adminLabel) {
+      const leaveType = (
+        student as any
+      ).academicLeavePeriod?.type?.toUpperCase();
+      const adminGrounds =
+        [
+          (student as any).academicLeavePeriod?.type || "",
+          (student as any).remarks || "",
+        ]
+          .join(" ")
+          .trim() || "other";
+      blocked.push({
+        ...baseReport,
+        status: adminLabel,
+        reasons: [leaveType ? `${adminLabel} (${leaveType})` : adminLabel],
+        specialGrounds: adminGrounds,
+        summary: { totalExpected: 0, passed: 0, failed: 0, missing: 0 },
+        details: "",
+      });
+      continue;
+    }
+
+    // ── ENG.15(b) CHECK — runs before calculateStudentStatus when entering final year ──
+    // This is the KEY addition. Without this, previewPromotion would classify a
+    // student with a pending Y2 carry-forward as PASS at Y4 level and show them
+    // as eligible for Y5 entry. With this, the coordinator sees the specific
+    // blocking units before attempting the promotion.
+    if (yearToPromote === duration - 1) {
+      const histCheck = await validateHistoricalYears(
+        (student as any)._id.toString(),
+        programId,
+        duration - 1,
+      );
+
+      if (!histCheck.canEnterFinalYear) {
+        blocked.push({
+          ...baseReport,
+          status: "ENG.15(b) BLOCK",
+          reasons: [histCheck.blockReason],
+          specialGrounds: "eng15b",
+          summary: {
+            totalExpected: 0,
+            passed: 0,
+            failed: histCheck.blockingUnits.length,
+            missing: 0,
+          },
+          details: histCheck.blockReason,
+          eng15bBlock: true,
+          blockingUnits: histCheck.blockingUnits,
+          yearSummaries: histCheck.yearSummaries,
+        });
+        continue;
+      }
+    }
+
+    // Standard engine check (unchanged)
+    const sr = await calculateStudentStatus(
+      (student as any)._id,
+      programId,
+      academicYearName,
+      yearToPromote,
+      { forPromotion: true },
+    );
+
+    const specialGrounds =
+      [
+        (sr.specialList || [])
+          .map((s: any) => (s.grounds || "").toLowerCase())
+          .join(" "),
+        ((student as any).remarks || "").toLowerCase(),
+        ((student as any).academicLeavePeriod?.type || "").toLowerCase(),
+      ]
+        .join(" ")
+        .trim() || "other";
+
+    const report: any = {
+      ...baseReport,
+      status: sr.status,
+      summary: sr.summary,
+      reasons: [],
+      details: sr.details,
+      specialGrounds,
+      isEligibleForSupp:
+        !["STAYOUT", "REPEAT YEAR", "DEREGISTERED"].includes(sr.status) &&
+        (sr.failedList.length > 0 || sr.specialList.length > 0),
+    };
+
+    if (sr.status === "PASS") {
+      eligible.push(report);
+      continue;
+    }
+    if (sr.status === "STAYOUT")
+      report.reasons.push("ENG 15h: > 1/3 units failed");
+    if (sr.status === "REPEAT YEAR")
+      report.reasons.push("ENG 16: >= 1/2 units failed or mean < 40%");
+    if (sr.failedList?.length)
+      report.reasons.push(
+        `${sr.failedList.length} unit(s) require supplementary`,
+      );
+    if (sr.specialList?.length)
+      report.reasons.push(
+        `${sr.specialList.length} special examination(s) pending`,
+      );
+
     blocked.push(report);
   }
 
-  return { totalProcessed: allStudents.length, eligibleCount: eligible.length, blockedCount: blocked.length, eligible, blocked };
+  return {
+    totalProcessed: allStudents.length,
+    eligibleCount: eligible.length,
+    blockedCount: blocked.length,
+    eligible,
+    blocked,
+  };
 };
 
 // ── bulkPromoteClass ──────────────────────────────────────────────────────────

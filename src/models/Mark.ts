@@ -115,5 +115,6 @@ schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
 schema.index({ student: 1, academicYear: 1, programUnit: 1, deletedAt: 1 });
 schema.index({ institution: 1, student: 1, deletedAt: 1 });
 schema.index({ institution: 1, uploadedAt: -1 });
+schema.index({ student: 1, programUnit: 1, deletedAt: 1 });
 
 export default mongoose.model<IMark>("Mark", schema);

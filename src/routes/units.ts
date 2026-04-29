@@ -6,6 +6,7 @@ import ProgramUnit from "../models/ProgramUnit";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import { cached, invalidateCache } from "../utils/cache";
 
 const router = Router();
 
@@ -44,21 +45,30 @@ router.post(
     });
 
     await newUnit.save();
-
+    invalidateCache(`settings:${req.user.institution}`);
     res.status(201).json(newUnit);
   })
 );
 
 
 
-router.get(
-  "/",
-  requireAuth,
-  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const units = await Unit.find({ institution: req.user.institution }).sort({ code: 1 });
-    res.json(units);
-  })
-);
+// router.get(
+//   "/",
+//   requireAuth,
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const units = await Unit.find({ institution: req.user.institution }).sort({ code: 1 });
+//     res.json(units);
+//   })
+// );
+
+// GET
+router.get("/", requireAuth, asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const institutionId = req.user.institution;
+  const units = await cached(`units:${institutionId}`, () => 
+    Unit.find({ institution: institutionId }).sort({ code: 1 }).lean()
+  );
+  res.json(units);
+}));
 
 // UPDATE UNIT TEMPLATE
 router.put(
@@ -135,7 +145,7 @@ message: `Cannot modify this Unit Template. It is currently linked to ${linkedCo
 if (!unit) {
 return res.status(404).json({ message: "Unit template not found" });
 }
-
+invalidateCache(`settings:${req.user.institution}`);
 res.json(unit);
  })
 );
@@ -170,7 +180,7 @@ router.delete(
     if (!unit) {
       return res.status(404).json({ message: "Unit template not found" });
     }
-
+    invalidateCache(`settings:${req.user.institution}`);
     res.json({ message: "Unit template deleted successfully" });
   })
 );

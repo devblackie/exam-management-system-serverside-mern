@@ -1,5 +1,6 @@
 // serverside/src/models/AcademicYear.ts
 import mongoose, { Schema, Document } from "mongoose";
+import { requiredDateField } from "../utils/dateValidation";
 
 export interface IAcademicYear extends Document {
   institution: mongoose.Types.ObjectId;
@@ -17,8 +18,10 @@ const schema = new Schema<IAcademicYear>({
   institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true },
   year: { type: String, required: true },
   intakes: [{ type: String }],
-  startDate: { type: Date, required: true },
-  endDate: { type: Date, required: true },
+  // startDate: { type: Date, required: true },
+  startDate: requiredDateField("Academic year start date"),
+  // endDate: { type: Date, required: true },
+  endDate: requiredDateField("Academic year end date"),
   isCurrent: { type: Boolean, default: false },
   session: { 
     type: String, 

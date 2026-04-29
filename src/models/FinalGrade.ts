@@ -40,6 +40,8 @@ schema.index({ institution: 1, academicYear: 1, status: 1 });
 schema.index({ student: 1, academicYear: 1, programUnit: 1 });
 schema.index({ student: 1, createdAt: -1 }); 
 schema.index({ institution: 1, academicYear: 1, status: 1, attemptType: 1 });
+schema.index({ student: 1, programUnit: 1, status: 1 });
+schema.index({ student: 1, academicYear: 1, status: 1 });
 
 export default mongoose.model<IFinalGrade>("FinalGrade", schema);
 

@@ -1,9 +1,4 @@
 // serverside/src/lib/jwt.ts
-//
-// UPDATED: institution is REQUIRED in the payload — never undefined, never "".
-// Every user (admin or otherwise) must be linked to an institution before
-// a session can be issued. setAuthCookie will throw if institution is missing
-// so the bug is caught at the source rather than silently producing bad tokens.
 
 import jwt from "jsonwebtoken";
 import { Response } from "express";
@@ -44,8 +39,27 @@ export const signToken = (
   );
 };
 
+// export const verifyToken = (token: string): JwtPayload => {
+//   return jwt.verify(token, JWT_SECRET) as JwtPayload;
+// };
+
+const JWT_SECRET_PREVIOUS = process.env.JWT_SECRET_PREVIOUS;
+
+// REPLACE your existing verifyToken with this — identical interface, adds rotation
 export const verifyToken = (token: string): JwtPayload => {
-  return jwt.verify(token, JWT_SECRET) as JwtPayload;
+  try {
+    return jwt.verify(token, JWT_SECRET) as JwtPayload;
+  } catch (primaryErr) {
+    // Only attempt previous secret during an active rotation window
+    if (JWT_SECRET_PREVIOUS) {
+      try {
+        return jwt.verify(token, JWT_SECRET_PREVIOUS) as JwtPayload;
+      } catch {
+        // Previous secret also failed — throw the original error
+      }
+    }
+    throw primaryErr;
+  }
 };
 
 export const setAuthCookie = (

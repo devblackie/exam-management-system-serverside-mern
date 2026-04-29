@@ -16,9 +16,7 @@ import { cleanupOrphanedGrades } from "../scripts/cleanupGrades";
 const router = Router();
 
 // Coordinator secret registration
-router.post(
-  "/secret-register",
-  asyncHandler(async (req: Request, res: Response) => {
+router.post("/secret-register", asyncHandler(async (req: Request, res: Response) => {
     const { secret, name, email, password ,institutionId } = req.body;
 
     // Validate Secret Key
@@ -82,8 +80,6 @@ router.post(
   })
 );
 
-
-
 router.post("/maintain/cleanup-grades", requireAuth,  requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -104,9 +100,7 @@ router.post("/maintain/cleanup-grades", requireAuth,  requireRole("coordinator",
 }));
 
 // Coordinator creates lecturer (no login needed)
-router.post(
-  "/lecturers",
-  requireAuth,
+router.post("/lecturers", requireAuth,
   requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { name, email } = req.body;
@@ -148,8 +142,7 @@ router.post(
 );
 
 // View student results (senate-style)
-router.get(
-  "/students/:regNo/results",
+router.get("/students/:regNo/results",
   requireAuth,
   requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
@@ -226,49 +219,3 @@ router.get(
 
 export default router;
 
-
-// router.get("/repair-missing-years",requireAuth,  requireRole("coordinator", "admin"),
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     // 1. Find the target Academic Year ID for 2024/2025
-//     const targetYear = await AcademicYear.findOne({ year: "2024/2025" });
-    
-//     if (!targetYear) {
-//         return res.status(404).json({ 
-//             message: "Target year '2024/2025' not found in database. Please create it first." 
-//         });
-//     }
-
-//     // 2. Find all grades where academicYear is null or missing
-//     // We also check for grades that have an ID but it's not a valid reference
-//     const gradesToFix = await FinalGrade.find({
-//         $or: [
-//             { academicYear: { $exists: false } },
-//             { academicYear: null }
-//         ]
-//     });
-
-//     const totalToFix = gradesToFix.length;
-
-//     if (totalToFix === 0) {
-//         return res.json({ message: "No broken grade records found. Data is healthy!" });
-//     }
-
-//     // 3. Perform the bulk update
-//     const result = await FinalGrade.updateMany(
-//         {
-//             $or: [
-//                 { academicYear: { $exists: false } },
-//                 { academicYear: null }
-//             ]
-//         },
-//         { $set: { academicYear: targetYear._id } }
-//     );
-
-//     res.json({
-//         message: "Repair complete!",
-//         foundRecords: totalToFix,
-//         updatedCount: result.modifiedCount,
-//         linkedTo: "2024/2025",
-//         targetId: targetYear._id
-//     });
-// }));

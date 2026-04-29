@@ -12,7 +12,7 @@ export const scopeQuery = (req: any, query: any = {}) => {
     throw new Error("MULTI_TENANT_VIOLATION: Institution context missing");
   }
 
-  // 🛡️ FIX: Ensure we are using an ObjectId for the query
+  // FIX: Ensure we are using an ObjectId for the query
   try {
     const validId = typeof institutionId === 'string' 
       ? new Types.ObjectId(institutionId) 

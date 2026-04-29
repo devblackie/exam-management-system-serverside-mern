@@ -1,24 +1,3 @@
-// // serverside/src/models/TempOTP.ts
-// import mongoose, { Schema, Document } from "mongoose";
-
-// export interface ITempOTP extends Document {
-//   userId:    mongoose.Types.ObjectId;
-//   otpHash:   string;
-//   expiresAt: Date;
-// }
-
-// const schema = new Schema<ITempOTP>({
-//   userId:    { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
-//   otpHash:   { type: String, required: true },
-//   expiresAt: { type: Date,   required: true },
-// });
-
-// // MongoDB TTL index — automatically deletes documents when expiresAt passes
-// // No manual cleanup needed
-// schema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-
-// export default mongoose.model<ITempOTP>("TempOTP", schema);
-
 
 // serverside/src/models/TempOTP.ts
 import mongoose, { Schema, Document } from "mongoose";

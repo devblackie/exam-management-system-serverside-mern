@@ -12,27 +12,61 @@ import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import config from "../config/config";
+import { paginate } from "../utils/paginate";
 
 const router = Router();
 
 // GET all students
-router.get(
-  "/",
-  requireAuth,
-  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const students = await Student.find({ institution: req.user.institution })
-      .select("regNo name program admissionAcademicYear currentYearOfStudy")
-      .populate("program", "name code")
-      .lean();
 
-    res.json(students);
-  })
+
+// GET /students?page=1&limit=20
+router.get("/", requireAuth,
+  requireRole("coordinator", "admin"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const page  = Math.max(1, parseInt(req.query.page  as string) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit as string) || 20);
+
+    const filter: Record<string, any> = {institution: req.user.institution};
+
+    // Only show search results — never dump all students
+    const search = (req.query.search as string)?.trim();
+    if (!search) {
+      // Return empty until user types something
+      res.json({ students: [], total: 0, page, totalPages: 0 });
+      return;
+    }
+
+    filter.$or = [
+      { regNo: { $regex: search, $options: "i" } },
+      { name:  { $regex: search, $options: "i" } },
+    ];
+
+    const [students, total] = await Promise.all([
+      paginate(
+        Student.find(filter).select("regNo name program currentYearOfStudy status").lean(),
+        page,
+        limit,
+      ),
+      Student.countDocuments(filter),
+    ]);
+
+    res.json({ students, total, page, totalPages: Math.ceil(total / limit)});
+  }),
 );
 
+// router.get("/", requireAuth,
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const students = await Student.find({ institution: req.user.institution })
+//       .select("regNo name program admissionAcademicYear currentYearOfStudy")
+//       .populate("program", "name code")
+//       .lean();
+
+//     res.json(students);
+//   })
+// );
+
 // GET student statistics for dashboard
-router.get(
-  "/stats",
-  requireAuth,
+router.get("/stats", requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const institutionId = req.user.institution;
 

@@ -1,30 +1,4 @@
 // serverside/src/routes/admin.ts
-//
-// KEY CHANGES FROM YOUR CURRENT FILE:
-//
-// 1. INSTITUTION INHERITANCE
-//    Every invited user inherits req.user.institution from the admin who sends
-//    the invite. The Invite model stores institutionId. The /register/:token
-//    route reads it back and assigns it to the new User document.
-//    This means coordinators and lecturers automatically belong to the same
-//    institution as the admin who invited them — no manual assignment needed.
-//
-// 2. ASYNC ERROR HANDLING
-//    All routes use asyncHandler so unhandled promise rejections produce
-//    proper { message } JSON responses instead of crashing Express or
-//    returning an empty 500 that triggers "Unknown error occurred" in the UI.
-//
-// 3. NO `any` TYPES
-//    All request objects are typed via AuthenticatedRequest. Lean query
-//    results are typed explicitly.
-//
-// 4. DUPLICATE EMAIL CHECK ON INVITE
-//    Prevents inviting an email that already has an account — returns a
-//    clear 409 message the UI can display.
-//
-// 5. ADMIN SECRET REGISTER ALSO ASSIGNS INSTITUTION
-//    The bootstrap /admin/secret-register route now requires institutionId
-//    so the first admin is also linked to an institution from day one.
 
 import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";

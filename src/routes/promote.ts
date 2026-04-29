@@ -292,110 +292,6 @@ await addDocIfNotEmpty(suppLeave, getFileName("Supplementary_After_Academic_Leav
   }),
 );
 
-// POST /promote/download-cms
-// router.post("/download-cms", requireAuth,
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     const { programId, yearToPromote, academicYearName } = req.body;
- 
-//     // Stream progress events to the client
-//     res.setHeader("Content-Type", "text/event-stream");
-//     res.setHeader("Cache-Control", "no-cache");
-//     res.setHeader("Connection", "keep-alive");
- 
-//     const sendProgress = (percent: number, message: string, file?: string) => {
-//       const data = JSON.stringify({ percent, message, file });
-//       res.write(`data: ${data}\n\n`);
-//     };
- 
-//     try {
-//       sendProgress(10, "Fetching student data...");
- 
-//       const preview = await previewPromotion(programId, yearToPromote, academicYearName);
-//       const program = await Program.findById(programId).lean();
-
-//       const academicYearDocForSession = await AcademicYear.findOne({year: academicYearName}).lean();
-
-//       const sessionExamType: "ORDINARY" | "SUPPLEMENTARY" =
-//         academicYearDocForSession?.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY" : "ORDINARY";
- 
-//       const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
-//       const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
- 
-//       sendProgress(30, "Fetching marks for all students...");
- 
-//       // Fetch students by history too (includes promoted students)
-//       const studentsByHistory = await Student.find({
-//         program: programId,
-//         $or: [
-//           { currentYearOfStudy: yearToPromote },
-//           { "academicHistory.yearOfStudy": yearToPromote },
-//         ],
-//       }).lean();
- 
-//       const previewIds = new Set([...preview.eligible, ...preview.blocked].map((s) => (s.id || s._id)?.toString()));
-//       const historyOnly = studentsByHistory.filter((s) => !previewIds.has(s._id.toString()));
-//       const allStudents = [...preview.eligible, ...preview.blocked, ...historyOnly];
-//       const studentIds  = allStudents.map((s) => (s._id || s.id)?.toString()).filter(Boolean);
- 
-//       sendProgress(50, "Loading mark records...");
- 
-//       const [detailedMarks, directMarks] = await Promise.all([
-//         Mark.find({ student: { $in: studentIds } })
-//           .populate({ path: "programUnit", populate: { path: "unit", select: "code name" } })
-//           .lean(),
-//         MarkDirect.find({ student: { $in: studentIds } })
-//           .populate({ path: "programUnit", populate: { path: "unit", select: "code name" } })
-//           .lean(),
-//       ]);
- 
-//       const combinedMarks   = [...detailedMarks, ...directMarks];
-//       const filteredMarks   = combinedMarks.filter(
-//         (m: any) =>
-//           m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote)
-//       );
- 
-//       const offeredUnitsRaw = await ProgramUnit.find({program: programId, requiredYear: yearToPromote})
-//         .populate("unit").lean();
-
-//         const institutionSettings = await InstitutionSettings.findOne({institution: program?.institution}).lean();        
-//         const passMark     = institutionSettings?.passMark     ?? 40;
-//         const gradingScale = institutionSettings?.gradingScale ?? [];  
- 
-//       const offeredUnits = offeredUnitsRaw.map((pu: any) => ({code: pu.unit?.code || "N/A", name: pu.unit?.name || "N/A"}));
- 
-//       sendProgress(70, "Generating Consolidated Mark Sheet...");
- 
-//       const excelData: ConsolidatedData = {
-//         programName: program?.name || "Program",
-//         academicYear: academicYearName,
-//         yearOfStudy: yearToPromote,
-//         session: sessionExamType, // ← add
-//         students: allStudents,
-//         marks: filteredMarks,
-//         offeredUnits,
-//         logoBuffer,
-//         institutionId: program?.institution?.toString() || "",
-//         programId: programId,
-//         passMark, // ← add
-//         gradingScale, // ← add
-//       };
- 
-//       const xlsxBuffer = await generateConsolidatedMarkSheet(excelData);
- 
-//       sendProgress(95, "Preparing download...");
- 
-//       // Encode the Excel file directly as base64 (no ZIP needed for single file)
-//       const base64 = xlsxBuffer.toString("base64");
-//       res.write(`data: ${JSON.stringify({ percent: 100, message: "Complete!", file: base64 })}\n\n`);
-//       res.end();
-//     } catch (err) {
-//       console.error("CMS Generation Error:", err);
-//       res.write(`data: ${JSON.stringify({ error: "Failed to generate CMS" })}\n\n`);
-//       res.end();
-//     }
-//   })
-// );
-
 router.post(
   "/download-cms",
   requireAuth,
@@ -611,6 +507,7 @@ router.post("/download-journey-cms", requireAuth,
   }),
 );
 
+// promote individual student
 router.post("/:studentId", requireAuth, requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { studentId } = req.params;
@@ -644,51 +541,6 @@ router.post("/undo/:studentId", requireAuth, requireRole("coordinator"),
   })
 );
 
-// promote individual student
-router.post("/:studentId", requireAuth, requireRole("coordinator"),
-  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { studentId } = req.params;
 
-    const result = await promoteStudent(studentId);
-
-    if (!result.success) {
-      return res.status(400).json({
-        error: "Promotion Denied",
-        message: result.message,
-        details: result.details,
-      });
-    }
-
-    await logAudit(req, {
-      action: "individual_student_promoted",
-      targetUser: studentId as any,
-      details: { message: result.message },
-    });
-
-    res.json(result);
-  }),
-);
 
 export default router;
-
-			
-
-																
-
-
-
-
-
-
-
-
-
-
-// CORRECT WORKFLOW FOR SUPP/SPECIAL SESSION:
-//   1. Set AcademicYear.session = "SUPPLEMENTARY" for 2017/2018
-//   2. Generate scoresheet → only failing students appear
-//   3. Upload supp marks
-//   4. POST /admin/backfill-direct-grades  ← CRITICAL: creates FinalGrade records
-//   5. Regenerate CMS → statuses update
-//   6. Promote eligible students
-// */

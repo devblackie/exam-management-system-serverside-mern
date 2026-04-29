@@ -28,6 +28,7 @@ import {
   clearAccountLockout,
   loginRateLimiter,
 } from "../middleware/security";
+import { loginValidation, otpValidation, validateRequest } from "../middleware/validation";
 
 const router = Router();
 
@@ -78,6 +79,7 @@ const clearStepCookies = (res: Response): void => {
 router.post(
   "/check-email",
   emailCheckLimiter,
+  
   sanitizeInput,
   honeypotCheck,
   asyncHandler(async (req: Request, res: Response) => {
@@ -132,7 +134,7 @@ router.post(
 
 router.post(
   "/verify-password",
-  passwordLimiter,
+  passwordLimiter, 
   sanitizeInput,
   progressiveDelayMiddleware,
   asyncHandler(async (req: Request, res: Response) => {
@@ -226,13 +228,11 @@ router.post(
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
 // STEP 3 — POST /auth/verify-otp
-// ─────────────────────────────────────────────────────────────────────────────
-
 router.post(
   "/verify-otp",
   otpLimiter,
+  otpValidation,  validateRequest,
   sanitizeInput,
   asyncHandler(async (req: Request, res: Response) => {
     const otp         = String(req.body.otp || "").trim().replace(/\s/g, "");
