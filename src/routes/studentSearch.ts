@@ -3,24 +3,63 @@
 import express, { Response } from "express";
 import Student from "../models/Student";
 import FinalGrade from "../models/FinalGrade";
-import { AuthenticatedRequest, requireAuth, requireRole } from "../middleware/auth";
-import { asyncHandler } from "../middleware/asyncHandler";
+import MarkDirect from "../models/MarkDirect";
+import InstitutionSettings from "../models/InstitutionSettings";
 import Mark from "../models/Mark";
 import Unit from "../models/Unit";
 import AcademicYear from "../models/AcademicYear";
 import ProgramUnit from "../models/ProgramUnit";
+import { AuthenticatedRequest, requireAuth, requireRole } from "../middleware/auth";
+import { asyncHandler } from "../middleware/asyncHandler";
 import { computeFinalGrade } from "../services/gradeCalculator";
 import { calculateStudentStatus } from "../services/statusEngine";
 import { scopeQuery } from "../lib/multiTenant";
 import { deferAdmission, grantAcademicLeave, readmitStudent, revertStatusToActive } from "../services/academicLeave";
 import { getYearWeight } from "../utils/weightingRegistry";
-import MarkDirect from "../models/MarkDirect";
-import InstitutionSettings from "../models/InstitutionSettings";
 import { resolveStudentStatus } from "../utils/studentStatusResolver";
 import { logAudit } from "../lib/auditLogger";
-import { deferSuppToNextOrdinary, clearDeferredSuppUnit } from "../services/carryForwardService";
 
 const router = express.Router();
+
+// ── Resolve plain unit code from analysis item ─────────────────────────────
+function codeOf(item: string): string {
+  return (item || "").split(":")[0].trim().toUpperCase();
+}
+ 
+// ── Attempt count for a student × programUnit ──────────────────────────────
+// unitAttemptRegistry is the most accurate source (set by gradeCalculator).
+// Falls back to counting FinalGrade documents.
+async function attemptCount(student: any, programUnitId: string): Promise<number> {
+  const reg = (student.unitAttemptRegistry || []).find(
+    (r: any) => r.unitId?.toString() === programUnitId,
+  );
+  if (reg?.attempts?.length) return reg.attempts.length;
+  return FinalGrade.countDocuments({ student: student._id, programUnit: programUnitId });
+}
+ 
+// ── Build rich challenge unit objects ──────────────────────────────────────
+// Attaches name, attempt count, and any context fields.
+// yearPUs = all ProgramUnits for this year (pre-fetched, zero extra queries).
+async function enrich(
+  student:  any,
+  codes:    string[],
+  yearPUs:  any[],
+  extra?:   Record<string, string>,  // per-code extra fields (e.g. grounds for specials)
+): Promise<Array<{ code: string; name?: string; attempt?: number; [k: string]: unknown }>> {
+  const results = [];
+  for (const code of codes) {
+    const pu    = yearPUs.find((p: any) => p.unit?.code?.toUpperCase() === code);
+    const puId  = pu?._id?.toString() ?? "";
+    const count = puId ? await attemptCount(student, puId) : undefined;
+    results.push({
+      code,
+      name:    pu?.unit?.name,
+      attempt: count,
+      ...(extra?.[code] ? { grounds: extra[code] } : {}),
+    });
+  }
+  return results;
+}
 
 router.get("/search", requireAuth, asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { q } = req.query;
@@ -106,6 +145,283 @@ const formatChallenges = (analysis: any) => ({
   incomplete: [...analysis.incompleteList, ...analysis.missingList].map((i) => i.split(":")[0]),
 });
 
+// router.get("/journey", requireAuth,
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const { regNo } = req.query;
+//     if (!regNo) return res.status(400).json({ error: "regNo is required" });
+
+//     const student = (await Student.findOne(
+//       scopeQuery(req, { regNo: regNo as string }),
+//     )
+//       .populate("admissionAcademicYear", "year")
+//       .populate("program")
+//       .lean()) as any;
+//     if (!student) return res.status(404).json({ error: "Student not found" });
+
+//     // ── Robust admission year resolution ────────────────────────────────────
+//     // Tries every field the Student schema might use before falling back.
+//     const admissionYearString = (() => {
+//       // A) Populated ObjectId ref → { year: "2016/2017" }
+//       const ref = student.admissionAcademicYear?.year;
+//       if (ref && typeof ref === "string" && ref.includes("/")) return ref;
+
+//       // B) Plain string field "admissionYear" (some schemas store it directly)
+//       const plain = student.admissionYear;
+//       if (plain && typeof plain === "string" && plain.trim()) {
+//         if (plain.includes("/")) return plain.trim();
+//         const yr = parseInt(plain.trim());
+//         if (!isNaN(yr) && yr > 1990) return `${yr}/${yr + 1}`;
+//       }
+
+//       // C) Legacy field name
+//       const legacy = student.admissionAcademicYearString;
+//       if (legacy && typeof legacy === "string" && legacy.trim())
+//         return legacy.trim();
+
+//       // D) Extract from regNo — e.g. "E024-01-1231/2016" → "2016/2017"
+//       const regMatch = (student.regNo || "").match(/\/(\d{4})$/);
+//       if (regMatch) {
+//         const yr = parseInt(regMatch[1]);
+//         if (yr > 1990 && yr < 2100) return `${yr}/${yr + 1}`;
+//       }
+
+//       // E) Earliest entry in academicHistory
+//       const sorted = [...(student.academicHistory || [])].sort(
+//         (a: any, b: any) => (a.yearOfStudy || 0) - (b.yearOfStudy || 0),
+//       );
+//       const earliest = sorted[0]?.academicYear;
+//       if (earliest && typeof earliest === "string" && earliest.includes("/"))
+//         return earliest;
+
+//       return "N/A";
+//     })();
+
+//     const journey: any[] = [];
+//     const program = student.program as any;
+//     const entryType = student.entryType || "Direct";
+//     const duration = program?.durationYears || 5;
+//     const isGraduated = ["graduand", "graduated"].includes(student.status);
+
+//     const incrementYear = (yr: string, offset: number): string => {
+//       if (!yr || !yr.includes("/")) return yr;
+//       const [start] = yr.split("/").map(Number);
+//       return `${start + offset}/${start + offset + 1}`;
+//     };
+
+//     // ── Part A: Academic history entries ──────────────────────────────────────
+//     // Display weight comes directly from the registry — NOT from stored history.
+//     // This guarantees correct percentages (15/15/20/25/25) in the Telemetry card.
+//     let activeWeightedSum = 0; // used only for non-graduated students
+//     let activeWeightTotal = 0;
+
+//     for (const record of (student.academicHistory || []) as any[]) {
+//       if ((record.yearOfStudy || 1) > duration) continue; // skip over-duration entries
+
+//       // Weight for display — always from registry, never from stored history
+//       const weight = getYearWeight(program, entryType, record.yearOfStudy);
+
+//       let resolvedYear = record.academicYear;
+//       if (
+//         !resolvedYear ||
+//         (record.yearOfStudy > 1 && resolvedYear === admissionYearString)
+//       ) {
+//         resolvedYear = incrementYear(
+//           admissionYearString,
+//           record.yearOfStudy - 1,
+//         );
+//       }
+
+//       // Challenge display: call engine for non-graduated students only
+//       let challenges = {
+//         supplementary: [] as string[],
+//         retakes: [] as string[],
+//         stayouts: [] as string[],
+//         specials: [] as string[],
+//         incomplete: [] as string[],
+//       };
+//       let totalUnits = record.unitsTakenCount || 0;
+//       let displayStatus = record.isRepeatYear
+//         ? "REPEAT YEAR"
+//         : "PASS (PROMOTED)";
+
+//       if (!isGraduated) {
+//         try {
+//           const analysis = await calculateStudentStatus(
+//             student._id,
+//             student.program,
+//             resolvedYear,
+//             record.yearOfStudy,
+//             { forPromotion: false },
+//           );
+//           challenges = formatChallenges(analysis);
+//           totalUnits = analysis.summary.totalExpected || totalUnits;
+//           const mean = record.annualMeanMark || 0;
+//           if (
+//             !["ACADEMIC LEAVE", "GRADUATED", "DEFERMENT"].includes(
+//               analysis.status,
+//             )
+//           ) {
+//             displayStatus = record.isRepeatYear
+//               ? "REPEAT YEAR"
+//               : mean > 0 || analysis.summary.passed > 0
+//                 ? "PASS (PROMOTED)"
+//                 : analysis.status;
+//           }
+//           // Accumulate for active student WAA
+//           activeWeightedSum += parseFloat(analysis.weightedMean) * weight;
+//           activeWeightTotal += weight;
+//         } catch {
+//           /* keep defaults */
+//         }
+//       } else {
+//         // Graduated: just get unit count for the Telemetry card
+//         try {
+//           const count = await ProgramUnit.countDocuments({
+//             program: student.program?._id || student.program,
+//             requiredYear: record.yearOfStudy,
+//           });
+//           totalUnits = count || totalUnits;
+//         } catch {
+//           /* keep stored value */
+//         }
+//       }
+
+//       journey.push({
+//         type: "ACADEMIC",
+//         academicYear: resolvedYear,
+//         yearOfStudy: record.yearOfStudy,
+//         status: displayStatus,
+//         totalUnits,
+//         weight: Math.round(weight * 100), // ← registry value, always correct
+//         challenges,
+//         date: record.date || new Date(0),
+//         isCurrent: false,
+//       });
+//     }
+
+//     // ── Part B: Current year (active, non-graduated only) ─────────────────────
+//     const LOCKED = [
+//       "on_leave",
+//       "deferred",
+//       "deregistered",
+//       "discontinued",
+//       "graduated",
+//       "graduand",
+//     ];
+//     const isLocked = LOCKED.includes(student.status);
+//     const currentInHistory = (student.academicHistory || []).some(
+//       (h: any) => h.yearOfStudy === student.currentYearOfStudy,
+//     );
+//     const withinDuration = (student.currentYearOfStudy || 1) <= duration;
+
+//     if (!isLocked && !currentInHistory && withinDuration) {
+//       const currentYearDoc = await AcademicYear.findOne({
+//         institution: student.institution,
+//         isCurrent: true,
+//       }).lean();
+//       const weight = getYearWeight(
+//         program,
+//         entryType,
+//         student.currentYearOfStudy,
+//       );
+
+//       try {
+//         const live = await calculateStudentStatus(
+//           student._id,
+//           student.program,
+//           "CURRENT",
+//           student.currentYearOfStudy,
+//         );
+
+//         journey.push({
+//           type: "ACADEMIC",
+//           academicYear: currentYearDoc?.year || "Current",
+//           yearOfStudy: student.currentYearOfStudy,
+//           status: live.status,
+//           totalUnits: live.summary.totalExpected,
+//           weight: Math.round(weight * 100),
+//           challenges: formatChallenges(live),
+//           date: new Date(),
+//           isCurrent: true,
+//         });
+
+//         activeWeightedSum += parseFloat(live.weightedMean) * weight;
+//         activeWeightTotal += weight;
+//       } catch (e: any) {
+//         console.warn("[journey] Current year engine error:", e.message);
+//       }
+//     }
+
+//     // ── Part C: Status events ──────────────────────────────────────────────────
+//     (student.statusEvents || []).forEach((ev: any) => {
+//       journey.push({
+//         type: "STATUS_CHANGE",
+//         academicYear: ev.academicYear || "",
+//         toStatus: ev.toStatus,
+//         reason: ev.reason,
+//         date: ev.date || new Date(0),
+//       });
+//     });
+
+//     // ── Part D: Deferred-supp events (ENG.13b / ENG.18c) ─────────────────────
+//     // Each entry in deferredSuppUnits becomes a distinct timeline node so
+//     // coordinators can see the full deferral history in the Journey card.
+//     for (const entry of (student.deferredSuppUnits || []) as any[]) {
+//       journey.push({
+//         type: "DEFERRED_SUPP",
+//         academicYear: entry.fromAcademicYear || "",
+//         yearOfStudy: entry.fromYear || 0,
+//         unitCode: entry.unitCode || "N/A",
+//         unitName: entry.unitName || "",
+//         reason: entry.reason || "supp_deferred", // "supp_deferred" | "special_deferred"
+//         status: entry.status || "pending", // "pending" | "passed"
+//         date: entry.addedAt || new Date(0),
+//       });
+//     }
+
+//     journey.sort(
+//       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+//     );
+
+//     // ── Cumulative mean ────────────────────────────────────────────────────────
+//     // GRADUATED/GRADUAND: always use finalWeightedAverage (authoritative).
+//     // This is the same value shown in the award list — no disparity.
+//     // ACTIVE: compute from engine means × registry weights.
+//     let projectedMean: number;
+
+//     if (isGraduated) {
+//       const stored = parseFloat(student.finalWeightedAverage || "0");
+//       if (stored > 0) {
+//         projectedMean = stored;
+//       } else {
+//         // finalWeightedAverage not yet set — trigger recompute via graduation engine
+//         // (this path should be rare after running /admin/recompute-graduation-waa)
+//         try {
+//           const { calculateGraduationStatus } =
+//             await import("../services/graduationEngine");
+//           const result = await calculateGraduationStatus(
+//             student._id.toString(),
+//           );
+//           projectedMean = result.weightedAggregateAverage;
+//         } catch {
+//           projectedMean = 0;
+//         }
+//       }
+//     } else {
+//       projectedMean =
+//         activeWeightTotal > 0 ? activeWeightedSum / activeWeightTotal : 0;
+//     }
+
+//     res.json({
+//       admissionYear: admissionYearString,
+//       intake: student.intake || "SEPT",
+//       currentStatus: student.status.toUpperCase(),
+//       cumulativeMean: projectedMean.toFixed(2),
+//       timeline: journey,
+//     });
+//   }),
+// );
+
 router.get("/journey", requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { regNo } = req.query;
@@ -117,93 +433,128 @@ router.get("/journey", requireAuth,
       .populate("admissionAcademicYear", "year")
       .populate("program")
       .lean()) as any;
+
     if (!student) return res.status(404).json({ error: "Student not found" });
 
-    // ── Robust admission year resolution ────────────────────────────────────
-    // Tries every field the Student schema might use before falling back.
+    // ── Admission year ─────────────────────────────────────────────────────
     const admissionYearString = (() => {
-      // A) Populated ObjectId ref → { year: "2016/2017" }
       const ref = student.admissionAcademicYear?.year;
       if (ref && typeof ref === "string" && ref.includes("/")) return ref;
-
-      // B) Plain string field "admissionYear" (some schemas store it directly)
       const plain = student.admissionYear;
       if (plain && typeof plain === "string" && plain.trim()) {
         if (plain.includes("/")) return plain.trim();
         const yr = parseInt(plain.trim());
         if (!isNaN(yr) && yr > 1990) return `${yr}/${yr + 1}`;
       }
-
-      // C) Legacy field name
-      const legacy = student.admissionAcademicYearString;
-      if (legacy && typeof legacy === "string" && legacy.trim())
-        return legacy.trim();
-
-      // D) Extract from regNo — e.g. "E024-01-1231/2016" → "2016/2017"
       const regMatch = (student.regNo || "").match(/\/(\d{4})$/);
       if (regMatch) {
         const yr = parseInt(regMatch[1]);
         if (yr > 1990 && yr < 2100) return `${yr}/${yr + 1}`;
       }
-
-      // E) Earliest entry in academicHistory
       const sorted = [...(student.academicHistory || [])].sort(
         (a: any, b: any) => (a.yearOfStudy || 0) - (b.yearOfStudy || 0),
       );
       const earliest = sorted[0]?.academicYear;
       if (earliest && typeof earliest === "string" && earliest.includes("/"))
         return earliest;
-
       return "N/A";
     })();
 
-    const journey: any[] = [];
+    const incYear = (yr: string, offset: number): string => {
+      if (!yr || !yr.includes("/")) return yr;
+      const [s] = yr.split("/").map(Number);
+      return `${s + offset}/${s + offset + 1}`;
+    };
+
     const program = student.program as any;
     const entryType = student.entryType || "Direct";
     const duration = program?.durationYears || 5;
     const isGraduated = ["graduand", "graduated"].includes(student.status);
+    const journey: any[] = [];
 
-    const incrementYear = (yr: string, offset: number): string => {
-      if (!yr || !yr.includes("/")) return yr;
-      const [start] = yr.split("/").map(Number);
-      return `${start + offset}/${start + offset + 1}`;
-    };
-
-    // ── Part A: Academic history entries ──────────────────────────────────────
-    // Display weight comes directly from the registry — NOT from stored history.
-    // This guarantees correct percentages (15/15/20/25/25) in the Telemetry card.
-    let activeWeightedSum = 0; // used only for non-graduated students
+    let activeWeightedSum = 0;
     let activeWeightTotal = 0;
 
-    for (const record of (student.academicHistory || []) as any[]) {
-      if ((record.yearOfStudy || 1) > duration) continue; // skip over-duration entries
+    // ── Pre-fetch ALL ProgramUnits for ALL years ───────────────────────────
+    // One query total. Avoids N queries in the student loop.
+    const allPUs = (await ProgramUnit.find({ program: program._id })
+      .populate("unit")
+      .lean()) as any[];
+    const pusByYear = new Map<number, any[]>();
+    for (const pu of allPUs) {
+      const y = pu.requiredYear;
+      if (!pusByYear.has(y)) pusByYear.set(y, []);
+      pusByYear.get(y)!.push(pu);
+    }
 
-      // Weight for display — always from registry, never from stored history
+    // ── Pre-fetch disciplinary cases ───────────────────────────────────────
+    let disciplinaryCases: any[] = [];
+    try {
+      // Dynamic import — safe if DisciplinaryCase model doesn't exist yet
+      const DC = (await import("../models/DisciplinaryCase")).default;
+      disciplinaryCases = (await DC.find({ student: student._id })
+        .sort({ createdAt: 1 })
+        .lean()) as any[];
+    } catch {
+      /* DisciplinaryCase not deployed yet — skip */
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // PART A: Historical academic years (from student.academicHistory)
+    // ═════════════════════════════════════════════════════════════════════
+    for (const record of (student.academicHistory || []) as any[]) {
+      if ((record.yearOfStudy || 1) > duration) continue;
+
       const weight = getYearWeight(program, entryType, record.yearOfStudy);
+      const yearPUs = pusByYear.get(record.yearOfStudy) ?? [];
 
       let resolvedYear = record.academicYear;
       if (
         !resolvedYear ||
         (record.yearOfStudy > 1 && resolvedYear === admissionYearString)
       ) {
-        resolvedYear = incrementYear(
-          admissionYearString,
-          record.yearOfStudy - 1,
-        );
+        resolvedYear = incYear(admissionYearString, record.yearOfStudy - 1);
       }
 
-      // Challenge display: call engine for non-graduated students only
+      // ── CF units from THIS year ────────────────────────────────────────
+      const yearCFs = (student.carryForwardUnits || []).filter(
+        (u: any) => u.fromYear === record.yearOfStudy,
+      );
+      const cfList = yearCFs.map((u: any) => ({
+        code: u.unitCode,
+        name: u.unitName,
+        attempt: u.attemptNumber ?? 3,
+        status: u.status,
+      }));
+
+      // ── Deferred units from THIS year ──────────────────────────────────
+      const yearDeferred = (student.deferredSuppUnits || []).filter(
+        (u: any) => u.fromYear === record.yearOfStudy,
+      );
+      const deferredList = yearDeferred.map((u: any) => ({
+        code: u.unitCode,
+        name: u.unitName,
+        reason: u.reason,
+        status: u.status,
+      }));
+
+      // ── Challenges via status engine ───────────────────────────────────
       let challenges = {
-        supplementary: [] as string[],
-        retakes: [] as string[],
-        stayouts: [] as string[],
-        specials: [] as string[],
-        incomplete: [] as string[],
+        supplementary: [] as any[],
+        retakes: [] as any[],
+        stayouts: [] as any[],
+        specials: [] as any[],
+        carryForwards: cfList,
+        deferred: deferredList,
+        incomplete: [] as any[],
+        discontinuationRisk: [] as any[],
       };
-      let totalUnits = record.unitsTakenCount || 0;
+      let totalUnits = yearPUs.length || record.unitsTakenCount || 0;
       let displayStatus = record.isRepeatYear
         ? "REPEAT YEAR"
         : "PASS (PROMOTED)";
+      let annualMean = record.annualMeanMark || 0;
+      let eng22Risk = false;
 
       if (!isGraduated) {
         try {
@@ -214,9 +565,10 @@ router.get("/journey", requireAuth,
             record.yearOfStudy,
             { forPromotion: false },
           );
-          challenges = formatChallenges(analysis);
+
           totalUnits = analysis.summary.totalExpected || totalUnits;
-          const mean = record.annualMeanMark || 0;
+          annualMean = parseFloat(analysis.weightedMean) || annualMean;
+
           if (
             !["ACADEMIC LEAVE", "GRADUATED", "DEFERMENT"].includes(
               analysis.status,
@@ -224,28 +576,92 @@ router.get("/journey", requireAuth,
           ) {
             displayStatus = record.isRepeatYear
               ? "REPEAT YEAR"
-              : mean > 0 || analysis.summary.passed > 0
+              : annualMean > 0 || analysis.summary.passed > 0
                 ? "PASS (PROMOTED)"
                 : analysis.status;
           }
-          // Accumulate for active student WAA
+
+          // Build challenge arrays
+          const suppCodes = analysis.failedList
+            .filter((f: any) => f.attempt === "A/S")
+            .map((f: any) => codeOf(f.displayName));
+          const retakeCodes = analysis.failedList
+            .filter((f: any) =>
+              ["A/RA", "A/RPU", "RP1C", "RP2C", "RP3C"].includes(f.attempt),
+            )
+            .map((f: any) => codeOf(f.displayName));
+          const sosCodes = analysis.failedList
+            .filter((f: any) => f.attempt === "A/SO")
+            .map((f: any) => codeOf(f.displayName));
+          const specCodes = analysis.specialList.map((s: any) =>
+            codeOf(s.displayName),
+          );
+          const specGrounds = Object.fromEntries(
+            analysis.specialList.map((s: any) => [
+              codeOf(s.displayName),
+              s.grounds || "",
+            ]),
+          );
+          const incCodes = [
+            ...analysis.incompleteList,
+            ...analysis.missingList,
+          ].map(codeOf);
+
+          challenges.supplementary = await enrich(student, suppCodes, yearPUs);
+          challenges.retakes = await enrich(student, retakeCodes, yearPUs);
+          challenges.stayouts = await enrich(student, sosCodes, yearPUs);
+          challenges.specials = await enrich(
+            student,
+            specCodes,
+            yearPUs,
+            specGrounds,
+          );
+          challenges.incomplete = await enrich(student, incCodes, yearPUs);
+
+          // ENG.22 risk — any unit at attempt ≥ 4
+          for (const pu of yearPUs) {
+            const puId = pu._id.toString();
+            const count = await attemptCount(student, puId);
+            if (count >= 4) {
+              challenges.discontinuationRisk.push({
+                code: pu.unit?.code,
+                name: pu.unit?.name,
+                attempt: count,
+              });
+              eng22Risk = true;
+            }
+          }
+
           activeWeightedSum += parseFloat(analysis.weightedMean) * weight;
           activeWeightTotal += weight;
         } catch {
           /* keep defaults */
         }
       } else {
-        // Graduated: just get unit count for the Telemetry card
+        // Graduated — get unit count only (don't run expensive engine)
         try {
           const count = await ProgramUnit.countDocuments({
-            program: student.program?._id || student.program,
+            program: program._id,
             requiredYear: record.yearOfStudy,
           });
           totalUnits = count || totalUnits;
         } catch {
-          /* keep stored value */
+          /* keep */
         }
       }
+
+      // Qualifier at this point in time
+      // Carry-forward from this year → RP1C/2C. Repeat year → RP1/2. Otherwise blank.
+      const yearQualifier = (() => {
+        if (cfList.length > 0) return yearCFs[0]?.qualifier || "";
+        if (record.isRepeatYear) {
+          const repeatCount = (student.academicHistory || []).filter(
+            (h: any) => h.isRepeatYear && h.yearOfStudy <= record.yearOfStudy,
+          ).length;
+          return `RP${Math.min(repeatCount, 5)}`;
+        }
+        return "";
+      })();
 
       journey.push({
         type: "ACADEMIC",
@@ -253,14 +669,20 @@ router.get("/journey", requireAuth,
         yearOfStudy: record.yearOfStudy,
         status: displayStatus,
         totalUnits,
-        weight: Math.round(weight * 100), // ← registry value, always correct
+        weight: Math.round(weight * 100),
+        annualMean: parseFloat(annualMean.toFixed(2)),
+        qualifierSuffix: yearQualifier,
+        isRepeat: record.isRepeatYear || false,
+        eng22Risk,
         challenges,
         date: record.date || new Date(0),
         isCurrent: false,
       });
     }
 
-    // ── Part B: Current year (active, non-graduated only) ─────────────────────
+    // ═════════════════════════════════════════════════════════════════════
+    // PART B: Current active year (live engine, not yet in history)
+    // ═════════════════════════════════════════════════════════════════════
     const LOCKED = [
       "on_leave",
       "deferred",
@@ -268,6 +690,7 @@ router.get("/journey", requireAuth,
       "discontinued",
       "graduated",
       "graduand",
+      "disciplinary_suspension",
     ];
     const isLocked = LOCKED.includes(student.status);
     const currentInHistory = (student.academicHistory || []).some(
@@ -276,15 +699,35 @@ router.get("/journey", requireAuth,
     const withinDuration = (student.currentYearOfStudy || 1) <= duration;
 
     if (!isLocked && !currentInHistory && withinDuration) {
-      const currentYearDoc = await AcademicYear.findOne({
+      const currentYearDoc = (await AcademicYear.findOne({
         institution: student.institution,
         isCurrent: true,
-      }).lean();
+      }).lean()) as any;
       const weight = getYearWeight(
         program,
         entryType,
         student.currentYearOfStudy,
       );
+      const yearPUs = pusByYear.get(student.currentYearOfStudy) ?? [];
+
+      const yearCFs = (student.carryForwardUnits || []).filter(
+        (u: any) => u.fromYear === student.currentYearOfStudy,
+      );
+      const cfList = yearCFs.map((u: any) => ({
+        code: u.unitCode,
+        name: u.unitName,
+        attempt: u.attemptNumber ?? 3,
+        status: u.status,
+      }));
+      const yearDeferred = (student.deferredSuppUnits || []).filter(
+        (u: any) => u.fromYear === student.currentYearOfStudy,
+      );
+      const deferredList = yearDeferred.map((u: any) => ({
+        code: u.unitCode,
+        name: u.unitName,
+        reason: u.reason,
+        status: u.status,
+      }));
 
       try {
         const live = await calculateStudentStatus(
@@ -294,6 +737,41 @@ router.get("/journey", requireAuth,
           student.currentYearOfStudy,
         );
 
+        const suppCodes = live.failedList
+          .filter((f: any) => f.attempt === "A/S")
+          .map((f: any) => codeOf(f.displayName));
+        const retakeCodes = live.failedList
+          .filter((f: any) =>
+            ["A/RA", "A/RPU", "RP1C", "RP2C", "RP3C"].includes(f.attempt),
+          )
+          .map((f: any) => codeOf(f.displayName));
+        const sosCodes = live.failedList
+          .filter((f: any) => f.attempt === "A/SO")
+          .map((f: any) => codeOf(f.displayName));
+        const specCodes = live.specialList.map((s: any) =>
+          codeOf(s.displayName),
+        );
+        const specGrounds = Object.fromEntries(
+          live.specialList.map((s: any) => [
+            codeOf(s.displayName),
+            s.grounds || "",
+          ]),
+        );
+        const incCodes = [...live.incompleteList, ...live.missingList].map(
+          codeOf,
+        );
+
+        const riskUnits: any[] = [];
+        for (const pu of yearPUs) {
+          const count = await attemptCount(student, pu._id.toString());
+          if (count >= 4)
+            riskUnits.push({
+              code: pu.unit?.code,
+              name: pu.unit?.name,
+              attempt: count,
+            });
+        }
+
         journey.push({
           type: "ACADEMIC",
           academicYear: currentYearDoc?.year || "Current",
@@ -301,9 +779,22 @@ router.get("/journey", requireAuth,
           status: live.status,
           totalUnits: live.summary.totalExpected,
           weight: Math.round(weight * 100),
-          challenges: formatChallenges(live),
-          date: new Date(),
+          annualMean: parseFloat(live.weightedMean),
+          qualifierSuffix: student.qualifierSuffix || "",
+          isRepeat: student.status === "repeat",
+          eng22Risk: riskUnits.length > 0,
           isCurrent: true,
+          challenges: {
+            supplementary: await enrich(student, suppCodes, yearPUs),
+            retakes: await enrich(student, retakeCodes, yearPUs),
+            stayouts: await enrich(student, sosCodes, yearPUs),
+            specials: await enrich(student, specCodes, yearPUs, specGrounds),
+            carryForwards: cfList,
+            deferred: deferredList,
+            incomplete: await enrich(student, incCodes, yearPUs),
+            discontinuationRisk: riskUnits,
+          },
+          date: new Date(),
         });
 
         activeWeightedSum += parseFloat(live.weightedMean) * weight;
@@ -313,20 +804,50 @@ router.get("/journey", requireAuth,
       }
     }
 
-    // ── Part C: Status events ──────────────────────────────────────────────────
-    (student.statusEvents || []).forEach((ev: any) => {
+    // ═════════════════════════════════════════════════════════════════════
+    // PART C: Status events — enriched with leave details
+    // ═════════════════════════════════════════════════════════════════════
+    for (const ev of (student.statusEvents || []) as any[]) {
+      const toSt = (ev.toStatus || "").toLowerCase();
+      let leaveInfo = undefined;
+
+      if (["on_leave", "academic_leave", "deferred"].includes(toSt)) {
+        const leave = student.academicLeavePeriod;
+        if (leave?.startDate) {
+          const start = new Date(leave.startDate);
+          const end = leave.endDate ? new Date(leave.endDate) : null;
+          const durationMonths = end
+            ? Math.round(
+                (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24 * 30),
+              )
+            : 0;
+          leaveInfo = {
+            type: toSt === "deferred" ? "DEFERMENT" : "ACADEMIC LEAVE",
+            reason: (leave.type || "other").toUpperCase(),
+            duration: end
+              ? `${durationMonths} month${durationMonths !== 1 ? "s" : ""}`
+              : "Ongoing",
+            endDate: end ? end.toISOString().split("T")[0] : undefined,
+          };
+        }
+      }
+
       journey.push({
         type: "STATUS_CHANGE",
         academicYear: ev.academicYear || "",
         toStatus: ev.toStatus,
+        fromStatus: ev.fromStatus,
         reason: ev.reason,
+        leaveInfo,
         date: ev.date || new Date(0),
       });
-    });
+    }
 
-    // ── Part D: Deferred-supp events (ENG.13b / ENG.18c) ─────────────────────
-    // Each entry in deferredSuppUnits becomes a distinct timeline node so
-    // coordinators can see the full deferral history in the Journey card.
+    // ═════════════════════════════════════════════════════════════════════
+    // PART D: Deferred supp/special events
+    // ENG.13b — coordinator deferred a supp to next ordinary
+    // ENG.18c — coordinator deferred a special to next ordinary
+    // ═════════════════════════════════════════════════════════════════════
     for (const entry of (student.deferredSuppUnits || []) as any[]) {
       journey.push({
         type: "DEFERRED_SUPP",
@@ -334,29 +855,94 @@ router.get("/journey", requireAuth,
         yearOfStudy: entry.fromYear || 0,
         unitCode: entry.unitCode || "N/A",
         unitName: entry.unitName || "",
-        reason: entry.reason || "supp_deferred", // "supp_deferred" | "special_deferred"
-        status: entry.status || "pending", // "pending" | "passed"
+        reason: entry.reason || "supp_deferred",
+        status: entry.status || "pending",
         date: entry.addedAt || new Date(0),
       });
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    // PART E: Carry-forward grant events (ENG.14)
+    // One CARRY_FORWARD node per unique fromYear in carryForwardUnits.
+    // ═════════════════════════════════════════════════════════════════════
+    const cfByYear = new Map<number, any[]>();
+    for (const u of (student.carryForwardUnits || []) as any[]) {
+      if (!cfByYear.has(u.fromYear)) cfByYear.set(u.fromYear, []);
+      cfByYear.get(u.fromYear)!.push(u);
+    }
+    for (const [fromYear, units] of cfByYear) {
+      const yearRecord = (student.academicHistory || []).find(
+        (h: any) => h.yearOfStudy === fromYear,
+      );
+      const yearStr =
+        yearRecord?.academicYear || incYear(admissionYearString, fromYear - 1);
+      const qualifier = units[0]?.qualifier || "RP1C";
+
+      journey.push({
+        type: "CARRY_FORWARD",
+        academicYear: yearStr,
+        yearOfStudy: fromYear,
+        cfUnits: units.map((u: any) => u.unitCode),
+        qualifier,
+        reason: `ENG.14: ${units.length} unit(s) carried forward to Year ${fromYear + 1}: ${units.map((u: any) => u.unitCode).join(", ")}`,
+        date: units[0]?.addedAt || new Date(0),
+      });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // PART F: Disciplinary cases
+    // ═════════════════════════════════════════════════════════════════════
+    for (const dc of disciplinaryCases) {
+      journey.push({
+        type: "DISCIPLINARY",
+        academicYear: "",
+        grounds: dc.grounds,
+        outcome: dc.outcome,
+        caseId: dc._id.toString(),
+        hearingDate: dc.hearingDate
+          ? new Date(dc.hearingDate).toISOString().split("T")[0]
+          : undefined,
+        reason:
+          (dc.description || "").substring(0, 120) +
+          ((dc.description || "").length > 120 ? "…" : ""),
+        toStatus:
+          dc.outcome === "SENT_HOME" ? "disciplinary_suspension" : dc.outcome?.toLowerCase(),
+        date: dc.createdAt || new Date(0),
+      });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // PART G: Graduation event
+    // ═════════════════════════════════════════════════════════════════════
+    if (isGraduated) {
+      const lastHistory = [...(student.academicHistory || [])].sort(
+        (a: any, b: any) => (b.yearOfStudy || 0) - (a.yearOfStudy || 0),
+      )[0];
+
+      journey.push({
+        type: "GRADUATION",
+        academicYear: lastHistory?.academicYear || "",
+        yearOfStudy: duration,
+        status: "GRADUATED",
+        annualMean: parseFloat(student.finalWeightedAverage || "0"),
+        qualifierSuffix: "",
+        reason: student.classification || "Degree Awarded",
+        date: student.updatedAt || new Date(),
+      });
+    }
+
+    // ─── Sort chronologically ──────────────────────────────────────────────
     journey.sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
     );
 
-    // ── Cumulative mean ────────────────────────────────────────────────────────
-    // GRADUATED/GRADUAND: always use finalWeightedAverage (authoritative).
-    // This is the same value shown in the award list — no disparity.
-    // ACTIVE: compute from engine means × registry weights.
+    // ─── Cumulative mean ───────────────────────────────────────────────────
     let projectedMean: number;
-
     if (isGraduated) {
       const stored = parseFloat(student.finalWeightedAverage || "0");
       if (stored > 0) {
         projectedMean = stored;
       } else {
-        // finalWeightedAverage not yet set — trigger recompute via graduation engine
-        // (this path should be rare after running /admin/recompute-graduation-waa)
         try {
           const { calculateGraduationStatus } =
             await import("../services/graduationEngine");
@@ -373,15 +959,27 @@ router.get("/journey", requireAuth,
         activeWeightTotal > 0 ? activeWeightedSum / activeWeightTotal : 0;
     }
 
-    res.json({
+    let classification = "";
+    if (projectedMean >= 70) classification = "FIRST CLASS HONOURS";
+    else if (projectedMean >= 60)
+      classification = "SECOND CLASS HONOURS (UPPER)";
+    else if (projectedMean >= 50)
+      classification = "SECOND CLASS HONOURS (LOWER)";
+    else if (projectedMean >= 40) classification = "PASS";
+    else if (projectedMean > 0) classification = "BELOW PASS MARK";
+
+    return res.json({
       admissionYear: admissionYearString,
       intake: student.intake || "SEPT",
       currentStatus: student.status.toUpperCase(),
       cumulativeMean: projectedMean.toFixed(2),
+      totalTimeOutYears: student.totalTimeOutYears || 0,
+      classification,
       timeline: journey,
     });
   }),
 );
+
 router.post("/approve-special", requireAuth, requireRole("coordinator"), asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { markId, reason, undo = false } = req.body;
   if (!markId) return res.status(400).json({ error: "Mark ID is required" });
