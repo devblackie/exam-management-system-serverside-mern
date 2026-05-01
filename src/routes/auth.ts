@@ -13,28 +13,13 @@ import { ApiError } from "../middleware/errorHandler";
 import { logAudit } from "../lib/auditLogger";
 import { sendRecoveryEmail } from "../config/passwordResetEmail";
 import { sendOTPEmail } from "../services/twoFactorService";
-import {
-  emailCheckLimiter,
-  passwordLimiter,
-  otpLimiter,
-  sanitizeInput,
-  honeypotCheck,
-  getRequestFingerprint,
-  recordFailedAttempt,
-  clearFailedAttempts,
-  progressiveDelayMiddleware,
-  checkAccountLockout,
-  recordFailedPasswordAttempt,
-  clearAccountLockout,
-  loginRateLimiter,
+import { emailCheckLimiter, passwordLimiter, otpLimiter, sanitizeInput, honeypotCheck,
+  getRequestFingerprint, recordFailedAttempt, clearFailedAttempts, progressiveDelayMiddleware,
+  checkAccountLockout, recordFailedPasswordAttempt, clearAccountLockout, loginRateLimiter,
 } from "../middleware/security";
 import { loginValidation, otpValidation, validateRequest } from "../middleware/validation";
 
 const router = Router();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────────────────
 
 const COOKIE_OPTS = {
   httpOnly: true,
@@ -44,12 +29,7 @@ const COOKIE_OPTS = {
 
 // Must be a valid bcrypt hash with the same prefix ($2b$12$) as your real
 // hashes so bcrypt.compare() doesn't short-circuit on format mismatch.
-const DUMMY_HASH =
-  "$2b$12$LRYuW9uB6S1EjSM0rE9Q9uLRYuW9uB6S1EjSM0rE9Q9uLRYuW9uBC";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// STEP COOKIE HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+const DUMMY_HASH = "$2b$12$LRYuW9uB6S1EjSM0rE9Q9uLRYuW9uB6S1EjSM0rE9Q9uLRYuW9uBC";
 
 const setStepCookie = (
   res: Response, name: string, userId: string, fingerprint: string, maxAgeMs: number): void => {
@@ -76,12 +56,7 @@ const clearStepCookies = (res: Response): void => {
 };
 
 
-router.post(
-  "/check-email",
-  emailCheckLimiter,
-  
-  sanitizeInput,
-  honeypotCheck,
+router.post("/check-email", emailCheckLimiter, sanitizeInput, honeypotCheck,
   asyncHandler(async (req: Request, res: Response) => {
     const email = String(req.body.email || "").toLowerCase().trim();
 
@@ -90,9 +65,7 @@ router.post(
     }
 
     const fingerprint = getRequestFingerprint(req);
-    const user        = await User.findOne({ email })
-      .select("_id name status")
-      .lean();
+    const user = await User.findOne({ email }).select("_id name status").lean();
 
     // Timing equalizer
     await bcrypt.hash(email + Date.now(), 4);
@@ -105,38 +78,14 @@ router.post(
 
     setStepCookie(res, "auth_step1", user._id.toString(), fingerprint, 10 * 60 * 1000);
 
-    logAudit(req, {
-      action:  "login_step1_email_checked",
-      details: { email },
-    });
+    logAudit(req, {action:  "login_step1_email_checked", details: { email }});
 
-    res.json({
-      nextStep:   "password",
-      maskedName: user.name.split(" ")[0],
-    });
+    res.json({nextStep: "password", maskedName: user.name.split(" ")[0]});
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
 // STEP 2 — POST /auth/verify-password
-//
-// THE BUG (now fixed):
-// Mongoose silently drops `+password` when it appears alongside plain field
-// names in a single .select() string on this version of Mongoose/driver.
-// Confirmed by diagnostics:
-//   .select("+password")                          → password returned ✅
-//   .select("email name status ... +password")    → password undefined ❌
-//
-// FIX: Two separate .findById() calls on the same _id (both hit the PK index,
-// negligible overhead). Query 1 fetches all normal fields. Query 2 fetches
-// ONLY the password hash using an isolated .select("+password").
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.post(
-  "/verify-password",
-  passwordLimiter, 
-  sanitizeInput,
-  progressiveDelayMiddleware,
+router.post("/verify-password", passwordLimiter, sanitizeInput, progressiveDelayMiddleware,
   asyncHandler(async (req: Request, res: Response) => {
     const password    = String(req.body.password || "");
     const fingerprint = getRequestFingerprint(req);
@@ -156,9 +105,7 @@ router.post(
       .lean();
 
     // Query 2 — ONLY the password hash, isolated to avoid projection conflict
-    const userPw = await User.findById(step1.userId)
-      .select("+password")
-      .lean();
+    const userPw = await User.findById(step1.userId).select("+password").lean();
 
     const storedHash = userPw?.password ?? null;
 
@@ -181,10 +128,7 @@ router.post(
     if (!user || !storedHash || !isValid) {
       recordFailedAttempt(ip);
       if (user) recordFailedPasswordAttempt(user.email);
-      logAudit(req, {
-        action:  "login_step2_password_failed",
-        details: { userId: step1.userId },
-      });
+      logAudit(req, { action:  "login_step2_password_failed", details: { userId: step1.userId }});
       throw { statusCode: 401, message: "Invalid credentials." } as ApiError;
     }
 
@@ -229,11 +173,7 @@ router.post(
 );
 
 // STEP 3 — POST /auth/verify-otp
-router.post(
-  "/verify-otp",
-  otpLimiter,
-  otpValidation,  validateRequest,
-  sanitizeInput,
+router.post("/verify-otp", otpLimiter, otpValidation, validateRequest, sanitizeInput,
   asyncHandler(async (req: Request, res: Response) => {
     const otp         = String(req.body.otp || "").trim().replace(/\s/g, "");
     const fingerprint = getRequestFingerprint(req);
@@ -332,13 +272,8 @@ router.post(
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
 // GET /auth/me
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.get(
-  "/me",
-  requireAuth,
+router.get("/me", requireAuth,
   asyncHandler(async (req: Request & { user?: any }, res: Response) => {
     const user = req.user;
     if (!user) throw { statusCode: 401, message: "Not authenticated" } as ApiError;
@@ -346,13 +281,8 @@ router.get(
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
 // POST /auth/logout
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.post(
-  "/logout",
-  requireAuth,
+router.post("/logout", requireAuth,
   asyncHandler(async (req: Request & { user?: any }, res: Response) => {
     const actorId = req.user?._id;
     res.clearCookie("token",      COOKIE_OPTS);
@@ -365,15 +295,8 @@ router.post(
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
 // POST /auth/forgot-password
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.post(
-  "/forgot-password",
-  loginRateLimiter,
-  sanitizeInput,
-  honeypotCheck,
+router.post("/forgot-password", loginRateLimiter, sanitizeInput, honeypotCheck,
   asyncHandler(async (req: Request, res: Response) => {
     const email   = String(req.body.email || "").toLowerCase().trim();
     const GENERIC = "If an account exists with that email, a recovery link has been sent.";
@@ -407,14 +330,8 @@ router.post(
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
 // POST /auth/reset-password/:token
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.post(
-  "/reset-password/:token",
-  loginRateLimiter,
-  sanitizeInput,
+router.post("/reset-password/:token", loginRateLimiter, sanitizeInput,
   asyncHandler(async (req: Request, res: Response) => {
     const { token }    = req.params;
     const { password } = req.body;
@@ -449,11 +366,7 @@ router.post(
     res.clearCookie("auth_step1", COOKIE_OPTS);
     res.clearCookie("auth_step2", COOKIE_OPTS);
 
-    logAudit(req, {
-      action:  "password_reset_success",
-      actor:   user._id,
-      details: { email: user.email },
-    });
+    logAudit(req, { action: "password_reset_success", actor:  user._id, details: { email: user.email }});
 
     res.json({ message: "Password updated successfully. Please log in." });
   })

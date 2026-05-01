@@ -35,10 +35,7 @@ interface PopulatedActor {
 
 // GET /audit-logs
 // Paginated listing.
-router.get(
-  "/",
-  requireAuth,
-  requireRole("admin"),
+router.get("/", requireAuth, requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { page = 1, limit = 10, sort = "desc" } = req.query;
     const filter = buildFilter(req.query);
@@ -72,10 +69,7 @@ router.get(
 );
 
 // GET /audit-logs/export/csv
-router.get(
-  "/export/csv",
-  requireAuth,
-  requireRole("admin"),
+router.get("/export/csv", requireAuth, requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { sort = "desc" } = req.query;
     const filter = buildFilter(req.query);
@@ -114,10 +108,7 @@ router.get(
 );
 
 // GET /audit-logs/export/excel
-router.get(
-  "/export/excel",
-  requireAuth,
-  requireRole("admin"),
+router.get("/export/excel", requireAuth, requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { sort = "desc" } = req.query;
     const filter = buildFilter(req.query);
@@ -174,10 +165,7 @@ router.get(
 );
 
 // DELETE /audit-logs/bulk
-router.delete(
-  "/bulk",
-  requireAuth,
-  requireRole("admin"),
+router.delete("/bulk", requireAuth, requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { ids } = req.body as { ids?: unknown };
 
@@ -206,11 +194,7 @@ router.delete(
     logAudit(req, {
       action:  "audit_logs_bulk_deleted",
       actor:   req.user._id,
-      details: {
-        requested: validIds.length,
-        deleted:   result.deletedCount,
-        notFound:  missingIds,
-      },
+      details: { requested: validIds.length, deleted: result.deletedCount, notFound:  missingIds },
     }).catch(console.error);
 
     res.json({
@@ -222,10 +206,7 @@ router.delete(
 );
 
 // DELETE /audit-logs/purge/by-date
-router.delete(
-  "/purge/by-date",
-  requireAuth,
-  requireRole("admin"),
+router.delete("/purge/by-date", requireAuth, requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { before } = req.body as { before?: unknown };
 
@@ -257,10 +238,7 @@ router.delete(
 );
 
 // DELETE /audit-logs/:id
-router.delete(
-  "/:id",
-  requireAuth,
-  requireRole("admin"),
+router.delete("/:id", requireAuth, requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
