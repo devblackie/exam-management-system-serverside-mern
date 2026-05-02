@@ -27,7 +27,7 @@ const startServer = async () => {
     const server = app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
       console.log(`Frontend: ${config.frontendUrl}`);
-      console.log(`Environment: ${process.env.NODE_ENV || "devepment"}`);
+      console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
     });
 
 
