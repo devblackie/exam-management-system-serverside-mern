@@ -109,9 +109,12 @@ const limiter = rateLimit({
   legacyHeaders: false,
   message: { message: "Too many requests from this IP. Please try again later." },
 });
-app.use("/auth/", limiter); // Heavy on login attempts
+// app.use("/auth/", limiter); // Heavy on login attempts
+// app.use(
+//   "/marks/upload",
+app.use("/api/auth/", limiter);
 app.use(
-  "/marks/upload",
+  "/api/marks/upload",
   rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 50,
@@ -126,24 +129,46 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK", timestamp: new Date().toISOString(), uptime: process.uptime()});
 });
 
+const apiRouter = express.Router();
+
+apiRouter.use("/auth", authRoutes);
+apiRouter.use("/admin", adminRoutes);
+apiRouter.use("/audit-logs", auditLogsRoutes);
+apiRouter.use("/programs", programsRoutes);
+apiRouter.use("/units", unitsRoutes);
+apiRouter.use("/coordinator", coordinatorRoutes);
+apiRouter.use("/marks", marksRoutes);
+apiRouter.use("/institutions", institutionsRoutes);
+apiRouter.use("/students", studentsRoutes);
+apiRouter.use("/academic-years", academicYearsRoutes);
+apiRouter.use("/institution-settings", institutionSettingsRoutes);
+apiRouter.use("/student", studentSearchRoutes);
+apiRouter.use("/program-units", programUnitsRouter);
+apiRouter.use("/promote", promoteRoutes);
+apiRouter.use("/maintenance", maintenanceRoutes);
+apiRouter.use("/billing", billingRoutes);
+apiRouter.use("/disciplinary", disciplinaryRoutes);
+
+app.use("/api", apiRouter);
+
 // API Routes
-app.use("/auth", authRoutes);
-app.use("/admin", adminRoutes);
-app.use("/audit-logs", auditLogsRoutes);
-app.use("/programs", programsRoutes);
-app.use("/units", unitsRoutes);
-app.use("/coordinator", coordinatorRoutes);
-app.use("/marks", marksRoutes);
-app.use("/institutions", institutionsRoutes);
-app.use("/students", studentsRoutes);
-app.use("/academic-years", academicYearsRoutes);
-app.use("/institution-settings", institutionSettingsRoutes);
-app.use("/student", studentSearchRoutes);
-app.use('/program-units', programUnitsRouter);
-app.use("/promote", promoteRoutes);
-app.use("/maintenance", maintenanceRoutes);
-app.use("/billing", billingRoutes);
-app.use("/disciplinary", disciplinaryRoutes);
+// app.use("/auth", authRoutes);
+// app.use("/admin", adminRoutes);
+// app.use("/audit-logs", auditLogsRoutes);
+// app.use("/programs", programsRoutes);
+// app.use("/units", unitsRoutes);
+// app.use("/coordinator", coordinatorRoutes);
+// app.use("/marks", marksRoutes);
+// app.use("/institutions", institutionsRoutes);
+// app.use("/students", studentsRoutes);
+// app.use("/academic-years", academicYearsRoutes);
+// app.use("/institution-settings", institutionSettingsRoutes);
+// app.use("/student", studentSearchRoutes);
+// app.use('/program-units', programUnitsRouter);
+// app.use("/promote", promoteRoutes);
+// app.use("/maintenance", maintenanceRoutes);
+// app.use("/billing", billingRoutes);
+// app.use("/disciplinary", disciplinaryRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: `Route ${req.originalUrl} not found`, method: req.method });
