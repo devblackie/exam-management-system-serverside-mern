@@ -125,7 +125,13 @@ app.use(
 ); // 50 uploads/hour
 
 // Health check
+// app.get("/health", (req, res) => {
+//   res.status(200).json({ status: "OK", timestamp: new Date().toISOString(), uptime: process.uptime()});
+// });
+
+// Health check - bypasses CORS
 app.get("/health", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.status(200).json({ status: "OK", timestamp: new Date().toISOString(), uptime: process.uptime()});
 });
 
