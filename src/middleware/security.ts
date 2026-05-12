@@ -2,7 +2,7 @@
 import rateLimit       from "express-rate-limit";
 import sanitize        from "mongo-sanitize";
 import { Request, Response, NextFunction } from "express";
-import crypto          from "crypto";
+import crypto from "node:crypto";
 import helmet from "helmet";
 
 // ─────────────────────────────────────────────────────────────────────────────

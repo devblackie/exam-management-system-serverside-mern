@@ -1,27 +1,26 @@
-// serverside/src/jobs/complianceCron.ts — REPLACE the duration check section
+// serverside/src/jobs/complianceCron.ts — COMPLETE, CORRECT VERSION
 import cron from "node-cron";
 import Student from "../models/Student";
-import AcademicYear from "../models/AcademicYear";
+import Program from "../models/Program";
+import { loadInstitutionSettings } from "../utils/loadInstitutionSettings";
 
-// ENG.19(d/e): BSc Engineering = max 10 years; BEd = max 8 years
-const MAX_YEARS_BY_TYPE: Record<string, number> = {
-  BSc: 10,
-  BEd: 8,
-  BTech: 10,
-  BEng: 10,
-};
-
-function getMaxYears(programType: string): number {
-  // programType is stored on Student e.g. "BSc", "BEd", "Direct", "Mid-Entry-Y2"
-  // Match against the degree prefix
-  for (const [prefix, max] of Object.entries(MAX_YEARS_BY_TYPE)) {
-    if (programType?.toUpperCase().startsWith(prefix.toUpperCase())) return max;
-  }
-  return 10; // safe default for unknown types
+interface StudentWithProgram {
+  _id: unknown;
+  regNo: string;
+  status: string;
+  programType?: string;
+  totalTimeOutYears?: number;
+  institution?: unknown;
+  admissionAcademicYear?: { year?: string };
+  program?: {
+    _id: unknown;
+    institution: unknown;
+    durationYears: number;
+  };
 }
 
-export const startComplianceCronJobs = () => {
-  // ── ENG.19(d/e): Time-limit auto-discontinue ─────────────────────────────
+export const startComplianceCronJobs = (): void => {
+  // ── ENG.19(d/e): Auto-discontinue students exceeding max study duration ────
   // Runs daily at 02:00
   cron.schedule("0 2 * * *", async () => {
     console.log("[Cron] ENG.19 duration check starting…");
@@ -35,22 +34,39 @@ export const startComplianceCronJobs = () => {
         "admissionAcademicYear",
         "year",
       )
-      .lean();
+      .populate<{
+        program: { _id: unknown; institution: unknown; durationYears: number };
+      }>("program", "institution durationYears")
+      .lean<StudentWithProgram[]>();
 
     let discontinued = 0;
 
     for (const student of activeStudents) {
-      const yearStr = student.admissionAcademicYear?.year ?? ""; // e.g. "2014/2015"
+      const yearStr = (student.admissionAcademicYear as any)?.year ?? "";
       const admissionYear = parseInt(yearStr.split("/")[0]);
       if (!admissionYear || isNaN(admissionYear)) continue;
 
-      // Subtract any approved leave years (stored as totalTimeOutYears)
+      const institutionId =
+        (student.program as any)?.institution?.toString() ??
+        (student.institution as any)?.toString();
+      if (!institutionId) continue;
+
+      // ── THE CORRECT APPROACH ──────────────────────────────────────────────
+      // Use Program.durationYears × settings.ruleSet.maxDurationMultiplier
+      // NEVER infer from degree name ("Financial Engineering" is BSc but 4yr)
+      const programDuration = (student.program as any)?.durationYears ?? 5;
+      const settings = await loadInstitutionSettings(institutionId).catch(
+        () => null,
+      );
+      const multiplier = settings?.rules.maxDurationMultiplier ?? 2.0;
+      const maxYears = Math.round(programDuration * multiplier);
+
+      // Subtract approved leave years
       const effectiveYears =
         nowYear - admissionYear - (student.totalTimeOutYears ?? 0);
-      const maxYears = getMaxYears(student.programType ?? "BSc");
 
       if (effectiveYears > maxYears) {
-        const rule = maxYears === 8 ? "ENG.19(e)" : "ENG.19(d)";
+        const rule = `ENG.19(${programDuration > 4 ? "d" : "e"})`;
         await Student.findByIdAndUpdate(student._id, {
           $set: { status: "discontinued" },
           $push: {
@@ -59,7 +75,7 @@ export const startComplianceCronJobs = () => {
               toStatus: "discontinued",
               date: now,
               academicYear: yearStr,
-              reason: `AUTO [${rule}]: ${effectiveYears} effective years exceeds ${maxYears}-year maximum`,
+              reason: `AUTO [${rule}]: ${effectiveYears} effective years exceeds ${maxYears}-year maximum (${programDuration}yr program × ${multiplier} multiplier)`,
             },
           },
         });

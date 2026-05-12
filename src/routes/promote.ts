@@ -15,6 +15,7 @@ import {
   generateReadmissionSuppDoc,
   generateCarryForwardSuppDoc,
   generateAcademicLeaveSuppDoc,
+  generateSimpleAwardListDoc,
 } from "../utils/promotionReport";
 import fs from "fs";
 import path from "path"
@@ -28,6 +29,7 @@ import MarkDirect from "../models/MarkDirect";
 import { undoPromotion } from "../services/undoPromotion";
 import AcademicYear from "../models/AcademicYear";
 import InstitutionSettings from "../models/InstitutionSettings";
+import { loadInstitutionSettings } from "../utils/loadInstitutionSettings";
 
 const router = Router();
 
@@ -69,7 +71,9 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
       const academicYearDocForSession = await AcademicYear.findOne({year: academicYearName}).lean();
       const institutionSettings = await InstitutionSettings.findOne({institution: program?.institution}).lean();
 
-      const passMark = institutionSettings?.passMark ?? 40;
+      // const passMark = institutionSettings?.passMark ?? 40;
+      const settings = await loadInstitutionSettings((program as any)?.institution?.toString() || "");
+      const passMark = settings.passMark;
       const gradingScale = institutionSettings?.gradingScale ?? [];
 
       const sessionExamType: "ORDINARY" | "SUPPLEMENTARY" = academicYearDocForSession?.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY" : "ORDINARY";
@@ -102,8 +106,15 @@ router.post( "/download-report-progress", requireAuth, asyncHandler(async (req: 
 
       // 5. Prepare Data Objects (Separated for type safety)
       const wordData: PromotionData = {
-        programName: program?.name || "Program", academicYear: academicYearName, yearOfStudy: yearToPromote,
-        eligible: preview.eligible, blocked: preview.blocked, offeredUnits, logoBuffer, examType: sessionExamType,
+        programName: program?.name || "Program",
+        academicYear: academicYearName,
+        yearOfStudy: yearToPromote,
+        eligible: preview.eligible,
+        blocked: preview.blocked,
+        offeredUnits,
+        logoBuffer,
+        examType: sessionExamType,
+        institutionId: (program as any)?.institution?.toString() || "",
       };
 
       const studentsByHistory = await Student.find({
@@ -426,7 +437,7 @@ router.get("/award-list-doc", requireAuth, requireRole("coordinator"),
     if (!programId) return res.status(400).json({ error: "programId is required" });
  
     const { generateAwardList }      = await import("../services/graduationEngine");
-    const { generateAwardListDoc, generateSimpleAwardListDoc } = await import("../utils/promotionReport");
+    const { generateAwardListDoc } = await import("../utils/promotionReport");
  
     const list = await generateAwardList(programId as string, academicYear as string | undefined);
  
@@ -439,11 +450,12 @@ router.get("/award-list-doc", requireAuth, requireRole("coordinator"),
     const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
  
     const docData = {
-      programName:  (program as any)?.name || "Program",
-      academicYear: (academicYear as string) || new Date().getFullYear().toString(),
-      yearOfStudy:  (program as any)?.durationYears || 5,
+      programName:   (program as any)?.name || "Program",
+      academicYear:  (academicYear as string) || new Date().getFullYear().toString(),
+      yearOfStudy:   (program as any)?.durationYears || 5,
       logoBuffer,
-      awardList:    list,
+      awardList:     list,
+      institutionId: req.user.institution.toString(),  // ← ADD
     };
  
     const buffer = (variant === "simple") ? await generateSimpleAwardListDoc(docData) : await generateAwardListDoc(docData);
@@ -466,6 +478,12 @@ router.post("/download-journey-cms", requireAuth,
     const { programId, academicYearName } = req.body;
     if (!programId) return res.status(400).json({ error: "programId is required" });
  
+    const program = (await Program.findById(programId).lean()) as any;
+
+    const academicYearDoc = academicYearName
+  ? await AcademicYear.findOne({ year: academicYearName }).lean() as any
+  : null;
+
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -487,11 +505,16 @@ router.post("/download-journey-cms", requireAuth,
       send(60, "Generating journey workbook...");
  
       const buffer = await generateJourneyCMS({
+        // programId,
+        // programName:  program?.name || "Program",
+        // academicYear: academicYearName || new Date().getFullYear().toString(),
+        // logoBuffer,
+        // institutionId: program?.institution?.toString() || "",
         programId,
-        programName:  program?.name || "Program",
-        academicYear: academicYearName || new Date().getFullYear().toString(),
-        logoBuffer,
-        institutionId: program?.institution?.toString() || "",
+        programName: program.name,
+        academicYear: academicYearDoc.year,
+        logoBuffer: Buffer.alloc(0), // not used — loadLogoBuffer handles it internally
+        institutionId: req.user.institution.toString(),
       });
  
       send(95, "Preparing download...");

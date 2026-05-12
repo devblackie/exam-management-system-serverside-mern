@@ -2,7 +2,7 @@
 
 import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
-import crypto from "crypto";
+import crypto from "node:crypto";
 import mongoose from "mongoose";
 import User from "../models/User";
 import Invite from "../models/Invite";
@@ -13,6 +13,7 @@ import { requireAuth, requireRole, AuthenticatedRequest } from "../middleware/au
 import { asyncHandler } from "../middleware/asyncHandler";
 import { sanitizeInput } from "../middleware/security";
 import { logAudit } from "../lib/auditLogger";
+import { ApiError } from "../middleware/errorHandler";
 
 const router = Router();
 
@@ -29,9 +30,7 @@ interface InviteDoc {
 }
 
 // POST /admin/secret-register
-router.post(
-  "/secret-register",
-  sanitizeInput,
+router.post("/secret-register", sanitizeInput,
   asyncHandler(async (req: Request, res: Response) => {
     const { secret, name, email, password, institutionId } = req.body as {
       secret: string; name: string; email: string;
@@ -82,9 +81,7 @@ router.post(
 );
 
 // GET /admin/invites
-router.get(
-  "/invites",
-  requireAuth,
+router.get("/invites", requireAuth,
   requireRole("admin"),
   asyncHandler(async (req: Request, res: Response) => {
     const auth = req as AuthenticatedRequest;
@@ -97,20 +94,30 @@ router.get(
   })
 );
 
-// POST /admin/invite
-// Creates an invite. The invited user inherits the admin's institution.
+// serverside/src/routes/admin.ts — REPLACE the invite POST and register routes
+
 router.post(
   "/invite",
   requireAuth,
   requireRole("admin"),
   sanitizeInput,
-  asyncHandler(async (req: Request, res: Response) => {
-    const auth = req as AuthenticatedRequest;    
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const auth = req as AuthenticatedRequest;
 
-    const { email, role, name } = req.body as {
-      email: string;
-      role:  "lecturer" | "coordinator";
-      name?: string;
+    const {
+      email,
+      role,
+      name,
+      schoolCode,
+      departmentCode,
+      institutionWide,
+    } = req.body as {
+      email:            string;
+      role:             "lecturer" | "coordinator";
+      name?:            string;
+      schoolCode?:      string;
+      departmentCode?:  string;
+      institutionWide?: boolean;
     };
 
     if (!email || !role) {
@@ -124,82 +131,132 @@ router.post(
     }
 
     if (!auth.user.institution) {
-      res.status(403).json({
-        message: "Your account is not linked to an institution. Contact a system administrator.",
-      });
+      res.status(403).json({ message: "Your account is not linked to an institution." });
       return;
     }
 
-    // Prevent duplicate invites for the same email at this institution
+    // Duplicate checks
     const existingUser = await User.findOne({
       email:       email.toLowerCase(),
       institution: auth.user.institution,
     }).lean();
-
     if (existingUser) {
-      res.status(409).json({
-        message: `An account for ${email} already exists in this institution.`,
-      });
+      res.status(409).json({ message: `An account for ${email} already exists.` });
       return;
     }
 
     const existingInvite = await Invite.findOne({
-      email: email.toLowerCase(),
-      used:  false,
+      email:       email.toLowerCase(),
+      used:        false,
       institution: auth.user.institution,
-      expiresAt: { $gt: new Date() },
+      expiresAt:   { $gt: new Date() },
     }).lean();
-
     if (existingInvite) {
       res.status(409).json({
-        message: `An active invite for ${email} already exists. Revoke it first if you want to resend.`,
+        message: `An active invite for ${email} already exists. Revoke it first.`,
       });
       return;
     }
 
-    // Derive a default name from the email if not provided
+    // Resolve human-readable school/department names for the email
+    // Load institution settings to get the names
+    const InstitutionSettings = (await import("../models/InstitutionSettings")).default;
+    const Institution         = (await import("../models/Institution")).default;
+
+    const [settingsDoc, institutionDoc] = await Promise.all([
+      InstitutionSettings.findOne({ institution: auth.user.institution })
+        .select("schools docMeta")
+        .lean() as Promise<{
+          schools?: Array<{
+            code: string; name: string;
+            departments?: Array<{ code: string; name: string }>;
+          }>;
+          docMeta?: { universityName?: string };
+        } | null>,
+      Institution.findById(auth.user.institution).select("name").lean() as Promise<{
+        name: string;
+      } | null>,
+    ]);
+
+    // Resolve names — prefer docMeta.universityName, fall back to Institution.name
+    const universityName = settingsDoc?.docMeta?.universityName
+      ?? institutionDoc?.name
+      ?? "University";
+
+    let resolvedSchoolName:      string | undefined;
+    let resolvedDepartmentName:  string | undefined;
+
+    if (schoolCode && settingsDoc?.schools) {
+      const school = settingsDoc.schools.find(
+        s => s.code === schoolCode.toUpperCase(),
+      );
+      resolvedSchoolName = school?.name;
+
+      if (departmentCode && school?.departments) {
+        const dept = school.departments.find(
+          d => d.code === departmentCode.toUpperCase(),
+        );
+        resolvedDepartmentName = dept?.name;
+      }
+    }
+
     const finalName = name?.trim() || email
       .split("@")[0]
       .split(".")
       .map((p: string) => p.charAt(0).toUpperCase() + p.slice(1))
       .join(" ");
 
-    const token  = crypto.randomBytes(24).toString("hex");
-    const invite = await Invite.create({
-      name:        finalName,
-      email:       email.toLowerCase(),
+    const token     = crypto.randomBytes(24).toString("hex");
+    const hasDepts  = !!(settingsDoc?.schools?.some(s => (s.departments?.length ?? 0) > 0));
+
+    await Invite.create({
+      name:            finalName,
+      email:           email.toLowerCase(),
       token,
       role,
-      used:        false,
-      expiresAt:   new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-      createdBy:   auth.user._id,
-      institution: auth.user.institution, // ← inherited from admin
+      used:            false,
+      expiresAt:       new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      createdBy:       auth.user._id,
+      institution:     auth.user.institution,
+      schoolCode:      schoolCode?.toUpperCase()    ?? null,
+      departmentCode:  departmentCode?.toUpperCase() ?? null,
+      institutionWide: institutionWide ?? (role === "lecturer" || !hasDepts),
     });
 
-    // Send invite email (non-blocking — email failure doesn't break the invite)
-    sendInviteEmail(email, token, finalName).catch((err: Error) => {
+    // Send rich invitation email with university/school/department context
+    const { sendInviteEmail } = await import("../config/email");
+    sendInviteEmail({
+      to:             email,
+      token,
+      name:           finalName,
+      role,
+      universityName,
+      schoolName:     resolvedSchoolName,
+      departmentName: resolvedDepartmentName,
+      institutionWide: institutionWide ?? (role === "lecturer" || !hasDepts),
+    }).catch((err: Error) => {
       console.error("[Admin] Invite email failed:", err.message);
     });
 
-    await AuditLog.create({
-      action:     "invite_created",
-      actor:      auth.user._id,
-      targetUser: invite._id,
-      details:    { email, role, institution: auth.user.institution },
-    }).catch((err: Error) => console.error("[AuditLog]", err.message));
-    
+    await logAudit(auth, {
+      action:  "invite_created",
+      details: {
+        email, role, schoolCode, departmentCode,
+        institution: auth.user.institution.toString(),
+      },
+    });
+
     res.status(201).json({ message: `Invite sent to ${finalName}` });
-  })
+  }),
 );
 
-// POST /admin/register/:token
-// Completes registration from an invite link.
-// The new user inherits the institution stored on the Invite document.
 
+
+// POST /admin/register/:token
 router.post(
   "/register/:token",
   sanitizeInput,
-  asyncHandler(async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const { token }    = req.params;
     const { password } = req.body as { password: string };
 
@@ -208,18 +265,31 @@ router.post(
       return;
     }
 
+    interface InviteLean {
+      _id:             mongoose.Types.ObjectId;
+      name:            string;
+      email:           string;
+      token:           string;
+      role:            "lecturer" | "coordinator";
+      used:            boolean;
+      expiresAt:       Date;
+      institution:     mongoose.Types.ObjectId;
+      schoolCode?:     string | null;
+      departmentCode?: string | null;
+      institutionWide?: boolean;
+    }
+
     const invite = await Invite.findOne({
       token,
       used:      false,
       expiresAt: { $gt: new Date() },
-    }).lean() as InviteDoc | null;
+    }).lean() as InviteLean | null;
 
     if (!invite) {
       res.status(400).json({ message: "Invite link is invalid or has expired." });
       return;
     }
 
-    // Prevent double-registration
     const existingUser = await User.findOne({ email: invite.email }).lean();
     if (existingUser) {
       res.status(409).json({ message: "An account with this email already exists." });
@@ -228,26 +298,27 @@ router.post(
 
     const hashed = await bcrypt.hash(password, 12);
 
-    const newUser = await User.create({
-      name:        invite.name,
-      email:       invite.email,
-      password:    hashed,
-      role:        invite.role,
-      status:      "active",
-      institution: invite.institution, // ← inherited from invite (= admin's institution)
+    await User.create({
+      name:            invite.name,
+      email:           invite.email,
+      password:        hashed,
+      role:            invite.role,
+      status:          "active",
+      institution:     invite.institution,
+      schoolCode:      invite.schoolCode     ?? null,
+      departmentCode:  invite.departmentCode ?? null,
+      institutionWide: invite.institutionWide ?? (invite.role === "lecturer"),
     });
 
     await Invite.updateOne({ _id: invite._id }, { used: true });
 
     await AuditLog.create({
-      action:     "invite_used",
-      actor:      newUser._id,
-      targetUser: newUser._id,
-      details:    { email: invite.email, role: invite.role },
-    }).catch((err: Error) => console.error("[AuditLog]", err.message));
+      action:  "invite_used",
+      details: { email: invite.email, role: invite.role },
+    }).catch((e: Error) => console.error("[AuditLog]", e.message));
 
     res.status(201).json({ message: "Account created successfully. You can now log in." });
-  })
+  }),
 );
 
 // DELETE /admin/invites/:id
@@ -427,6 +498,108 @@ router.delete(
     res.json({ message: "User deleted." });
   })
 );
+
+// PUT /admin/users/:id/details - Update coordinator details (school/dept)
+router.put(
+  "/users/:id/details",
+  requireAuth,
+  requireRole("admin"),
+  sanitizeInput,
+  asyncHandler(async (req: Request, res: Response) => {
+    const auth = req as AuthenticatedRequest;
+    const { id } = req.params;
+    const { name, schoolCode, departmentCode, institutionWide } = req.body as {
+      name?: string;
+      schoolCode?: string;
+      departmentCode?: string;
+      institutionWide?: boolean;
+    };
+
+    // Prevent self-modification
+    if (auth.user._id.toString() === id) {
+      throw {
+        statusCode: 403,
+        message: "You cannot modify your own account details.",
+      } as ApiError;
+    }
+
+    const user = await User.findOne({ _id: id, institution: auth.user.institution });
+    if (!user) {
+      throw { statusCode: 404, message: "User not found in your institution." } as ApiError;
+    }
+
+    // Only coordinators can have school/department assignments
+    if (user.role !== "coordinator" && (schoolCode !== undefined || departmentCode !== undefined || institutionWide !== undefined)) {
+      throw {
+        statusCode: 400,
+        message: "School/department assignment only applies to coordinators.",
+      } as ApiError;
+    }
+
+    // For coordinators: validate school/department exist if provided
+    if (user.role === "coordinator" && !institutionWide && schoolCode && departmentCode) {
+      const InstitutionSettings = (await import("../models/InstitutionSettings")).default;
+      const settings = await InstitutionSettings.findOne({ institution: auth.user.institution })
+        .select("schools")
+        .lean() as {
+          schools?: Array<{
+            code: string;
+            departments?: Array<{ code: string }>;
+          }>;
+        } | null;
+
+      const school = settings?.schools?.find(s => s.code === schoolCode.toUpperCase());
+      if (!school) {
+        throw { statusCode: 400, message: `School "${schoolCode}" not found.` } as ApiError;
+      }
+
+      const department = school.departments?.find(d => d.code === departmentCode.toUpperCase());
+      if (!department) {
+        throw { statusCode: 400, message: `Department "${departmentCode}" not found in school "${schoolCode}".` } as ApiError;
+      }
+    }
+
+    // Apply updates
+    if (name) user.name = name;
+    
+    // Handle schoolCode - convert empty string to undefined (Mongoose will ignore undefined)
+    if (schoolCode !== undefined) {
+      user.schoolCode = schoolCode && schoolCode.trim() !== "" ? schoolCode.toUpperCase() : undefined;
+    }
+    
+    // Handle departmentCode - convert empty string to undefined
+    if (departmentCode !== undefined) {
+      user.departmentCode = departmentCode && departmentCode.trim() !== "" ? departmentCode.toUpperCase() : undefined;
+    }
+    
+    if (institutionWide !== undefined) user.institutionWide = institutionWide;
+
+    // If institution-wide is true, clear school/department assignments
+    if (institutionWide === true) {
+      user.schoolCode = undefined;
+      user.departmentCode = undefined;
+    }
+
+    await user.save();
+
+    await logAudit(auth, {
+      action: "user_details_updated",
+      targetUser: user._id,
+      details: { 
+        name: name || user.name, 
+        schoolCode: user.schoolCode, 
+        departmentCode: user.departmentCode, 
+        institutionWide: user.institutionWide 
+      },
+    });
+
+    const updatedUser = await User.findById(id).select("-password").lean();
+    res.json({ message: "User details updated successfully", user: updatedUser });
+  })
+);
+
+
+
 
 // GET /admin/lecturers
 router.get(

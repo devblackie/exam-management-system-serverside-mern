@@ -2,22 +2,47 @@
 import { Response, Router } from "express";
 import ProgramUnit from "../models/ProgramUnit";
 import Mark from "../models/Mark";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { getScopedProgramIds, requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import mongoose from "mongoose";
 
 const router = Router();
 
-// GET /program-units/stats
+// // GET /program-units/stats
+// router.get(
+//   "/stats",
+//   requireAuth,
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const count = await ProgramUnit.countDocuments({
+//       institution: req.user.institution,
+//     });
+//     res.json({ totalUnits: count });
+//   })
+// );
+
+// GET /program-units/stats - SCOPED
 router.get(
   "/stats",
   requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const count = await ProgramUnit.countDocuments({
-      institution: req.user.institution,
-    });
-    res.json({ totalUnits: count });
+    const institutionId = req.user.institution;
+    
+    // SCOPING: Coordinators only see stats for programs in their department
+    if (req.user.role === "coordinator" && !req.user.institutionWide) {
+      const scopedProgramIds = await getScopedProgramIds(req);
+      const count = await ProgramUnit.countDocuments({
+        institution: institutionId,
+        program: { $in: scopedProgramIds }
+      });
+      res.json({ totalUnits: count });
+    } else {
+      // Admin or institution-wide coordinator sees all
+      const count = await ProgramUnit.countDocuments({
+        institution: institutionId,
+      });
+      res.json({ totalUnits: count });
+    }
   })
 );
 

@@ -216,51 +216,93 @@ export const ensureBillingForAllInstitutions = async (): Promise<void> => {
 };
 
 // ── ensureDefaultInstitution ──────────────────────────────────────────────────
-export const ensureDefaultInstitution = async (retries = 3) => {
+// export const ensureDefaultInstitution = async (retries = 3) => {
+//   for (let i = 0; i < retries; i++) {
+//     try {
+//       const count = await Institution.countDocuments();
+
+//       if (count === 0) {
+//         console.log("No institution found. Creating default...");
+//         const defaultInst = await Institution.create({
+//           name:     "Demo University",
+//           code:     "DEMO",
+//           isActive: true,
+//         });
+//         // FIX: .create() returns a Mongoose Document — _id IS typed correctly here.
+//         // Cast to ObjectId to be explicit and satisfy strict checks.
+//         const id = (defaultInst._id as mongoose.Types.ObjectId).toString();
+//         console.log("Default institution created →", defaultInst.name, id);
+//         await ensureBillingRecord(id);
+//         return;
+//       }
+
+//       const active = await Institution.findOne({ isActive: true });
+//       if (!active) {
+//         console.log("No active institution. Creating default...");
+//         const created = await Institution.create({
+//           name:     "Department of Civil Engineering",
+//           code:     "CE",
+//           isActive: true,
+//         });
+//         // FIX: same cast
+//         await ensureBillingRecord((created._id as mongoose.Types.ObjectId).toString());
+//       } else {
+//         console.log("Active institution found →", active.name);
+//         // FIX: active is a Mongoose Document (not lean), _id is typed correctly,
+//         // but cast anyway to be safe across Mongoose version differences.
+//         await ensureBillingRecord((active._id as mongoose.Types.ObjectId).toString());
+//       }
+
+//       return;
+//     } catch (err: any) {
+//       console.error(`Attempt ${i + 1} failed:`, err.message);
+//       if (i === retries - 1) {
+//         console.error("Failed to ensure default institution after retries");
+//       } else {
+//         await new Promise(resolve => setTimeout(resolve, 2000));
+//       }
+//     }
+//   }
+// };
+
+
+
+// serverside/src/config/defaultData.ts — UPDATE ensureDefaultInstitution
+// Instead of creating a named "Demo University", create a placeholder
+// that the admin is expected to rename via /institutions/mine
+
+export const ensureDefaultInstitution = async (retries = 3): Promise<void> => {
   for (let i = 0; i < retries; i++) {
     try {
       const count = await Institution.countDocuments();
 
       if (count === 0) {
-        console.log("No institution found. Creating default...");
-        const defaultInst = await Institution.create({
-          name:     "Demo University",
-          code:     "DEMO",
+        console.log("[Setup] No institution found. Creating placeholder...");
+        const inst = await Institution.create({
+          name:     "My University",   // ← generic placeholder, not "Demo University"
+          code:     "UNIV",
           isActive: true,
         });
-        // FIX: .create() returns a Mongoose Document — _id IS typed correctly here.
-        // Cast to ObjectId to be explicit and satisfy strict checks.
-        const id = (defaultInst._id as mongoose.Types.ObjectId).toString();
-        console.log("Default institution created →", defaultInst.name, id);
+        const id = (inst._id as mongoose.Types.ObjectId).toString();
+        console.log("[Setup] Placeholder institution created:", id);
+        console.log("[Setup] IMPORTANT: Log in as admin and go to Admin → Institution Profile to set your university name.");
         await ensureBillingRecord(id);
         return;
       }
 
       const active = await Institution.findOne({ isActive: true });
       if (!active) {
-        console.log("No active institution. Creating default...");
-        const created = await Institution.create({
-          name:     "Department of Civil Engineering",
-          code:     "CE",
-          isActive: true,
-        });
-        // FIX: same cast
+        const created = await Institution.create({ name: "My University", code: "UNIV", isActive: true });
         await ensureBillingRecord((created._id as mongoose.Types.ObjectId).toString());
       } else {
-        console.log("Active institution found →", active.name);
-        // FIX: active is a Mongoose Document (not lean), _id is typed correctly,
-        // but cast anyway to be safe across Mongoose version differences.
+        console.log("[Setup] Active institution found:", active.name);
         await ensureBillingRecord((active._id as mongoose.Types.ObjectId).toString());
       }
-
       return;
-    } catch (err: any) {
-      console.error(`Attempt ${i + 1} failed:`, err.message);
-      if (i === retries - 1) {
-        console.error("Failed to ensure default institution after retries");
-      } else {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error(`[Setup] Attempt ${i + 1} failed:`, msg);
+      if (i < retries - 1) await new Promise(r => setTimeout(r, 2000));
     }
   }
 };

@@ -53,7 +53,7 @@
 
 // serverside/src/middleware/csrf.ts
 import { Request, Response, NextFunction } from "express";
-import crypto from "crypto";
+import crypto from "node:crypto";
 
 /** Attach a CSRF token cookie on every GET (readable by JS, not HttpOnly). */
 export const attachCsrfToken = (

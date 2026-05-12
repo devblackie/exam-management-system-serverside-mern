@@ -176,6 +176,7 @@ app.use("/api", apiRouter);
 // app.use("/billing", billingRoutes);
 // app.use("/disciplinary", disciplinaryRoutes);
 
+
 app.use((req, res) => {
   res.status(404).json({ message: `Route ${req.originalUrl} not found`, method: req.method });
 });

@@ -2,7 +2,7 @@
 
 import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
-import crypto from "crypto";
+import crypto from "node:crypto";
 import mongoose from "mongoose";
 import User from "../models/User";
 import TempOTP from "../models/TempOTP";
@@ -277,7 +277,11 @@ router.get("/me", requireAuth,
   asyncHandler(async (req: Request & { user?: any }, res: Response) => {
     const user = req.user;
     if (!user) throw { statusCode: 401, message: "Not authenticated" } as ApiError;
-    res.json({ role: user.role, email: user.email, name: user.name });
+    res.json({ role: user.role, email: user.email, name: user.name,
+      schoolCode:      user.schoolCode      ?? null,
+      departmentCode:  user.departmentCode  ?? null,
+      institutionWide: user.institutionWide ?? false,
+     });
   })
 );
 

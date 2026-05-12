@@ -22,6 +22,7 @@ import { importDirectMarksFromBuffer } from "../services/directMarksImporter";
 import AcademicYear from "../models/AcademicYear";
 import Mark from "../models/Mark";
 import MarkDirect from "../models/MarkDirect";
+import { loadLogoBuffer } from "../utils/loadLogoBuffer";
 
 const router = Router();
 
@@ -67,8 +68,11 @@ router.get(
         ?.toUpperCase() || "TEMPLATE";
 
       const fileName  = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
-      const logoPath  = path.join(__dirname, "../../public/institutionLogoExcel.png");
-      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+      // const logoPath  = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      // const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+      const institutionId = req.user.institution.toString();
+      const logoBuffer    = await loadLogoBuffer(institutionId);
+
 
       const excelBuffer = await generateFullScoresheetTemplate(
         new mongoose.Types.ObjectId(programId as string),
@@ -147,8 +151,11 @@ router.get(
         ?.toUpperCase() || "TEMPLATE";
 
       const fileName   = `Scoresheet_${cleanName}_${yearLabel}.xlsx`;
-      const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
-      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+      // const logoPath   = path.join(__dirname, "../../public/institutionLogoExcel.png");
+      // const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+      const institutionId = req.user.institution.toString();
+      const logoBuffer = await loadLogoBuffer(institutionId);
+      
 
       const buffer = await generateDirectScoresheetTemplate(
         new mongoose.Types.ObjectId(programId as string),

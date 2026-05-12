@@ -871,6 +871,7 @@ import ProgramUnit                 from "../models/ProgramUnit";
 import AcademicYear                from "../models/AcademicYear";
 import MarkDirect                  from "../models/MarkDirect";
 import Mark                        from "../models/Mark";
+import { loadLogoBuffer } from "./loadLogoBuffer";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1122,12 +1123,17 @@ export const generateConsolidatedMarkSheet = async (
   const {
     programName, academicYear, yearOfStudy,
     students, marks, offeredUnits,
-    logoBuffer, institutionId, programId,
+    // logoBuffer,
+     institutionId, programId,
   } = data;
 
   // ── Settings (one DB call, with fallback) ─────────────────────────────────
-  const settings = await loadInstitutionSettings(institutionId);
-  const passMark = settings?.passMark ?? 40;
+  // const settings = await loadInstitutionSettings(institutionId);
+  // const passMark = settings?.passMark ?? 40;
+  const settings   = await loadInstitutionSettings(institutionId);
+  const logoBuffer = await loadLogoBuffer(institutionId);
+  const meta       = settings.docMeta;
+  const passMark   = settings.passMark;
 
   const workbook  = new ExcelJS.Workbook();
   const sheet     = workbook.addWorksheet("CONSOLIDATED MARKSHEET");
@@ -1171,9 +1177,12 @@ export const generateConsolidatedMarkSheet = async (
   const yrTxt =
     ["FIRST","SECOND","THIRD","FOURTH","FIFTH"][yearOfStudy - 1] || `${yearOfStudy}TH`;
 
-  setCenteredHeader(4, `${config.instName}`);
-  setCenteredHeader(5, `${config.schoolName || "SCHOOL OF ENGINEERING"}`);
-  setCenteredHeader(6, `${programName}`);
+  // setCenteredHeader(4, `${config.instName}`);
+  // setCenteredHeader(5, `${config.schoolName || "SCHOOL OF ENGINEERING"}`);
+  // setCenteredHeader(6, `${programName}`);
+  setCenteredHeader(4, meta.universityName);
+setCenteredHeader(5, meta.schoolName);
+setCenteredHeader(6, programName);
   setCenteredHeader(
     7,
     `CONSOLIDATED MARK SHEET - - ${examPhaseLabel} - ${yrTxt} YEAR - ${academicYear} ACADEMIC YEAR`,

@@ -33,6 +33,11 @@ export const generateDirectScoresheetTemplate = async (
   const programUnitDoc = await ProgramUnit.findOne({ program: programId, unit: unitId }).lean() as any;
   const passMark       = settings.passMark || 40;
 
+  const universityName =
+    settings.docMeta?.universityName ??
+    settings.docMeta?.schoolName ??
+    "University";
+
   const session: "ORDINARY" | "SUPPLEMENTARY" | "CLOSED" =
     academicYear.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY" :
     academicYear.session === "CLOSED"        ? "CLOSED"        : "ORDINARY";
@@ -67,7 +72,8 @@ export const generateDirectScoresheetTemplate = async (
   const yrTxt  = ["FIRST","SECOND","THIRD","FOURTH","FIFTH"][yearOfStudy - 1] ?? `${yearOfStudy}TH`;
   const semTxt = semester === 1 ? "FIRST" : "SECOND";
 
-  sheet.mergeCells("C6:G6"); sheet.getCell("C6").value = config.instName.toUpperCase(); sheet.getCell("C6").style = { ...cb, font: { ...cb.font, size: 12 } };
+  sheet.mergeCells("C6:G6"); sheet.getCell("C6").value = universityName.toUpperCase();
+  sheet.getCell("C6").style = { ...cb, font: { ...cb.font, size: 12 } };
   sheet.mergeCells("C7:G7"); sheet.getCell("C7").value = `DEGREE: ${(program?.name || "").toUpperCase()}`; sheet.getCell("C7").style = cb;
   sheet.mergeCells("C8:G8"); sheet.getCell("C8").value = `${yrTxt} YEAR | ${semTxt} SEMESTER | ${academicYear.year} ACADEMIC YEAR`; sheet.getCell("C8").style = cb;
   sheet.mergeCells("C10:G10"); sheet.getCell("C10").value = `SCORESHEET FOR: ${unit.code.toUpperCase()} — ${examLabel}`; sheet.getCell("C10").style = { ...cb, font: { ...cb.font, size: 10 } };

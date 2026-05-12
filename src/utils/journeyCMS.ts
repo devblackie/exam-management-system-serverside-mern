@@ -955,7 +955,7 @@
 
 import * as ExcelJS     from "exceljs";
 import config           from "../config/config";
-import InstitutionSettings from "../models/InstitutionSettings";
+import InstitutionSettings, { IDocumentMeta } from "../models/InstitutionSettings";
 import Student          from "../models/Student";
 import FinalGrade       from "../models/FinalGrade";
 import Mark             from "../models/Mark";
@@ -964,6 +964,8 @@ import ProgramUnit      from "../models/ProgramUnit";
 import Program          from "../models/Program";
 import { getYearWeight }      from "../utils/weightingRegistry";
 import { buildDisplayRegNo }  from "../utils/academicRules";
+import { loadInstitutionSettings } from "./loadInstitutionSettings";
+import { loadLogoBuffer } from "./loadLogoBuffer";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1030,6 +1032,7 @@ interface ResolvedMark {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
+
 const FONT = "Arial";
 
 const THIN: Partial<ExcelJS.Borders> = {
@@ -1055,6 +1058,7 @@ const F = {
   // CHANGE 2: New fill for disciplinary rows
   disciplinary: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFFC7CE" } },
 };
+
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -1421,378 +1425,534 @@ async function loadJourneys(
 }
 
 // ── SUMMARY sheet ─────────────────────────────────────────────────────────────
-function buildSummary(
-  wb: ExcelJS.Workbook, records: StudentJourneyRecord[],
-  program: any, logoBuffer: Buffer, academicYear: string,
-) {
-  const duration   = program.durationYears || 5;
-  const TOTAL_COLS = 5 + duration + 3;
-  const sheet      = wb.addWorksheet("SUMMARY");
-  addLogo(wb, sheet, logoBuffer, TOTAL_COLS);
+// function buildSummary(
+//   wb: ExcelJS.Workbook, records: StudentJourneyRecord[],
+//   program: any, logoBuffer: Buffer, academicYear: string,
+// ) {
+  function buildSummary(
+    wb: ExcelJS.Workbook,
+    records: StudentJourneyRecord[],
+    program: { durationYears: number; name: string; [key: string]: unknown },
+    logoBuffer: Buffer,
+    academicYear: string,
+    meta: IDocumentMeta, // ← ADD
+  ) {
+    const duration = program.durationYears || 5;
+    const TOTAL_COLS = 5 + duration + 3;
+    const sheet = wb.addWorksheet("SUMMARY");
+    addLogo(wb, sheet, logoBuffer, TOTAL_COLS);
 
-  hdrRow(sheet, 4, config.instName, TOTAL_COLS, 12, true, false);
-  hdrRow(sheet, 5, config.schoolName || "SCHOOL OF ENGINEERING", TOTAL_COLS, 10, true, false);
-  hdrRow(sheet, 6, program.name, TOTAL_COLS, 10, true, false);
-  hdrRow(sheet, 7, `STUDENT ACADEMIC JOURNEY SUMMARY — ${academicYear} ACADEMIC YEAR`, TOTAL_COLS, 9, true, true);
-  hdrRow(sheet, 8, "BOARD OF EXAMINERS REPORT", TOTAL_COLS, 9, false, false);
+    // hdrRow(sheet, 4, config.instName, TOTAL_COLS, 12, true, false);
+    // hdrRow( sheet, 5, config.schoolName || "SCHOOL OF ENGINEERING", TOTAL_COLS, 10, true, false );
+    hdrRow(sheet, 4, meta.universityName, TOTAL_COLS, 12, true, false);
+  hdrRow(sheet, 5, meta.schoolName,     TOTAL_COLS, 10, true, false);
+    hdrRow(sheet, 6, program.name, TOTAL_COLS, 10, true, false);
+    hdrRow(
+      sheet,
+      7,
+      `STUDENT ACADEMIC JOURNEY SUMMARY — ${academicYear} ACADEMIC YEAR`,
+      TOTAL_COLS,
+      9,
+      true,
+      true,
+    );
+    hdrRow(sheet, 8, "BOARD OF EXAMINERS REPORT", TOTAL_COLS, 9, false, false);
 
-  const HDR = 10;
-  sheet.getRow(HDR).height = 52;
-  const hdrs = [
-    "S/N", "REG. NO.", "NAME", "ENTRY",
-    ...Array.from({ length: duration }, (_, i) => `Y${i+1}\n(%)`),
-    "WAA\n(%)", "CLASSIFICATION", "HURDLE LOG", "BOARD\nREMARKS",
-  ];
+    const HDR = 10;
+    sheet.getRow(HDR).height = 52;
+    const hdrs = [
+      "S/N",
+      "REG. NO.",
+      "NAME",
+      "ENTRY",
+      ...Array.from({ length: duration }, (_, i) => `Y${i + 1}\n(%)`),
+      "WAA\n(%)",
+      "CLASSIFICATION",
+      "HURDLE LOG",
+      "BOARD\nREMARKS",
+    ];
 
-  hdrs.forEach((txt, i) => {
-    const cell = sheet.getRow(HDR).getCell(i + 1);
-    cell.value     = txt;
-    cell.fill      = F.hdr;
-    cell.border    = DOUBLE_BOTTOM;
-    cell.font      = { bold: true, name: FONT, size: 8 };
-    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  });
-
-  let row = HDR + 1;
-  let ctr = 1;
-
-  for (const rec of records) {
-    const r = sheet.getRow(row);
-    r.height = 14;
-
-    const vals: any[] = [ctr++, rec.displayRegNo, rec.name.toUpperCase(), rec.entryType];
-    for (let y = 1; y <= duration; y++) {
-      const yr = rec.yearsData.find(d => d.yearOfStudy === y);
-      vals.push(yr ? parseFloat(yr.annualMean.toFixed(2)) : "—");
-    }
-
-    const waaCol = 5 + duration;
-    vals.push(rec.waa, rec.classification, rec.hurdleSummary, "");
-    r.values = vals;
-
-    r.eachCell((cell, colNum) => {
-      cell.border    = THIN;
-      cell.font      = { name: FONT, size: 8 };
-      cell.alignment = { vertical: "middle", horizontal: "center" };
-
-      if (colNum === 2 || colNum === 3) cell.alignment = { horizontal: "left", vertical: "middle" };
-
-      // CHANGE 2: Disciplinary rows — full red fill on SUMMARY
-      if (rec.isDisciplinary) {
-        cell.fill = F.disciplinary;
-        if (colNum === 2 || colNum === 3) {
-          cell.font = { name: FONT, size: 8, color: { argb: "FF9C0006" }, bold: true };
-        }
-        return; // skip per-column styling below
-      }
-
-      if (colNum >= 5 && colNum < waaCol) {
-        const v = cell.value as number;
-        if (typeof v === "number") cell.fill = meanFill(v);
-      }
-      if (colNum === waaCol) {
-        cell.fill   = classFill(rec.waa);
-        cell.font   = { bold: true, name: FONT, size: 8 };
-        cell.numFmt = "0.00";
-      }
-      if (colNum === waaCol + 1) {
-        cell.fill = classFill(rec.waa);
-        cell.font = { bold: true, name: FONT, size: 8 };
-      }
-      if (colNum === waaCol + 2) {
-        cell.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
-        const isClean  = (cell.value?.toString() || "") === "CLEAN";
-        cell.fill = isClean ? F.pass : F.supp;
-        cell.font = { name: FONT, size: 7, italic: !isClean };
-      }
-      if (colNum === waaCol + 3) {
-        cell.protection = { locked: false };
-        cell.fill = F.none;
-      }
+    hdrs.forEach((txt, i) => {
+      const cell = sheet.getRow(HDR).getCell(i + 1);
+      cell.value = txt;
+      cell.fill = F.hdr;
+      cell.border = DOUBLE_BOTTOM;
+      cell.font = { bold: true, name: FONT, size: 8 };
+      cell.alignment = {
+        horizontal: "center",
+        vertical: "middle",
+        wrapText: true,
+      };
     });
 
-    row++;
+    let row = HDR + 1;
+    let ctr = 1;
+
+    for (const rec of records) {
+      const r = sheet.getRow(row);
+      r.height = 14;
+
+      const vals: any[] = [
+        ctr++,
+        rec.displayRegNo,
+        rec.name.toUpperCase(),
+        rec.entryType,
+      ];
+      for (let y = 1; y <= duration; y++) {
+        const yr = rec.yearsData.find((d) => d.yearOfStudy === y);
+        vals.push(yr ? parseFloat(yr.annualMean.toFixed(2)) : "—");
+      }
+
+      const waaCol = 5 + duration;
+      vals.push(rec.waa, rec.classification, rec.hurdleSummary, "");
+      r.values = vals;
+
+      r.eachCell((cell, colNum) => {
+        cell.border = THIN;
+        cell.font = { name: FONT, size: 8 };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+
+        if (colNum === 2 || colNum === 3)
+          cell.alignment = { horizontal: "left", vertical: "middle" };
+
+        // CHANGE 2: Disciplinary rows — full red fill on SUMMARY
+        if (rec.isDisciplinary) {
+          cell.fill = F.disciplinary;
+          if (colNum === 2 || colNum === 3) {
+            cell.font = {
+              name: FONT,
+              size: 8,
+              color: { argb: "FF9C0006" },
+              bold: true,
+            };
+          }
+          return; // skip per-column styling below
+        }
+
+        if (colNum >= 5 && colNum < waaCol) {
+          const v = cell.value as number;
+          if (typeof v === "number") cell.fill = meanFill(v);
+        }
+        if (colNum === waaCol) {
+          cell.fill = classFill(rec.waa);
+          cell.font = { bold: true, name: FONT, size: 8 };
+          cell.numFmt = "0.00";
+        }
+        if (colNum === waaCol + 1) {
+          cell.fill = classFill(rec.waa);
+          cell.font = { bold: true, name: FONT, size: 8 };
+        }
+        if (colNum === waaCol + 2) {
+          cell.alignment = {
+            horizontal: "left",
+            vertical: "middle",
+            wrapText: true,
+          };
+          const isClean = (cell.value?.toString() || "") === "CLEAN";
+          cell.fill = isClean ? F.pass : F.supp;
+          cell.font = { name: FONT, size: 7, italic: !isClean };
+        }
+        if (colNum === waaCol + 3) {
+          cell.protection = { locked: false };
+          cell.fill = F.none;
+        }
+      });
+
+      row++;
+    }
+
+    const lastData = row - 1;
+
+    // Thick outer borders
+    for (let r = HDR; r <= lastData; r++) {
+      sheet.getCell(r, 1).border = {
+        ...sheet.getCell(r, 1).border,
+        left: { style: "thick" },
+      };
+      sheet.getCell(r, TOTAL_COLS).border = {
+        ...sheet.getCell(r, TOTAL_COLS).border,
+        right: { style: "thick" },
+      };
+    }
+    sheet
+      .getRow(HDR)
+      .eachCell((c) => (c.border = { ...c.border, top: { style: "thick" } }));
+    sheet
+      .getRow(lastData)
+      .eachCell(
+        (c) => (c.border = { ...c.border, bottom: { style: "thick" } }),
+      );
+
+    sheet.getColumn(1).width = 4;
+    sheet.getColumn(2).width = 22;
+    sheet.getColumn(3).width = 28;
+    sheet.getColumn(4).width = 8;
+    for (let y = 1; y <= duration; y++) sheet.getColumn(4 + y).width = 7;
+    sheet.getColumn(5 + duration).width = 8;
+    sheet.getColumn(6 + duration).width = 30;
+    sheet.getColumn(7 + duration).width = 55;
+    sheet.getColumn(8 + duration).width = 25;
+
+    sheet.views = [{ state: "frozen", xSplit: 3, ySplit: HDR }];
+    sheet.protect("1234", {
+      selectLockedCells: true,
+      selectUnlockedCells: true,
+    });
+    sheet.pageSetup = {
+      orientation: "landscape",
+      paperSize: 9,
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+    };
   }
-
-  const lastData = row - 1;
-
-  // Thick outer borders
-  for (let r = HDR; r <= lastData; r++) {
-    sheet.getCell(r, 1).border         = { ...sheet.getCell(r, 1).border,         left:  { style: "thick" } };
-    sheet.getCell(r, TOTAL_COLS).border = { ...sheet.getCell(r, TOTAL_COLS).border, right: { style: "thick" } };
-  }
-  sheet.getRow(HDR).eachCell(c => (c.border = { ...c.border, top: { style: "thick" } }));
-  sheet.getRow(lastData).eachCell(c => (c.border = { ...c.border, bottom: { style: "thick" } }));
-
-  sheet.getColumn(1).width = 4;
-  sheet.getColumn(2).width = 22;
-  sheet.getColumn(3).width = 28;
-  sheet.getColumn(4).width = 8;
-  for (let y = 1; y <= duration; y++) sheet.getColumn(4 + y).width = 7;
-  sheet.getColumn(5 + duration).width = 8;
-  sheet.getColumn(6 + duration).width = 30;
-  sheet.getColumn(7 + duration).width = 55;
-  sheet.getColumn(8 + duration).width = 25;
-
-  sheet.views = [{ state: "frozen", xSplit: 3, ySplit: HDR }];
-  sheet.protect("1234", { selectLockedCells: true, selectUnlockedCells: true });
-  sheet.pageSetup = { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
-}
 
 // ── YEAR sheet ────────────────────────────────────────────────────────────────
-function buildYearSheet(
-  wb: ExcelJS.Workbook, y: number, records: StudentJourneyRecord[],
-  program: any, academicYear: string, passMark: number, logoBuffer: Buffer,
-) {
-  const unitMap = new Map<string, string>();
-  records.forEach((rec) => {
-    const yr = rec.yearsData.find((d) => d.yearOfStudy === y);
-    if (!yr) return;
-    yr.unitMarks.forEach((u) => unitMap.set(u.code, u.name));
-  });
-
-  const codes = Array.from(unitMap.keys());
-  const names = codes.map((c) => unitMap.get(c) || c);
-
-  const YEAR_LABEL = ["FIRST","SECOND","THIRD","FOURTH","FIFTH"][y - 1] || `${y}TH`;
-
-  // CHANGE 3: Added "ATT" column header (attempt number per unit)
-  // TOTAL_COLS includes an extra column for the attempt number summary
-  const TOTAL_COLS = 4 + codes.length + 3;
-  const sheet      = wb.addWorksheet(`Year ${y}`.substring(0, 31));
-
-  addLogo(wb, sheet, logoBuffer, TOTAL_COLS);
-  hdrRow(sheet, 4, config.instName, TOTAL_COLS, 11, true);
-  hdrRow(sheet, 5, program.name, TOTAL_COLS, 10, true);
-  hdrRow(sheet, 6, `${YEAR_LABEL} YEAR — DETAILED MARKS & HURDLE REGISTRY — ${academicYear}`, TOTAL_COLS, 9, true, true);
-
-  const HDR  = 8;
-  const CODE = 9;
-  sheet.getRow(HDR).height  = 15;
-  sheet.getRow(CODE).height = 48;
-
-  ["A","B","C","D"].forEach((col, i) => {
-    sheet.mergeCells(`${col}${HDR}:${col}${CODE}`);
-    const cell = sheet.getCell(`${col}${HDR}`);
-    cell.value = ["S/N","REG. NO.","NAME","ATTEMPT"][i];
-    cell.fill  = F.hdr;
-    cell.border = DOUBLE_BOTTOM;
-    cell.font  = { bold: true, name: FONT, size: 8 };
-    cell.alignment = { horizontal: "center", vertical: "middle", textRotation: i === 3 ? 90 : 0 };
-  });
-
-  codes.forEach((code, i) => {
-    const colNum = 5 + i;
-    const h1 = sheet.getRow(HDR).getCell(colNum);
-    h1.value = (i + 1).toString();
-    h1.fill  = F.hdr;
-    h1.border = THIN;
-    h1.font  = { bold: true, name: FONT, size: 8 };
-    h1.alignment = { horizontal: "center", vertical: "middle" };
-
-    const h2 = sheet.getRow(CODE).getCell(colNum);
-    h2.value = code;
-    h2.fill  = F.hdr;
-    h2.border = DOUBLE_BOTTOM;
-    h2.font  = { bold: true, name: FONT, size: 7 };
-    h2.alignment = { horizontal: "center", vertical: "middle", textRotation: 90 };
-  });
-
-  const MEAN_COL   = 5 + codes.length;
-  const RECOMM_COL = MEAN_COL + 1;
-  const LOG_COL    = RECOMM_COL + 1;
-
-  ([
-    [MEAN_COL,   "MEAN (%)"],
-    [RECOMM_COL, "RECOMM."],
-    [LOG_COL,    "HURDLE LOG"],
-  ] as [number, string][]).forEach(([col, lbl]) => {
-    sheet.mergeCells(HDR, col, CODE, col);
-    const cell = sheet.getRow(HDR).getCell(col);
-    cell.value = lbl;
-    cell.fill  = F.hdr;
-    cell.border = DOUBLE_BOTTOM;
-    cell.font  = { bold: true, name: FONT, size: 8 };
-    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  });
-
-  let rowIdx = CODE + 1;
-  let ctr    = 1;
-
-  for (const rec of records) {
-    const yr = rec.yearsData.find((d) => d.yearOfStudy === y);
-    if (!yr) continue;
-
-    const r = sheet.getRow(rowIdx);
-    r.height = 14;
-
-    // Hurdle log
-    const log: string[] = [];
-    // CHANGE 2: Disciplinary flag in hurdle log
-    if (rec.isDisciplinary) log.push("⚠ DISCIPLINARY SUSPENSION");
-    if (yr.isRepeatYear)    log.push("REPEAT YEAR");
-    if (yr.suppUnits.length)    log.push(`SUPP: ${yr.suppUnits.join(", ")}`);
-    if (yr.passedSupp.length)   log.push(`✓ SUPP CLEARED: ${yr.passedSupp.join(", ")}`);
-    if (yr.cfUnits.length)      log.push(`CF→Y${y + 1}: ${yr.cfUnits.join(", ")}`);
-    if (yr.passedCF.length)     log.push(`✓ CF CLEARED: ${yr.passedCF.join(", ")}`);
-    if (yr.specialUnits.length) log.push(`SPECIAL: ${yr.specialUnits.join(", ")}`);
-    const hLog = log.join(" | ") || "CLEAN";
-
-    let attempt = "B/S";
-    if (rec.isDisciplinary)                          attempt = "SUSP.";
-    else if (yr.isRepeatYear)                        attempt = "A/RA1";
-    else if (rec.qualifierSuffix.includes("C"))      attempt = rec.qualifierSuffix;
-
-    let recomm = yr.failedUnits.length === 0 && !yr.isRepeatYear && !rec.isDisciplinary
-      ? "PASS"
-      : rec.isDisciplinary
-        ? "DISCIPLINARY SUSPENSION"
-        : yr.isRepeatYear
-          ? "REPEAT YEAR"
-          : yr.suppUnits.length
-            ? `SUPP (${yr.suppUnits.length})`
-            : yr.cfUnits.length
-              ? `CF (${yr.cfUnits.length})`
-              : "INC";
-
-    const vals: any[] = [ctr++, rec.displayRegNo, rec.name.toUpperCase(), attempt];
-
-    codes.forEach((code) => {
-      const um = yr.unitMarks.find((u) => u.code === code);
-      // CHANGE 3: Append attempt number superscript if > 1 (e.g. "45²")
-      if (um && typeof um.mark === "number" && um.attemptNumber > 1) {
-        const sup = ["","¹","²","³","⁴","⁵"][Math.min(um.attemptNumber, 5)] || String(um.attemptNumber);
-        vals.push(`${um.mark}${sup}`);
-      } else {
-        vals.push(um ? um.mark : "—");
-      }
+// function buildYearSheet(
+//   wb: ExcelJS.Workbook, y: number, records: StudentJourneyRecord[],
+//   program: any, academicYear: string, passMark: number, logoBuffer: Buffer,
+// ) {
+  function buildYearSheet(
+    wb: ExcelJS.Workbook,
+    y: number,
+    records: StudentJourneyRecord[],
+    program: { durationYears: number; name: string; [key: string]: unknown },
+    academicYear: string,
+    passMark: number,
+    logoBuffer: Buffer,
+    meta: IDocumentMeta, // ← ADD
+  ) {
+    const unitMap = new Map<string, string>();
+    records.forEach((rec) => {
+      const yr = rec.yearsData.find((d) => d.yearOfStudy === y);
+      if (!yr) return;
+      yr.unitMarks.forEach((u) => unitMap.set(u.code, u.name));
     });
 
-    vals.push(parseFloat(yr.annualMean.toFixed(2)), recomm, hLog);
-    r.values = vals;
+    const codes = Array.from(unitMap.keys());
+    const names = codes.map((c) => unitMap.get(c) || c);
 
-    r.eachCell((cell, colNum) => {
-      cell.border    = THIN;
-      cell.font      = { name: FONT, size: 8 };
-      cell.alignment = { vertical: "middle", horizontal: "center" };
+    const YEAR_LABEL =
+      ["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH"][y - 1] || `${y}TH`;
 
-      if (colNum === 2 || colNum === 3) cell.alignment = { horizontal: "left", vertical: "middle" };
+    // CHANGE 3: Added "ATT" column header (attempt number per unit)
+    // TOTAL_COLS includes an extra column for the attempt number summary
+    const TOTAL_COLS = 4 + codes.length + 3;
+    const sheet = wb.addWorksheet(`Year ${y}`.substring(0, 31));
 
-      // CHANGE 2: Full red fill for disciplinary rows
-      if (rec.isDisciplinary) {
-        cell.fill = F.disciplinary;
-        cell.font = { name: FONT, size: 8, color: { argb: "FF9C0006" } };
-        return;
-      }
+    addLogo(wb, sheet, logoBuffer, TOTAL_COLS);
+    // hdrRow(sheet, 4, config.instName, TOTAL_COLS, 11, true);
+    hdrRow(sheet, 4, meta.universityName, TOTAL_COLS, 11, true);
+    hdrRow(sheet, 5, program.name, TOTAL_COLS, 10, true);
+    hdrRow(
+      sheet,
+      6,
+      `${YEAR_LABEL} YEAR — DETAILED MARKS & HURDLE REGISTRY — ${academicYear}`,
+      TOTAL_COLS,
+      9,
+      true,
+      true,
+    );
 
-      if (colNum >= 5 && colNum < MEAN_COL) {
-        const v  = cell.value;
-        const um = yr.unitMarks.find((u) => u.code === codes[colNum - 5]);
+    const HDR = 8;
+    const CODE = 9;
+    sheet.getRow(HDR).height = 15;
+    sheet.getRow(CODE).height = 48;
 
-        if (v === "—" || v === undefined) {
-          cell.fill = F.none;
-        } else if (typeof v === "string" && v.endsWith("C")) {
-          cell.fill = F.special;
-        } else if (v === "INC") {
-          cell.fill = F.inc;
-          cell.font = { bold: true, name: FONT, size: 8 };
-        } else if (typeof v === "number" || (typeof v === "string" && !isNaN(parseFloat(v)))) {
-          // CHANGE 3: Parse numeric value even when it has superscript suffix
-          const numVal = typeof v === "number" ? v : parseFloat(v);
-          if (um?.status === "SUPPLEMENTARY" && numVal >= passMark) {
-            cell.fill = F.supp;
-            cell.font = { italic: true, name: FONT, size: 8 };
-          } else if (um?.status === "RETAKE" && numVal >= passMark) {
-            cell.fill = F.amber;
-            cell.font = { italic: true, name: FONT, size: 8 };
-          } else if (numVal >= passMark) {
-            cell.fill = F.passed;
-          } else {
-            cell.fill = F.fail;
-            cell.font = { bold: true, name: FONT, size: 8, color: { argb: "FF9C0006" } };
-          }
-          // CHANGE 3: Highlight cells where attempt ≥ 4 (approaching ENG.22 limit)
-          if (um && um.attemptNumber >= 4) {
-            cell.fill = F.fail;
-            cell.font = { bold: true, name: FONT, size: 8, color: { argb: "FF9C0006" }, underline: true };
+    ["A", "B", "C", "D"].forEach((col, i) => {
+      sheet.mergeCells(`${col}${HDR}:${col}${CODE}`);
+      const cell = sheet.getCell(`${col}${HDR}`);
+      cell.value = ["S/N", "REG. NO.", "NAME", "ATTEMPT"][i];
+      cell.fill = F.hdr;
+      cell.border = DOUBLE_BOTTOM;
+      cell.font = { bold: true, name: FONT, size: 8 };
+      cell.alignment = {
+        horizontal: "center",
+        vertical: "middle",
+        textRotation: i === 3 ? 90 : 0,
+      };
+    });
+
+    codes.forEach((code, i) => {
+      const colNum = 5 + i;
+      const h1 = sheet.getRow(HDR).getCell(colNum);
+      h1.value = (i + 1).toString();
+      h1.fill = F.hdr;
+      h1.border = THIN;
+      h1.font = { bold: true, name: FONT, size: 8 };
+      h1.alignment = { horizontal: "center", vertical: "middle" };
+
+      const h2 = sheet.getRow(CODE).getCell(colNum);
+      h2.value = code;
+      h2.fill = F.hdr;
+      h2.border = DOUBLE_BOTTOM;
+      h2.font = { bold: true, name: FONT, size: 7 };
+      h2.alignment = {
+        horizontal: "center",
+        vertical: "middle",
+        textRotation: 90,
+      };
+    });
+
+    const MEAN_COL = 5 + codes.length;
+    const RECOMM_COL = MEAN_COL + 1;
+    const LOG_COL = RECOMM_COL + 1;
+
+    (
+      [
+        [MEAN_COL, "MEAN (%)"],
+        [RECOMM_COL, "RECOMM."],
+        [LOG_COL, "HURDLE LOG"],
+      ] as [number, string][]
+    ).forEach(([col, lbl]) => {
+      sheet.mergeCells(HDR, col, CODE, col);
+      const cell = sheet.getRow(HDR).getCell(col);
+      cell.value = lbl;
+      cell.fill = F.hdr;
+      cell.border = DOUBLE_BOTTOM;
+      cell.font = { bold: true, name: FONT, size: 8 };
+      cell.alignment = {
+        horizontal: "center",
+        vertical: "middle",
+        wrapText: true,
+      };
+    });
+
+    let rowIdx = CODE + 1;
+    let ctr = 1;
+
+    for (const rec of records) {
+      const yr = rec.yearsData.find((d) => d.yearOfStudy === y);
+      if (!yr) continue;
+
+      const r = sheet.getRow(rowIdx);
+      r.height = 14;
+
+      // Hurdle log
+      const log: string[] = [];
+      // CHANGE 2: Disciplinary flag in hurdle log
+      if (rec.isDisciplinary) log.push("⚠ DISCIPLINARY SUSPENSION");
+      if (yr.isRepeatYear) log.push("REPEAT YEAR");
+      if (yr.suppUnits.length) log.push(`SUPP: ${yr.suppUnits.join(", ")}`);
+      if (yr.passedSupp.length)
+        log.push(`✓ SUPP CLEARED: ${yr.passedSupp.join(", ")}`);
+      if (yr.cfUnits.length) log.push(`CF→Y${y + 1}: ${yr.cfUnits.join(", ")}`);
+      if (yr.passedCF.length)
+        log.push(`✓ CF CLEARED: ${yr.passedCF.join(", ")}`);
+      if (yr.specialUnits.length)
+        log.push(`SPECIAL: ${yr.specialUnits.join(", ")}`);
+      const hLog = log.join(" | ") || "CLEAN";
+
+      let attempt = "B/S";
+      if (rec.isDisciplinary) attempt = "SUSP.";
+      else if (yr.isRepeatYear) attempt = "A/RA1";
+      else if (rec.qualifierSuffix.includes("C")) attempt = rec.qualifierSuffix;
+
+      let recomm =
+        yr.failedUnits.length === 0 && !yr.isRepeatYear && !rec.isDisciplinary
+          ? "PASS"
+          : rec.isDisciplinary
+            ? "DISCIPLINARY SUSPENSION"
+            : yr.isRepeatYear
+              ? "REPEAT YEAR"
+              : yr.suppUnits.length
+                ? `SUPP (${yr.suppUnits.length})`
+                : yr.cfUnits.length
+                  ? `CF (${yr.cfUnits.length})`
+                  : "INC";
+
+      const vals: any[] = [
+        ctr++,
+        rec.displayRegNo,
+        rec.name.toUpperCase(),
+        attempt,
+      ];
+
+      codes.forEach((code) => {
+        const um = yr.unitMarks.find((u) => u.code === code);
+        // CHANGE 3: Append attempt number superscript if > 1 (e.g. "45²")
+        if (um && typeof um.mark === "number" && um.attemptNumber > 1) {
+          const sup =
+            ["", "¹", "²", "³", "⁴", "⁵"][Math.min(um.attemptNumber, 5)] ||
+            String(um.attemptNumber);
+          vals.push(`${um.mark}${sup}`);
+        } else {
+          vals.push(um ? um.mark : "—");
+        }
+      });
+
+      vals.push(parseFloat(yr.annualMean.toFixed(2)), recomm, hLog);
+      r.values = vals;
+
+      r.eachCell((cell, colNum) => {
+        cell.border = THIN;
+        cell.font = { name: FONT, size: 8 };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+
+        if (colNum === 2 || colNum === 3)
+          cell.alignment = { horizontal: "left", vertical: "middle" };
+
+        // CHANGE 2: Full red fill for disciplinary rows
+        if (rec.isDisciplinary) {
+          cell.fill = F.disciplinary;
+          cell.font = { name: FONT, size: 8, color: { argb: "FF9C0006" } };
+          return;
+        }
+
+        if (colNum >= 5 && colNum < MEAN_COL) {
+          const v = cell.value;
+          const um = yr.unitMarks.find((u) => u.code === codes[colNum - 5]);
+
+          if (v === "—" || v === undefined) {
+            cell.fill = F.none;
+          } else if (typeof v === "string" && v.endsWith("C")) {
+            cell.fill = F.special;
+          } else if (v === "INC") {
+            cell.fill = F.inc;
+            cell.font = { bold: true, name: FONT, size: 8 };
+          } else if (
+            typeof v === "number" ||
+            (typeof v === "string" && !isNaN(parseFloat(v)))
+          ) {
+            // CHANGE 3: Parse numeric value even when it has superscript suffix
+            const numVal = typeof v === "number" ? v : parseFloat(v);
+            if (um?.status === "SUPPLEMENTARY" && numVal >= passMark) {
+              cell.fill = F.supp;
+              cell.font = { italic: true, name: FONT, size: 8 };
+            } else if (um?.status === "RETAKE" && numVal >= passMark) {
+              cell.fill = F.amber;
+              cell.font = { italic: true, name: FONT, size: 8 };
+            } else if (numVal >= passMark) {
+              cell.fill = F.passed;
+            } else {
+              cell.fill = F.fail;
+              cell.font = {
+                bold: true,
+                name: FONT,
+                size: 8,
+                color: { argb: "FF9C0006" },
+              };
+            }
+            // CHANGE 3: Highlight cells where attempt ≥ 4 (approaching ENG.22 limit)
+            if (um && um.attemptNumber >= 4) {
+              cell.fill = F.fail;
+              cell.font = {
+                bold: true,
+                name: FONT,
+                size: 8,
+                color: { argb: "FF9C0006" },
+                underline: true,
+              };
+            }
           }
         }
-      }
 
-      if (colNum === MEAN_COL) {
-        cell.fill   = meanFill(typeof cell.value === "number" ? cell.value : 0);
-        cell.font   = { bold: true, name: FONT, size: 8 };
-        cell.numFmt = "0.00";
-      }
-      if (colNum === RECOMM_COL) {
-        const txt = (cell.value?.toString() || "").toUpperCase();
-        cell.fill = txt === "PASS"               ? F.pass
-                  : txt.includes("SUPP")         ? F.supp
-                  : txt.includes("REPEAT")        ? F.repeat
-                  : txt.includes("DISCIPLINARY")  ? F.disciplinary  // CHANGE 2
-                  : F.fail;
-        cell.font = { bold: true, name: FONT, size: 8 };
-      }
-      if (colNum === LOG_COL) {
-        const txt = cell.value?.toString() || "";
-        cell.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
-        cell.font  = { name: FONT, size: 7, italic: txt !== "CLEAN" };
-        cell.fill  = txt.includes("DISCIPLINARY") ? F.disciplinary
-                   : txt !== "CLEAN"              ? F.supp
-                   : F.pass;
-      }
-    });
+        if (colNum === MEAN_COL) {
+          cell.fill = meanFill(typeof cell.value === "number" ? cell.value : 0);
+          cell.font = { bold: true, name: FONT, size: 8 };
+          cell.numFmt = "0.00";
+        }
+        if (colNum === RECOMM_COL) {
+          const txt = (cell.value?.toString() || "").toUpperCase();
+          cell.fill =
+            txt === "PASS"
+              ? F.pass
+              : txt.includes("SUPP")
+                ? F.supp
+                : txt.includes("REPEAT")
+                  ? F.repeat
+                  : txt.includes("DISCIPLINARY")
+                    ? F.disciplinary // CHANGE 2
+                    : F.fail;
+          cell.font = { bold: true, name: FONT, size: 8 };
+        }
+        if (colNum === LOG_COL) {
+          const txt = cell.value?.toString() || "";
+          cell.alignment = {
+            horizontal: "left",
+            vertical: "middle",
+            wrapText: true,
+          };
+          cell.font = { name: FONT, size: 7, italic: txt !== "CLEAN" };
+          cell.fill = txt.includes("DISCIPLINARY")
+            ? F.disciplinary
+            : txt !== "CLEAN"
+              ? F.supp
+              : F.pass;
+        }
+      });
 
-    rowIdx++;
-  }
-
-  const lastData = rowIdx - 1;
-
-  // Thick borders
-  for (let r = HDR; r <= lastData; r++) {
-    sheet.getCell(r, 1).border          = { ...sheet.getCell(r, 1).border,          left:  { style: "thick" } };
-    sheet.getCell(r, TOTAL_COLS).border = { ...sheet.getCell(r, TOTAL_COLS).border, right: { style: "thick" } };
-  }
-  sheet.getRow(HDR).eachCell(c => (c.border = { ...c.border, top:    { style: "thick" } }));
-  sheet.getRow(lastData).eachCell(c => (c.border = { ...c.border, bottom: { style: "thick" } }));
-
-  // Unit reference table
-  const REF = lastData + 2;
-  hdrRow(sheet, REF, "UNITS OFFERED THIS YEAR", TOTAL_COLS, 9, true, true);
-  const mid = Math.ceil(codes.length / 2);
-  for (let i = 0; i < mid; i++) {
-    const rIdx = REF + 2 + i;
-    const r    = sheet.getRow(rIdx);
-    r.getCell(1).value = i + 1;
-    r.getCell(2).value = codes[i];
-    sheet.mergeCells(rIdx, 3, rIdx, 6);
-    r.getCell(3).value = names[i];
-    const right = codes[mid + i];
-    if (right) {
-      r.getCell(8).value  = mid + i + 1;
-      r.getCell(9).value  = right;
-      sheet.mergeCells(rIdx, 10, rIdx, 13);
-      r.getCell(10).value = names[mid + i];
+      rowIdx++;
     }
-    [1,2,3,8,9,10].forEach(c => {
-      r.getCell(c).border = THIN;
-      r.getCell(c).font   = { name: FONT, size: 8 };
+
+    const lastData = rowIdx - 1;
+
+    // Thick borders
+    for (let r = HDR; r <= lastData; r++) {
+      sheet.getCell(r, 1).border = {
+        ...sheet.getCell(r, 1).border,
+        left: { style: "thick" },
+      };
+      sheet.getCell(r, TOTAL_COLS).border = {
+        ...sheet.getCell(r, TOTAL_COLS).border,
+        right: { style: "thick" },
+      };
+    }
+    sheet
+      .getRow(HDR)
+      .eachCell((c) => (c.border = { ...c.border, top: { style: "thick" } }));
+    sheet
+      .getRow(lastData)
+      .eachCell(
+        (c) => (c.border = { ...c.border, bottom: { style: "thick" } }),
+      );
+
+    // Unit reference table
+    const REF = lastData + 2;
+    hdrRow(sheet, REF, "UNITS OFFERED THIS YEAR", TOTAL_COLS, 9, true, true);
+    const mid = Math.ceil(codes.length / 2);
+    for (let i = 0; i < mid; i++) {
+      const rIdx = REF + 2 + i;
+      const r = sheet.getRow(rIdx);
+      r.getCell(1).value = i + 1;
+      r.getCell(2).value = codes[i];
+      sheet.mergeCells(rIdx, 3, rIdx, 6);
+      r.getCell(3).value = names[i];
+      const right = codes[mid + i];
+      if (right) {
+        r.getCell(8).value = mid + i + 1;
+        r.getCell(9).value = right;
+        sheet.mergeCells(rIdx, 10, rIdx, 13);
+        r.getCell(10).value = names[mid + i];
+      }
+      [1, 2, 3, 8, 9, 10].forEach((c) => {
+        r.getCell(c).border = THIN;
+        r.getCell(c).font = { name: FONT, size: 8 };
+      });
+    }
+
+    sheet.getColumn(1).width = 4;
+    sheet.getColumn(2).width = 22;
+    sheet.getColumn(3).width = 28;
+    sheet.getColumn(4).width = 7;
+    codes.forEach((_, i) => (sheet.getColumn(5 + i).width = 6));
+    sheet.getColumn(MEAN_COL).width = 8;
+    sheet.getColumn(RECOMM_COL).width = 14;
+    sheet.getColumn(LOG_COL).width = 50;
+
+    sheet.views = [{ state: "frozen", xSplit: 4, ySplit: CODE }];
+    sheet.protect("1234", {
+      selectLockedCells: true,
+      selectUnlockedCells: true,
     });
+    sheet.pageSetup = {
+      orientation: "landscape",
+      paperSize: 9,
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+    };
   }
-
-  sheet.getColumn(1).width = 4;
-  sheet.getColumn(2).width = 22;
-  sheet.getColumn(3).width = 28;
-  sheet.getColumn(4).width = 7;
-  codes.forEach((_, i) => (sheet.getColumn(5 + i).width = 6));
-  sheet.getColumn(MEAN_COL).width   = 8;
-  sheet.getColumn(RECOMM_COL).width = 14;
-  sheet.getColumn(LOG_COL).width    = 50;
-
-  sheet.views = [{ state: "frozen", xSplit: 4, ySplit: CODE }];
-  sheet.protect("1234", { selectLockedCells: true, selectUnlockedCells: true });
-  sheet.pageSetup = { orientation: "landscape", paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
-}
 
 // ── LEGEND sheet ──────────────────────────────────────────────────────────────
 function buildLegend(wb: ExcelJS.Workbook, logoBuffer: Buffer) {
@@ -1853,33 +2013,77 @@ function buildLegend(wb: ExcelJS.Workbook, logoBuffer: Buffer) {
 }
 
 // ── MAIN EXPORT ───────────────────────────────────────────────────────────────
-export const generateJourneyCMS = async (data: JourneyCMSData): Promise<Buffer> => {
-  const { programId, programName, academicYear, logoBuffer, institutionId } = data;
+// export const generateJourneyCMS = async (data: JourneyCMSData): Promise<Buffer> => {
+//   const { programId, programName, academicYear, institutionId } = data;
 
-  const [programDoc, settings] = await Promise.all([
-    Program.findById(programId).lean() as Promise<any>,
-    InstitutionSettings.findOne({ institution: institutionId }).lean() as Promise<any>,
+//   const [programDoc, settings] = await Promise.all([
+//     Program.findById(programId).lean() as Promise<any>,
+//     InstitutionSettings.findOne({ institution: institutionId }).lean() as Promise<any>,
+//   ]);
+
+ 
+
+//   if (!programDoc) throw new Error(`Program ${programId} not found`);
+
+//   const meta      = settings.docMeta;
+//   const passMark    = settings?.passMark    ?? 40;
+//   // const gradingScale = settings?.gradingScale ?? [];
+//   const duration    = programDoc.durationYears || 5;
+
+//   // CHANGE 1: loadJourneys now batches all DB calls before looping students
+//   // const records = await loadJourneys(programId, programDoc, passMark, gradingScale);
+//   const records = await loadJourneys(programId, programDoc, passMark, settings.gradingScale);
+
+
+//   if (records.length === 0) {
+//     throw new Error("No students found for this program.");
+//   }
+
+//   const wb = new ExcelJS.Workbook();
+//   buildSummary(wb, records, programDoc, logoBuffer, academicYear);
+
+//   for (let y = 1; y <= duration; y++) {
+//     if (records.some(r => r.yearsData.some(yd => yd.yearOfStudy === y))) {
+//       buildYearSheet(wb, y, records, programDoc, academicYear, passMark, logoBuffer);
+//     }
+//   }
+
+//   buildLegend(wb, logoBuffer);
+
+//   const buf = await wb.xlsx.writeBuffer();
+//   return Buffer.from(buf as ArrayBuffer);
+// };
+
+// In generateJourneyCMS — fix the settings/logo loading (inside the function, not top-level):
+export const generateJourneyCMS = async (data: JourneyCMSData): Promise<Buffer> => {
+  const { programId, programName, academicYear, institutionId } = data;
+
+  // All three calls are inside the function — no top-level await
+  const [programDoc, settings, logoBuffer] = await Promise.all([
+    Program.findById(programId).lean() as Promise<{
+      durationYears: number; name: string; [key: string]: unknown;
+    }>,
+    loadInstitutionSettings(institutionId),
+    loadLogoBuffer(institutionId),
   ]);
 
   if (!programDoc) throw new Error(`Program ${programId} not found`);
 
-  const passMark    = settings?.passMark    ?? 40;
-  const gradingScale = settings?.gradingScale ?? [];
-  const duration    = programDoc.durationYears || 5;
+  const meta      = settings.docMeta;
+  const passMark  = settings.passMark;
+  const duration  = programDoc.durationYears ?? 5;
 
-  // CHANGE 1: loadJourneys now batches all DB calls before looping students
-  const records = await loadJourneys(programId, programDoc, passMark, gradingScale);
+  // Pass meta to buildSummary and buildYearSheet
+  const records = await loadJourneys(programId, programDoc, passMark, settings.gradingScale);
 
-  if (records.length === 0) {
-    throw new Error("No students found for this program.");
-  }
+  if (records.length === 0) throw new Error("No students found for this program.");
 
   const wb = new ExcelJS.Workbook();
-  buildSummary(wb, records, programDoc, logoBuffer, academicYear);
+  buildSummary(wb, records, programDoc, logoBuffer, academicYear, meta);
 
   for (let y = 1; y <= duration; y++) {
     if (records.some(r => r.yearsData.some(yd => yd.yearOfStudy === y))) {
-      buildYearSheet(wb, y, records, programDoc, academicYear, passMark, logoBuffer);
+      buildYearSheet(wb, y, records, programDoc, academicYear, passMark, logoBuffer, meta);
     }
   }
 

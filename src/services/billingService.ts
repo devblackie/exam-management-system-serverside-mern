@@ -8,7 +8,7 @@
 //   - The cron job calls the same functions as the route
 //   - Changing pricing logic means changing one file
 
-import crypto from "crypto";
+import crypto from "node:crypto";
 import mongoose from "mongoose";
 import Billing, {
   IBilling,

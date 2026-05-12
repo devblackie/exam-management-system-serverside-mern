@@ -48,6 +48,10 @@ export const generateFullScoresheetTemplate = async (
     unit:    unitId,
   }).lean() as any;
 
+  const universityName = settings.docMeta?.universityName ?? 
+                       settings.docMeta?.schoolName ?? 
+                       "University";
+
   const session: "ORDINARY" | "SUPPLEMENTARY" | "CLOSED" =
     academicYear.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY" :
     academicYear.session === "CLOSED"        ? "CLOSED"        : "ORDINARY";
@@ -127,7 +131,9 @@ export const generateFullScoresheetTemplate = async (
 
   // ── Header rows ───────────────────────────────────────────────────────────
   sheet.mergeCells("E6:P6");
-  sheet.getCell("E6").value = config.instName.toUpperCase();
+  sheet.getCell("E6").value = universityName.toUpperCase();
+
+  // sheet.getCell("E6").value = config.instName.toUpperCase();
   sheet.getCell("E6").style = { ...centerBold, font: { ...centerBold.font, size: 12 } };
 
   sheet.mergeCells("D7:Q7");
@@ -407,3 +413,16 @@ export const generateFullScoresheetTemplate = async (
   const buf = await workbook.xlsx.writeBuffer();
   return Buffer.from(buf as ArrayBuffer);
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
