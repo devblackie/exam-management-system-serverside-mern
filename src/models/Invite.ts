@@ -32,7 +32,6 @@ const inviteSchema = new Schema<IInvite>(
 );
 
 inviteSchema.index({ institution: 1, email: 1 });
-inviteSchema.index({ token: 1 });
 inviteSchema.index({ expiresAt: 1 });
 
 export default model<IInvite>("Invite", inviteSchema);

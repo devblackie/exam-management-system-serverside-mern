@@ -240,7 +240,6 @@ const billingSchema = new Schema<IBilling>(
 );
 
 // Indexes
-billingSchema.index({ institution: 1 }, { unique: true });
 billingSchema.index({ accountStatus: 1 });
 billingSchema.index({ nextInvoiceDate: 1 });
 billingSchema.index({ "invoices.status": 1 });

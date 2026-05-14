@@ -9,22 +9,9 @@ import mongoose from "mongoose";
 
 const router = Router();
 
-// // GET /program-units/stats
-// router.get(
-//   "/stats",
-//   requireAuth,
-//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-//     const count = await ProgramUnit.countDocuments({
-//       institution: req.user.institution,
-//     });
-//     res.json({ totalUnits: count });
-//   })
-// );
 
 // GET /program-units/stats - SCOPED
-router.get(
-  "/stats",
-  requireAuth,
+router.get("/stats", requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const institutionId = req.user.institution;
     
@@ -47,10 +34,8 @@ router.get(
 );
 
 // --- POST /program-units: Link a Unit to a Program (Curriculum Definition) ---
-router.post(
-  "/",
-  requireAuth,
-  requireRole("admin", "coordinator"),
+router.post("/", requireAuth,
+  requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, unitId, requiredYear, requiredSemester, isElective } = req.body;
 

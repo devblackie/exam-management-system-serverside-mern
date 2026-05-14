@@ -290,7 +290,6 @@ const InstitutionSettingsSchema = new Schema<IInstitutionSettings>(
   { timestamps: true },
 );
 
-InstitutionSettingsSchema.index({ institution: 1 }, { unique: true });
 InstitutionSettingsSchema.index({ "schools.code": 1 });
 InstitutionSettingsSchema.index({ "schools.departments.code": 1 });
 

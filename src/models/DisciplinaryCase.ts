@@ -1,7 +1,7 @@
 // serverside/src/models/DisciplinaryCase.ts
 //
 // WHY THIS EXISTS
-// ───────────────
+// ──────────────a─
 // The previous codebase had `isDisciplinary` flags and `RP1D` qualifier logic
 // in academicRules.ts but zero backend machinery to actually CREATE a disciplinary
 // case, record a hearing outcome, or suspend a student. A coordinator had no way
