@@ -21,10 +21,13 @@ import { loginValidation, otpValidation, validateRequest } from "../middleware/v
 
 const router = Router();
 
+const isProd = process.env.NODE_ENV === "production";
+
 const COOKIE_OPTS = {
   httpOnly: true,
-  sameSite: "strict" as const,
-  secure:   process.env.NODE_ENV === "production",
+  sameSite: "lax" as const, // ← was "strict" — fix to match jwt.ts
+  secure: isProd,
+  path: "/",
 };
 
 // Must be a valid bcrypt hash with the same prefix ($2b$12$) as your real

@@ -33,8 +33,17 @@ import disciplinaryRoutes from "./routes/disciplinary";
 dotenv.config();
 
 const app = express();
-app.use(compression());
 
+// ── MUST be the very first app configuration ──────────────────────────────────
+// Tells Express to trust the X-Forwarded-Proto header from Nginx.
+// Without this:
+//   - req.secure is false even on HTTPS
+//   - res.cookie({ secure: true }) may not behave correctly
+//   - Some security middleware may make wrong decisions
+app.set("trust proxy", 1);
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.use(compression());
 app.use(securityHeaders); // configured helmet (CSP, HSTS, etc.)
 app.use(additionalSecurityHeaders); // Permissions-Policy, Cache-Control, etc.
 app.use(helmet());
@@ -55,27 +64,22 @@ const allowedOrigins = [
 ].filter(Boolean) as string[];
 
 
-// const allowedOrigins = [
-//   config.frontendUrl,
-//   "http://localhost:8000",
-//   "http://127.0.0.1:3000",
-//   "http://192.168.1.10:3000",
-//   "http://10.105.149.124:3000",
-//   "http://192.168.17.124:3000",
-// ];
+
 app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
+        console.error(`[CORS] Blocked: ${origin}`);
         callback(new Error("CORS Blocking: Unauthorized Origin"));
       }
     },
 
     credentials: true,
-    methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-    allowedHeaders: ["Content-Type","Authorization","X-CSRF-Token"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
+    exposedHeaders: ["Content-Disposition"],
   }),
 );
 
@@ -109,9 +113,7 @@ const limiter = rateLimit({
   legacyHeaders: false,
   message: { message: "Too many requests from this IP. Please try again later." },
 });
-// app.use("/auth/", limiter); // Heavy on login attempts
-// app.use(
-//   "/marks/upload",
+
 app.use("/api/auth/", limiter);
 app.use(
   "/api/marks/upload",
@@ -124,17 +126,13 @@ app.use(
   }),
 ); // 50 uploads/hour
 
-// Health check
-// app.get("/health", (req, res) => {
-//   res.status(200).json({ status: "OK", timestamp: new Date().toISOString(), uptime: process.uptime()});
-// });
-
 // Health check - bypasses CORS
 app.get("/health", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.status(200).json({ status: "OK", timestamp: new Date().toISOString(), uptime: process.uptime()});
 });
 
+// ── API router ───────────────────
 const apiRouter = express.Router();
 
 apiRouter.use("/auth", authRoutes);
@@ -157,26 +155,7 @@ apiRouter.use("/disciplinary", disciplinaryRoutes);
 
 app.use("/api", apiRouter);
 
-// API Routes
-// app.use("/auth", authRoutes);
-// app.use("/admin", adminRoutes);
-// app.use("/audit-logs", auditLogsRoutes);
-// app.use("/programs", programsRoutes);
-// app.use("/units", unitsRoutes);
-// app.use("/coordinator", coordinatorRoutes);
-// app.use("/marks", marksRoutes);
-// app.use("/institutions", institutionsRoutes);
-// app.use("/students", studentsRoutes);
-// app.use("/academic-years", academicYearsRoutes);
-// app.use("/institution-settings", institutionSettingsRoutes);
-// app.use("/student", studentSearchRoutes);
-// app.use('/program-units', programUnitsRouter);
-// app.use("/promote", promoteRoutes);
-// app.use("/maintenance", maintenanceRoutes);
-// app.use("/billing", billingRoutes);
-// app.use("/disciplinary", disciplinaryRoutes);
-
-
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ message: `Route ${req.originalUrl} not found`, method: req.method });
 });
