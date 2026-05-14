@@ -12,8 +12,7 @@ const router = Router();
 
 // ── GET /institutions/public — for the secret-register page dropdown ──────────
 // No auth required — only returns name, code, _id
-router.get(
-  "/public",
+router.get("/public",
   asyncHandler(async (_req: Request, res: Response): Promise<void> => {
     const institutions = await Institution.find({ isActive: true })
       .select("name code")
@@ -24,9 +23,7 @@ router.get(
 );
 
 // ── GET /institutions/mine — returns the institution the admin belongs to ──────
-router.get(
-  "/mine",
-  requireAuth,
+router.get("/mine", requireAuth,
   asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const institution = await Institution.findById(req.user.institution).lean();
     if (!institution) {
@@ -39,10 +36,7 @@ router.get(
 
 // ── PATCH /institutions/mine — admin updates their institution's profile ───────
 // This is how "Demo University" becomes "University of Nairobi"
-router.patch(
-  "/mine",
-  requireAuth,
-  requireRole("admin"),
+router.patch("/mine", requireAuth, requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const { name, code, abbreviation, address, website, email, phone, city, country } =
       req.body as Partial<{
