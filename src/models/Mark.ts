@@ -7,6 +7,7 @@ export interface IMark extends Document {
   programUnit: mongoose.Types.ObjectId; // Links to the unit's curriculum config
   academicYear: mongoose.Types.ObjectId;
   semester: "SEMESTER 1" | "SEMESTER 2" | "SEMESTER 3";
+  batchId: string;
 
   // --- RAW CONTINUOUS ASSESSMENT SCORES ---
   // Based on the scoresheet breakdown: CATs out of 20, Assignments out of 10
@@ -54,6 +55,7 @@ const schema = new Schema<IMark>(
     programUnit: { type: Schema.Types.ObjectId, ref: "ProgramUnit", required: true, }, // IMPORTANT
     academicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true, },
     semester: { type: String, enum: ["SEMESTER 1", "SEMESTER 2", "SEMESTER 3"], required: true, default: "SEMESTER 1" },
+    batchId: { type: String, required: true, index: true },
 
     // RAW CA SCORES (The system will derive the final CA/30 from these)
     cat1Raw: { type: Number, min: 0,  default: 0 },
@@ -94,19 +96,10 @@ const schema = new Schema<IMark>(
 
 // Unique index must be on the combination of Student, ProgramUnit, and AcademicYear
 schema.index({ student: 1, programUnit: 1, academicYear: 1 }, { unique: true });
-// schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
-//   // If the query specifically searches for deletedAt, don't override it
-//   if (!this.getQuery().deletedAt) this.where({ deletedAt: null });
-//   next();
-// });
+
 
 schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
-  // Check if the query is explicitly looking for deletedAt.
-  // If it's not looking for it, then append { deletedAt: null }
   const query = this.getQuery();
-
-  // If the user has manually set deletedAt in the query (e.g. { deletedAt: { $ne: null } }),
-  // we do NOT want to overwrite it.
   if (query.deletedAt === undefined) {
     this.where({ deletedAt: null });
   }
@@ -116,5 +109,7 @@ schema.index({ student: 1, academicYear: 1, programUnit: 1, deletedAt: 1 });
 schema.index({ institution: 1, student: 1, deletedAt: 1 });
 schema.index({ institution: 1, uploadedAt: -1 });
 schema.index({ student: 1, programUnit: 1, deletedAt: 1 });
+schema.index({ batchId: 1, institution: 1 });
+schema.index({ batchId: 1, deletedAt: 1 });
 
 export default mongoose.model<IMark>("Mark", schema);

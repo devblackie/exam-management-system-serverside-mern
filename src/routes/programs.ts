@@ -535,9 +535,7 @@ interface ApiError {
 const router = Router();
 
 // ── POST /programs ────────────────────────────────────────────────────────
-router.post(
-  "/",
-  requireAuth,
+router.post("/", requireAuth,
   requireRole("admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const {
@@ -658,6 +656,43 @@ router.post(
 );
 
 // ── GET /programs ─────────────────────────────────────────────────────────
+// router.get(
+//   "/",
+//   requireAuth,
+//   requireRole("admin", "coordinator"),
+//   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+//     const allowedIds = await getScopedProgramIds(req);
+//     const institutionId = req.user.institution?.toString() ?? "";
+
+//     // Cache the full list — fetcher only runs on cache miss
+//     const programs = await cached(
+//       `programs:${institutionId}`,
+//       async () => {
+//         const all = await Program.find({
+//           institution: req.user.institution,
+//           _id: { $in: allowedIds },
+//           isActive: true,
+//         })
+//           .select("name code durationYears degreeType schoolCode departmentCode description isActive")
+//           .sort({ name: 1 })
+//           .lean();
+//         return all;
+//       },
+//       600, // 10-minute TTL — programs change very rarely
+//     );
+
+//     await logAudit(req, {
+//       action: "programs_listed",
+//       actor: req.user._id,
+//       details: { count: programs.length },
+//     });
+
+//     res.json(programs);
+//   }),
+// );
+
+// serverside/src/routes/programs.ts — UPDATE the GET handler
+
 router.get(
   "/",
   requireAuth,
@@ -665,10 +700,13 @@ router.get(
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const allowedIds = await getScopedProgramIds(req);
     const institutionId = req.user.institution?.toString() ?? "";
+    
+    // Include user ID in cache key so admin and coordinator get different caches
+    const userId = req.user._id?.toString() ?? "";
+    const cacheKey = `programs:${institutionId}:${userId}`;
 
-    // Cache the full list — fetcher only runs on cache miss
     const programs = await cached(
-      `programs:${institutionId}`,
+      cacheKey,  // ← CHANGED — now per-user, not per-institution
       async () => {
         const all = await Program.find({
           institution: req.user.institution,
@@ -680,7 +718,7 @@ router.get(
           .lean();
         return all;
       },
-      600, // 10-minute TTL — programs change very rarely
+      600,
     );
 
     await logAudit(req, {

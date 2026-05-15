@@ -35,7 +35,7 @@ router.get("/stats", requireAuth,
 
 // --- POST /program-units: Link a Unit to a Program (Curriculum Definition) ---
 router.post("/", requireAuth,
-  requireRole("admin"),
+  requireRole("coordinator"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { programId, unitId, requiredYear, requiredSemester, isElective } = req.body;
 

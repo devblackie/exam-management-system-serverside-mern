@@ -320,18 +320,31 @@ router.post(
     try {
       sendProgress(10, "Fetching student data...");
 
-      const preview = await previewPromotion(programId, yearToPromote, academicYearName);
+      const preview = await previewPromotion(
+        programId,
+        yearToPromote,
+        academicYearName,
+      );
       const program = await Program.findById(programId).lean();
 
       // ── Academic year document (for session type AND mark filtering) ──────
-      const academicYearDoc = await AcademicYear.findOne({year: academicYearName}).lean();
+      const academicYearDoc = await AcademicYear.findOne({
+        year: academicYearName,
+      }).lean();
       const targetAcadYearId = (academicYearDoc as any)?._id?.toString();
 
       const sessionExamType: "ORDINARY" | "SUPPLEMENTARY" =
-        (academicYearDoc as any)?.session === "SUPPLEMENTARY" ? "SUPPLEMENTARY" : "ORDINARY";
+        (academicYearDoc as any)?.session === "SUPPLEMENTARY"
+          ? "SUPPLEMENTARY"
+          : "ORDINARY";
 
-      const logoPath = path.join( __dirname, "../../public/institutionLogoExcel.png");
-      const logoBuffer = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : Buffer.alloc(0);
+      const logoPath = path.join(
+        __dirname,
+        "../../public/institutionLogoExcel.png",
+      );
+      const logoBuffer = fs.existsSync(logoPath)
+        ? fs.readFileSync(logoPath)
+        : Buffer.alloc(0);
 
       sendProgress(30, "Fetching marks for current cohort...");
 
@@ -349,34 +362,59 @@ router.post(
           // Has a history record for this specific year AND cohort
           {
             academicHistory: {
-              $elemMatch: { yearOfStudy: yearToPromote, academicYear: academicYearName },
+              $elemMatch: {
+                yearOfStudy: yearToPromote,
+                academicYear: academicYearName,
+              },
             },
           },
         ],
       }).lean();
 
-      const previewIds = new Set([...preview.eligible, ...preview.blocked].map((s) => (s.id || s._id)?.toString()));
-      const historyOnly = studentsByHistory.filter((s) => !previewIds.has(s._id.toString()));
-      const allStudents = [ ...preview.eligible, ...preview.blocked, ...historyOnly];
-      const studentIds = allStudents.map((s) => (s._id || (s as any).id)?.toString()).filter(Boolean);
+      const previewIds = new Set(
+        [...preview.eligible, ...preview.blocked].map((s) =>
+          (s.id || s._id)?.toString(),
+        ),
+      );
+      const historyOnly = studentsByHistory.filter(
+        (s) => !previewIds.has(s._id.toString()),
+      );
+      const allStudents = [
+        ...preview.eligible,
+        ...preview.blocked,
+        ...historyOnly,
+      ];
+      const studentIds = allStudents
+        .map((s) => (s._id || (s as any).id)?.toString())
+        .filter(Boolean);
 
       sendProgress(50, "Loading mark records...");
 
       const [detailedMarks, directMarks] = await Promise.all([
         Mark.find({ student: { $in: studentIds } })
-          .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
+          .populate({
+            path: "programUnit",
+            populate: { path: "unit", select: "code name" },
+          })
           .lean(),
         MarkDirect.find({ student: { $in: studentIds } })
-          .populate({ path: "programUnit", populate: { path: "unit", select: "code name" }})
+          .populate({
+            path: "programUnit",
+            populate: { path: "unit", select: "code name" },
+          })
           .lean(),
       ]);
 
       const combinedMarks = [...detailedMarks, ...directMarks];
 
       const filteredMarks = combinedMarks.filter((m: any) => {
-        const rightYear = m.programUnit && Number(m.programUnit.requiredYear) === Number(yearToPromote);
-        const rightCohort = 
-          !targetAcadYearId || m.academicYear?.toString() === targetAcadYearId || m.academicYear?._id?.toString() === targetAcadYearId;
+        const rightYear =
+          m.programUnit &&
+          Number(m.programUnit.requiredYear) === Number(yearToPromote);
+        const rightCohort =
+          !targetAcadYearId ||
+          m.academicYear?.toString() === targetAcadYearId ||
+          m.academicYear?._id?.toString() === targetAcadYearId;
         return rightYear && rightCohort;
       });
 
@@ -385,18 +423,32 @@ router.post(
       }).lean();
       const passMark = (institutionSettings as any)?.passMark ?? 40;
       const gradingScale = (institutionSettings as any)?.gradingScale ?? [];
-      const offeredUnitsRaw = await ProgramUnit.find({program: programId, requiredYear: yearToPromote}).populate("unit").lean();
-      const offeredUnits = offeredUnitsRaw.map((pu: any) => ({code: pu.unit?.code || "N/A", name: pu.unit?.name || "N/A"}));
+      const offeredUnitsRaw = await ProgramUnit.find({
+        program: programId,
+        requiredYear: yearToPromote,
+      })
+        .populate("unit")
+        .lean();
+      const offeredUnits = offeredUnitsRaw.map((pu: any) => ({
+        code: pu.unit?.code || "N/A",
+        name: pu.unit?.name || "N/A",
+      }));
 
       sendProgress(70, "Generating Consolidated Mark Sheet...");
 
       const excelData: ConsolidatedData = {
         programName: (program as any)?.name || "Program",
-        academicYear: academicYearName, yearOfStudy: yearToPromote,
-        session: sessionExamType, students: allStudents,
-        marks: filteredMarks, offeredUnits, logoBuffer,
+        academicYear: academicYearName,
+        yearOfStudy: yearToPromote,
+        session: sessionExamType,
+        students: allStudents,
+        marks: filteredMarks,
+        offeredUnits,
+        logoBuffer,
         institutionId: (program as any)?.institution?.toString() || "",
-        programId, passMark, gradingScale,
+        programId,
+        passMark,
+        gradingScale,
       };
 
       const xlsxBuffer = await generateConsolidatedMarkSheet(excelData);
@@ -404,11 +456,23 @@ router.post(
       sendProgress(95, "Preparing download...");
 
       const base64 = xlsxBuffer.toString("base64");
-      res.write(`data: ${JSON.stringify({ percent: 100, message: "Complete!", file: base64 })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ percent: 100, message: "Complete!", file: base64 })}\n\n`,
+      );
       res.end();
-    } catch (err: any) {
-      console.error("CMS Generation Error:", err);
-      res.write(`data: ${JSON.stringify({ error: "Failed to generate CMS" })}\n\n`);
+      // } catch (err: any) {
+      //   console.error("CMS Generation Error:", err);
+      //   res.write(`data: ${JSON.stringify({ error: "Failed to generate CMS" })}\n\n`);
+      //   res.end();
+      // }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      const stack = err instanceof Error ? err.stack : "";
+      console.error("CMS Generation Error:", message);
+      console.error("CMS Stack:", stack);
+      res.write(
+        `data: ${JSON.stringify({ error: message || "Failed to generate CMS" })}\n\n`,
+      );
       res.end();
     }
   }),

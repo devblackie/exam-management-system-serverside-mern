@@ -92,14 +92,28 @@ app.use(sanitizeInput);
 app.use(attachCsrfToken);
 // app.use(csrfProtection);
 
+// app.use((req, res, next) => {
+//   const uploadPaths = [
+//     "/marks/upload",
+//     "/students/bulk", // bulk student registration also uses multipart
+//     "/students/template",
+//   ];
+//   const isUpload = uploadPaths.some((p) => req.path.startsWith(p));
+//   if (isUpload) return next();
+//   return csrfProtection(req, res, next);
+// });
+
 app.use((req, res, next) => {
-  const uploadPaths = [
+  const bypassPaths = [
     "/marks/upload",
-    "/students/bulk", // bulk student registration also uses multipart
+    "/students/bulk",
     "/students/template",
+    "/promote/download-cms",
+    "/promote/download-report-progress",
+    "/promote/download-journey-cms",
   ];
-  const isUpload = uploadPaths.some((p) => req.path.startsWith(p));
-  if (isUpload) return next();
+  const shouldBypass = bypassPaths.some((p) => req.path.startsWith(p));
+  if (shouldBypass) return next();
   return csrfProtection(req, res, next);
 });
 

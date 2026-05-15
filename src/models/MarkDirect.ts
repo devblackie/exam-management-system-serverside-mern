@@ -7,6 +7,7 @@ export interface IMarkDirect extends Document {
   programUnit: mongoose.Types.ObjectId;
   academicYear: mongoose.Types.ObjectId;
   semester: "SEMESTER 1" | "SEMESTER 2" | "SEMESTER 3";
+  batchId: string;
 
   caTotal30: number;    // Input directly: 0-30
   examTotal70: number;  // Input directly: 0-70
@@ -31,6 +32,7 @@ const schema = new Schema<IMarkDirect>({
   programUnit: { type: Schema.Types.ObjectId, ref: "ProgramUnit", required: true },
   academicYear: { type: Schema.Types.ObjectId, ref: "AcademicYear", required: true },
   semester: { type: String, enum: ["SEMESTER 1", "SEMESTER 2", "SEMESTER 3"], required: true, default: "SEMESTER 1" },
+  batchId: { type: String, required: true, index: true },
 
   caTotal30: { type: Number, min: 0, max: 30, required: true },
   examTotal70: { type: Number, min: 0, max: 70, required: true },
@@ -49,24 +51,15 @@ const schema = new Schema<IMarkDirect>({
 schema.index({ student: 1, programUnit: 1, academicYear: 1 }, { unique: true });
 schema.index({ student: 1, programUnit: 1, academicYear: 1, deletedAt: 1 });
 
-// schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
-//   if (!this.getQuery().deletedAt) {
-//     this.where({ deletedAt: null });
-//   }
-//   next();
-// });
 
 schema.pre(/^find/, function (this: mongoose.Query<any, any>, next) {
-  // Check if the query is explicitly looking for deletedAt.
-  // If it's not looking for it, then append { deletedAt: null }
   const query = this.getQuery();
-
-  // If the user has manually set deletedAt in the query (e.g. { deletedAt: { $ne: null } }),
-  // we do NOT want to overwrite it.
   if (query.deletedAt === undefined) {
     this.where({ deletedAt: null });
   }
   next();
 });
+schema.index({ batchId: 1, institution: 1 });
+schema.index({ batchId: 1, deletedAt: 1 });
 
 export default mongoose.model<IMarkDirect>("MarkDirect", schema);

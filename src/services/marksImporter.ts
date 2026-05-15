@@ -8,6 +8,7 @@ import ProgramUnit from "../models/ProgramUnit";
 import Mark from "../models/Mark";
 import { computeFinalGrade } from "./gradeCalculator";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import { randomUUID } from "node:crypto";
 
 interface ImportResult {
   total: number;
@@ -28,10 +29,12 @@ export async function importMarksFromBuffer(
   filename: string,
   req: AuthenticatedRequest,
 ): Promise<ImportResult> {
+  const batchId = randomUUID();
   const institutionId = req.user.institution;
   if (!institutionId) throw new Error("Coordinator not linked to institution");
 
   const result: ImportResult = {total: 0, success: 0, errors: [], warnings: []};
+  
 
   try {
     const workbook = xlsx.read(buffer, { type: "buffer" });
@@ -123,7 +126,7 @@ export async function importMarksFromBuffer(
             institution: institutionId,
             uploadedBy: req.user._id,
             deletedAt: null, // Ensure we are updating active records
-
+            batchId,
             // CA Scores
             cat1Raw: Number(row[4]) || 0, // Col E
             cat2Raw: Number(row[5]) || 0, // Col F
