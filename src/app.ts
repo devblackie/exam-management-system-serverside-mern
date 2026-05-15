@@ -103,17 +103,48 @@ app.use(attachCsrfToken);
 //   return csrfProtection(req, res, next);
 // });
 
+// app.use((req, res, next) => {
+//   const bypassPaths = [
+//     "/marks/upload",
+//     "/students/bulk",
+//     "/students/template",
+//     "/promote/download-cms",
+//     "/promote/download-report-progress",
+//     "/promote/download-journey-cms",
+//   ];
+//   const shouldBypass = bypassPaths.some((p) => req.path.startsWith(p));
+//   if (shouldBypass) return next();
+//   return csrfProtection(req, res, next);
+// });
+
+// serverside/src/app.ts — REPLACE the CSRF conditional middleware
+
 app.use((req, res, next) => {
-  const bypassPaths = [
+  // Routes that must bypass CSRF:
+  //   1. File uploads (multipart — token can't be sent in the body)
+  //   2. SSE streaming endpoints — browser EventSource API cannot set custom headers,
+  //      so the X-CSRF-Token header can never be sent by the client
+  //   3. Public routes (no session, no token)
+  const CSRF_BYPASS_PATHS = [
+    // File uploads
     "/marks/upload",
     "/students/bulk",
     "/students/template",
-    "/promote/download-cms",
+    // SSE streaming report endpoints — EventSource cannot send headers
     "/promote/download-report-progress",
+    "/promote/download-cms",
     "/promote/download-journey-cms",
+    // Public endpoints
+    "/institutions/public",
+    "/auth/check-email",
+    "/auth/verify-password",
+    "/auth/verify-otp",
+    "/admin/secret-register",
+    "/admin/register",
   ];
-  const shouldBypass = bypassPaths.some((p) => req.path.startsWith(p));
-  if (shouldBypass) return next();
+
+  const isBypassed = CSRF_BYPASS_PATHS.some(p => req.path.startsWith(p));
+  if (isBypassed) return next();
   return csrfProtection(req, res, next);
 });
 

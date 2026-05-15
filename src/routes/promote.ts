@@ -317,6 +317,16 @@ router.post(
       res.write(`data: ${JSON.stringify({ percent, message, file })}\n\n`);
     };
 
+    console.log("[CMS DEBUG] Request body:", {
+      programId,
+      yearToPromote,
+      academicYearName,
+    });
+    console.log(
+      "[CMS DEBUG] User institution:",
+      req.user.institution?.toString(),
+    );
+
     try {
       sendProgress(10, "Fetching student data...");
 
@@ -467,9 +477,13 @@ router.post(
       // }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      const stack = err instanceof Error ? err.stack : "";
-      console.error("CMS Generation Error:", message);
-      console.error("CMS Stack:", stack);
+      console.error("[CMS DEBUG] CATCH BLOCK:", message);
+      if (err instanceof Error && err.stack) {
+        console.error(
+          "[CMS DEBUG] STACK:",
+          err.stack.split("\n").slice(0, 5).join("\n"),
+        );
+      }
       res.write(
         `data: ${JSON.stringify({ error: message || "Failed to generate CMS" })}\n\n`,
       );
