@@ -103,22 +103,6 @@ app.use(attachCsrfToken);
 //   return csrfProtection(req, res, next);
 // });
 
-// app.use((req, res, next) => {
-//   const bypassPaths = [
-//     "/marks/upload",
-//     "/students/bulk",
-//     "/students/template",
-//     "/promote/download-cms",
-//     "/promote/download-report-progress",
-//     "/promote/download-journey-cms",
-//   ];
-//   const shouldBypass = bypassPaths.some((p) => req.path.startsWith(p));
-//   if (shouldBypass) return next();
-//   return csrfProtection(req, res, next);
-// });
-
-// serverside/src/app.ts — REPLACE the CSRF conditional middleware
-
 app.use((req, res, next) => {
   // Routes that must bypass CSRF:
   //   1. File uploads (multipart — token can't be sent in the body)
@@ -141,6 +125,7 @@ app.use((req, res, next) => {
     "/auth/verify-otp",
     "/admin/secret-register",
     "/admin/register",
+    "/lead-capture",
   ];
 
   const isBypassed = CSRF_BYPASS_PATHS.some(p => req.path.startsWith(p));
