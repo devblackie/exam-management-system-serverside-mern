@@ -132,7 +132,6 @@ export const generatePromotionWordDoc = async ( data: PromotionData ): Promise<B
       {
         properties: {},
         children: [
-          // ✅ Logo comes ONLY from createDocHeader
           ...createDocHeader(logoBuffer, programName, academicYear, currentYearOrdinal, "SUMMARY", meta, data.examType || "ORDINARY"),
       createSummaryTable(stats),
 
