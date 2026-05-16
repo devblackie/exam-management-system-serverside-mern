@@ -126,6 +126,7 @@ app.use((req, res, next) => {
     "/admin/secret-register",
     "/admin/register",
     "/lead-capture",
+    "/api/lead-capture",
   ];
 
   const isBypassed = CSRF_BYPASS_PATHS.some(p => req.path.startsWith(p));
