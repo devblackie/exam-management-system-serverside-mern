@@ -251,29 +251,10 @@ const ProgramSchema = new Schema<IProgram>(
     code: { type: String, required: true, uppercase: true, trim: true },
     description: { type: String },
 
-    durationYears: {
-      type:     Number,
-      required: true,
-      min:      1,
-      max:      10,
-      default:  5,
-    },
-    degreeType: {
-      type:     String,
-      required: true,
-      enum:     ["BSc","BEd","BTech","BEng","BArch","MBBS","LLB","BPharm","Other"],
-      default:  "BSc",
-    },
-    intakes: {
-      type:    [String],
-      enum:    ["JAN","MAY","SEPT"],
-      default: ["SEPT"],
-    },
-    supportedEntryTypes: {
-      type:    [String],
-      enum:    ["Direct","Mid-Entry-Y2","Mid-Entry-Y3","Mid-Entry-Y4"],
-      default: ["Direct"],
-    },
+    durationYears: { type: Number, required: true, min: 1, max: 10, default:  5 },
+    degreeType: { type: String, required: true, enum: ["BSc","BEd","BTech","BEng","BArch","MBBS","LLB","BPharm","Other"], default:  "BSc" },
+    intakes: { type: [String], enum: ["JAN","MAY","SEPT"], default: ["SEPT"]},
+    supportedEntryTypes: { type: [String], enum: ["Direct","Mid-Entry-Y2","Mid-Entry-Y3","Mid-Entry-Y4"], default: ["Direct"]},
     ruleOverrides: { type: ProgramRuleOverridesSchema, default: () => ({}) },
     isActive:      { type: Boolean, default: true },
   },
@@ -336,10 +317,7 @@ ProgramSchema.pre("updateMany",       applyCleanNameNormalization);
 // 5. { institution, isActive } — non-unique, for active-program queries
 
 // Unique: one program code per institution
-ProgramSchema.index(
-  { institution: 1, code: 1 },
-  { unique: true },
-);
+ProgramSchema.index({ institution: 1, code: 1 }, { unique: true });
 
 // Unique: no duplicate program names within the same department (case-insensitive)
 // Multiple programs CAN share the same name if they are in different departments.

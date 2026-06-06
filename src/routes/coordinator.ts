@@ -142,8 +142,7 @@ router.post("/lecturers", requireAuth,
 );
 
 // View student results (senate-style)
-router.get("/students/:regNo/results",
-  requireAuth,
+router.get("/students/:regNo/results", requireAuth,
   requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { regNo } = req.params;
@@ -158,21 +157,12 @@ router.get("/students/:regNo/results",
 
     const grades = await FinalGrade.find({ student: student._id })
       .populate({
-        // ⬅️ FIX 1: Populate the ProgramUnit link
         path: "programUnit",
         // We need the unit (template) and the required year/semester from the link
         select: "requiredYear requiredSemester unit", 
-        populate: {
-            // ⬅️ Nested populate to get the Unit Template details
-            path: "unit",
-            model: "Unit", // Specify model for nested population
-            select: "code name" // Only need code and name from the Unit Template
-        }
+        populate: { path: "unit", model: "Unit", select: "code name" }
       })
-      .populate({
-        path: "academicYear",
-        select: "year",
-      })
+      .populate({ path: "academicYear", select: "year"})
       .sort({ "academicYear.year": 1, "programUnit.requiredYear": 1, "programUnit.requiredSemester": 1 }) // ⬅️ Adjusted sort fields
       .lean();
 

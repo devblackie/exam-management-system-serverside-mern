@@ -1647,8 +1647,6 @@
 
 
 // serverside/src/routes/students.ts — GET /students/template — COMPLETE
-// This is the full route handler only. Paste it inside the router file
-// replacing the existing /template handler.
 
 import { Router, Response }    from "express";
 import ExcelJS                 from "exceljs";

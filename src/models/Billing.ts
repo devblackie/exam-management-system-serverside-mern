@@ -85,6 +85,12 @@ export interface IBillingContact {
   address?: string;
 }
 
+// ── Per‑department seat limit ──────────────────────────────────────────
+export interface IDepartmentSeat {
+  departmentCode: string;
+  seatLimit: number;
+}
+
 // ── Main Billing document ──────────────────────────────────────────────────────
 export interface IBilling extends Document {
   institution: mongoose.Types.ObjectId;
@@ -119,6 +125,7 @@ export interface IBilling extends Document {
   trialEndsAt?: Date;
   suspendedAt?: Date;
   suspensionReason?: string;
+  departmentSeats: IDepartmentSeat[];
 
   createdAt: Date;
   updatedAt: Date;
@@ -147,11 +154,7 @@ const invoiceSchema = new Schema<IInvoice>({
   tax: { type: Number, default: 0, min: 0 },
   total: { type: Number, required: true, min: 0 },
   currency: { type: String, default: "KES" },
-  status: {
-    type: String,
-    enum: ["draft", "sent", "paid", "overdue", "void"],
-    default: "draft",
-  },
+  status: { type: String, enum: ["draft", "sent", "paid", "overdue", "void"], default: "draft"},
   dueAt: { type: Date, required: true },
   paidAt: { type: Date },
   paidAmount: { type: Number, min: 0 },
@@ -193,23 +196,23 @@ const billingContactSchema = new Schema<IBillingContact>(
   { _id: false },
 );
 
+
+const departmentSeatSchema = new Schema<IDepartmentSeat>(
+  {
+    departmentCode: { type: String, required: true, uppercase: true },
+    seatLimit: { type: Number, required: true, min: 1 },
+  },
+  { _id: false },
+);
+
 // ── Main schema ────────────────────────────────────────────────────────────────
 
 const billingSchema = new Schema<IBilling>(
   {
-    institution: {
-      type: Schema.Types.ObjectId,
-      ref: "Institution",
-      required: true,
-      unique: true,
-    },
+    institution: { type: Schema.Types.ObjectId, ref: "Institution", required: true, unique: true },
 
     planName: { type: String, default: "Starter" },
-    billingCycle: {
-      type: String,
-      enum: ["monthly", "annual"],
-      default: "monthly",
-    },
+    billingCycle: { type: String, enum: ["monthly", "annual"], default: "monthly" },
     seatLimit: { type: Number, default: 500, min: 1 },
     basePrice: { type: Number, default: 15000, min: 0 }, // KES 15,000 default
     overageRate: { type: Number, default: 25, min: 0 }, // KES 25 per overage seat
@@ -227,14 +230,11 @@ const billingSchema = new Schema<IBilling>(
     usageHistory: { type: [usageSnapshotSchema], default: [] },
     planHistory: { type: [planChangeSchema], default: [] },
 
-    accountStatus: {
-      type: String,
-      enum: ["active", "suspended", "cancelled", "trial"],
-      default: "trial",
-    },
+    accountStatus: { type: String, enum: ["active", "suspended", "cancelled", "trial"], default: "trial"},
     trialEndsAt: { type: Date },
     suspendedAt: { type: Date },
     suspensionReason: { type: String },
+    departmentSeats: { type: [departmentSeatSchema], default: [] },
   },
   { timestamps: true },
 );

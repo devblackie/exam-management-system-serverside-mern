@@ -27,29 +27,14 @@ export interface IUser extends Document {
 const userSchema = new Schema<IUser>(
   {
     name: { type: String, required: true },
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      lowercase: true,
-      trim: true,
-    },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true},
     password: { type: String, required: true, select: false },
-    role: {
-      type: String,
-      enum: ["admin", "coordinator", "lecturer"],
-      required: true,
-    },
+    role: { type: String, enum: ["admin", "coordinator", "lecturer"], required: true },
     status: { type: String, enum: ["active", "suspended"], default: "active" },
     institution: { type: Schema.Types.ObjectId, ref: "Institution" },
 
     schoolCode: { type: String, uppercase: true, trim: true, default: null },
-    departmentCode: {
-      type: String,
-      uppercase: true,
-      trim: true,
-      default: null,
-    },
+    departmentCode: { type: String, uppercase: true, trim: true, default: null},
     institutionWide: { type: Boolean, default: false },
 
     passwordResetToken: { type: String, select: false },
@@ -66,8 +51,6 @@ const userSchema = new Schema<IUser>(
 // ── Compound indexes only — single-field uniqueness is on the field definitions ──
 userSchema.index({ institution: 1, role: 1 });
 userSchema.index({ institution: 1, departmentCode: 1 });
-
-// REMOVED: userSchema.index({ email: 1 }, { unique: true }); ← DUPLICATE of field-level unique: true
 
 const User: Model<IUser> = mongoose.model<IUser>("User", userSchema);
 export default User;

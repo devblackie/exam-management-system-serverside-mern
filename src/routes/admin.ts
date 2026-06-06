@@ -94,8 +94,7 @@ router.get("/invites", requireAuth,
   })
 );
 
-// serverside/src/routes/admin.ts — REPLACE the invite POST and register routes
-
+// POST /admin/invite
 router.post(
   "/invite",
   requireAuth,
@@ -249,8 +248,6 @@ router.post(
     res.status(201).json({ message: `Invite sent to ${finalName}` });
   }),
 );
-
-
 
 // POST /admin/register/:token
 router.post(
@@ -597,9 +594,6 @@ router.put(
     res.json({ message: "User details updated successfully", user: updatedUser });
   })
 );
-
-
-
 
 // GET /admin/lecturers
 router.get(
