@@ -1,4 +1,4 @@
-// serverside/src/utils/validateRegNo.ts — COMPLETE REWRITE
+// serverside/src/utils/validateRegNo.ts
 import InstitutionSettings from "../models/InstitutionSettings";
 import mongoose from "mongoose";
 

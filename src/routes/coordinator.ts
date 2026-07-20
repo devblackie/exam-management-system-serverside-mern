@@ -4,14 +4,18 @@ import bcrypt from "bcryptjs";
 import User from "../models/User";
 import Institution from "../models/Institution";
 import { logAudit } from "../lib/auditLogger";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { getScopedProgramIds, requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import FinalGrade from "../models/FinalGrade";
 import Student from "../models/Student";
-import Unit from "../models/Unit";
 import AcademicYear from "../models/AcademicYear";
 import { cleanupOrphanedGrades } from "../scripts/cleanupGrades";
+import mongoose from "mongoose";
+import Program from "../models/Program";
+import Mark from "../models/Mark";
+import MarkDirect from "../models/MarkDirect";
+import DisciplinaryCase from "../models/DisciplinaryCase";
 
 const router = Router();
 
@@ -99,9 +103,207 @@ router.post("/maintain/cleanup-grades", requireAuth,  requireRole("coordinator",
   }
 }));
 
+// ── GET /coordinator/dashboard-stats ─────────────────────────────────────────
+router.get("/dashboard-stats", requireAuth, requireRole("coordinator", "admin"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const institutionId     = req.user.institution;
+    const allowedProgramIds = await getScopedProgramIds(req);
+
+    // Resolve student IDs in scope first — needed for disciplinary sub-query
+    const scopedStudentIds = await Student.find({
+      institution: institutionId,
+      program:     { $in: allowedProgramIds },
+    })
+      .select("_id")
+      .lean()
+      .then(ss => ss.map(s => s._id));
+
+    // ── All queries in parallel ───────────────────────────────────────────────
+    const [
+      studentCounts,
+      programs,
+      currentYear,
+      openCases,
+      markBatchIds,
+      directMarkBatchIds,
+      lastMark,
+      lastDirectMark,
+    ] = await Promise.all([
+
+      // Student status breakdown
+      Student.aggregate([
+        {
+          $match: {
+            institution: new mongoose.Types.ObjectId(institutionId.toString()),
+            program:     { $in: allowedProgramIds },
+          },
+        },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]) as Promise<Array<{ _id: string; count: number }>>,
+
+      // Scoped program names
+      Program.find({
+        institution: institutionId,
+        _id:         { $in: allowedProgramIds },
+        isActive:    true,
+      })
+        .select("name")
+        .lean<Array<{ name: string }>>(),
+
+      // Current academic year
+      AcademicYear.findOne({ institution: institutionId, isCurrent: true })
+        .select("year session")
+        .lean<{ year: string; session?: string } | null>(),
+
+      // Open disciplinary cases for students in scope
+      DisciplinaryCase.countDocuments({
+        institution: institutionId,
+        outcome:     "PENDING",
+        student:     { $in: scopedStudentIds },
+      }),
+
+      // Distinct mark batch IDs
+      Mark.distinct("batchId", {
+        institution: institutionId,
+        program:     { $in: allowedProgramIds },
+      }) as Promise<string[]>,
+
+      // Distinct direct mark batch IDs
+      MarkDirect.distinct("batchId", {
+        institution: institutionId,
+        program:     { $in: allowedProgramIds },
+      }) as Promise<string[]>,
+
+      // Most recent detailed mark upload
+      Mark.findOne({
+        institution: institutionId,
+        program:     { $in: allowedProgramIds },
+      })
+        .sort({ uploadedAt: -1 })
+        .select("uploadedAt")
+        .lean<{ uploadedAt?: Date } | null>(),
+
+      // Most recent direct mark upload
+      MarkDirect.findOne({
+        institution: institutionId,
+        program:     { $in: allowedProgramIds },
+      })
+        .sort({ uploadedAt: -1 })
+        .select("uploadedAt")
+        .lean<{ uploadedAt?: Date } | null>(),
+    ]);
+
+    // ── Aggregate student statuses ────────────────────────────────────────────
+    const sm: Record<string, number> = {};
+    for (const row of studentCounts) sm[row._id] = row.count;
+    const total = Object.values(sm).reduce((a, b) => a + b, 0);
+
+    // ── Resolve last upload date ──────────────────────────────────────────────
+    const d1 = lastMark?.uploadedAt       ? new Date(lastMark.uploadedAt).getTime()       : 0;
+    const d2 = lastDirectMark?.uploadedAt ? new Date(lastDirectMark.uploadedAt).getTime() : 0;
+    const lastUploadDate =
+      d1 === 0 && d2 === 0
+        ? null
+        : new Date(Math.max(d1, d2)).toISOString();
+
+    res.json({
+      students: {
+        total,
+        active:       sm["active"]                  ?? 0,
+        repeat:       sm["repeat"]                  ?? 0,
+        discontinued: sm["discontinued"]            ?? 0,
+        graduated:    sm["graduated"]               ?? 0,
+        suspended:    sm["disciplinary_suspension"] ?? 0,
+      },
+      marks: {
+        totalUploads:  markBatchIds.length + directMarkBatchIds.length,
+        pendingReview: 0,
+        lastUploadDate,
+      },
+      disciplinary: {
+        openCases:      openCases,
+        pendingOutcome: openCases,
+      },
+      programs: {
+        total: programs.length,
+        names: programs.map(p => p.name),
+      },
+      promotion: {
+        lastRunDate:   null,
+        eligibleCount: 0,
+      },
+      academicYear: {
+        current: currentYear?.year    ?? null,
+        session: currentYear?.session ?? null,
+      },
+    });
+  }),
+);
+
+// ── GET /coordinator/lecturers ────────────────────────────────────────────────
+// Coordinators can list lecturers in their department
+router.get("/lecturers", requireAuth, requireRole("coordinator", "admin"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const User = (await import("../models/User")).default;
+    const lecturers = await User.find({
+      institution:    req.user.institution,
+      role:           "lecturer",
+      departmentCode: req.user.departmentCode,
+    })
+      .select("name email departmentCode schoolCode createdAt")
+      .lean();
+    res.json(lecturers);
+  }),
+);
+
+// ── POST /coordinator/lecturers ───────────────────────────────────────────────
+router.post("/lecturers", requireAuth, requireRole("coordinator"),
+  asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { name, email, password } = req.body as {
+      name:      string;
+      email:     string;
+      password?: string;
+    };
+
+    if (!name?.trim() || !email?.trim()) {
+      res.status(400).json({ message: "name and email are required." });
+      return;
+    }
+
+    const User   = (await import("../models/User")).default;
+    const bcrypt = await import("bcryptjs");
+
+    const existing = await User.findOne({ email: email.toLowerCase() });
+    if (existing) {
+      res.status(409).json({ message: "A user with this email already exists." });
+      return;
+    }
+
+    const hash = await bcrypt.hash(
+      password?.trim() || Math.random().toString(36).slice(-10),
+      10,
+    );
+
+    const lecturer = await User.create({
+      name:           name.trim(),
+      email:          email.toLowerCase().trim(),
+      password:       hash,
+      role:           "lecturer",
+      institution:    req.user.institution,
+      schoolCode:     req.user.schoolCode,
+      departmentCode: req.user.departmentCode,
+      isVerified:     true,
+    });
+
+    res.status(201).json({
+      message: "Lecturer created.",
+      lecturer: { _id: lecturer._id, name: lecturer.name, email: lecturer.email },
+    });
+  }),
+);
+
 // Coordinator creates lecturer (no login needed)
-router.post("/lecturers", requireAuth,
-  requireRole("coordinator", "admin"),
+router.post("/lecturers", requireAuth, requireRole("coordinator", "admin"),
   asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { name, email } = req.body;
 
