@@ -330,7 +330,7 @@ interface BillingEmailContext {
   currency: string;
 }
 
-export async function sendInvoiceEmail(billing: IBilling, invoice: IInvoice): Promise<void> {
+export async function sendInvoiceEmail(billing: BillingEmailContext, invoice: IInvoice): Promise<void> {
   const institution = (await Institution.findById(
     billing.institution,
   ).lean()) as any;
