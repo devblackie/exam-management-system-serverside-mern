@@ -319,6 +319,17 @@ export async function generateMonthlyInvoices(): Promise<{
 }
 
 // ── Invoice email (unchanged logic) ───────────────────────────────────────────
+interface BillingEmailContext {
+  institution: mongoose.Types.ObjectId;
+  billingContact?: {
+    name:    string;
+    email:   string;
+    phone?:  string;
+    address?: string;
+  };
+  currency: string;
+}
+
 export async function sendInvoiceEmail(billing: IBilling, invoice: IInvoice): Promise<void> {
   const institution = (await Institution.findById(
     billing.institution,
